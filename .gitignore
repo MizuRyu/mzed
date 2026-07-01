@@ -1,0 +1,9 @@
+docs/memo/
+.DS_Store
+.serena/
+/target
+/dist
+/.direnv
+/node_modules
+/README.html
+result

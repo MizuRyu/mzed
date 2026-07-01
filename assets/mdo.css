@@ -1,0 +1,335 @@
+/* mdo-specific styles layered on top of github-markdown-css. */
+
+/* Kill the default body/html margin so the app frame fills the window with no
+   white gutter around it. */
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  /* The app frame fills the window and scrolls via inner containers only.
+     Lock the document itself so WKWebView never rubber-bands the whole app
+     (the elastic overscroll that reveals the window background). */
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+/* Belt-and-suspenders: stop scroll chaining / bounce from inner scroll areas
+   propagating up to the document. Inner panels still scroll normally. */
+.markdown-body,
+.mdo-tabbar {
+  overscroll-behavior: contain;
+}
+
+/* Tab bar: hide the horizontal scrollbar so it never overlaps tab names.
+   Wheel / trackpad horizontal scrolling still works. */
+.mdo-tabbar {
+  scrollbar-width: none; /* Firefox */
+}
+.mdo-tabbar::-webkit-scrollbar {
+  height: 0;
+  display: none;
+}
+
+/* Sidebar tree rows: subtle hover background. */
+.mdo-tree-row:hover {
+  background: rgba(127, 127, 127, 0.12);
+}
+
+/* WKWebView honours the -webkit- prefixed form, not the unprefixed
+   `user-select`. Without it, right-click / drag text-selects the row label
+   (a lingering blue selection). Disable selection on the sidebar rows. */
+.mdo-tree-row {
+  -webkit-user-select: none;
+  user-select: none;
+}
+.mdo-tree-row-file {
+  box-shadow: inset 2px 0 0 transparent;
+}
+.mdo-tree-row-active {
+  background: rgba(9, 105, 218, 0.10);
+  box-shadow: inset 2px 0 0 #0969da;
+  font-weight: 600;
+}
+
+/* Sidebar resize divider: faint accent on hover so it is discoverable. */
+.mdo-sidebar-divider:hover {
+  background: rgba(9, 105, 218, 0.35) !important;
+}
+
+/* Content toolbar buttons: faint hover background. */
+.mdo-tool-btn:hover {
+  background: rgba(127, 127, 127, 0.18) !important;
+}
+
+/* In-document search (Cmd+F): CSS Custom Highlight API ranges. */
+::highlight(mdo-find) {
+  background-color: #fff3b0;
+  color: #1f2328;
+}
+::highlight(mdo-find-current) {
+  background-color: #ff9632;
+  color: #1f2328;
+}
+
+/* github-markdown-css leaves the page container to the host. */
+.markdown-body {
+  box-sizing: border-box;
+  /* Fill the available content width. A wide/narrow toggle (FT-04) can
+     reintroduce a readable max-width later as a user setting. */
+  max-width: none;
+  margin: 0;
+  padding: 2rem 2.5rem;
+}
+
+/* Frontmatter block (mo-style): a quiet "Metadata" disclosure whose body is a
+   syntax-highlighted YAML code block. No heavy chrome on the container itself;
+   the inner <pre> carries the look via the active highlight.js theme, so it
+   adapts to light/dark automatically. */
+.frontmatter {
+  margin-bottom: 16px;
+}
+.frontmatter summary {
+  cursor: pointer;
+  color: #8b949e;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  user-select: none;
+}
+.frontmatter > pre {
+  margin-top: 8px;
+}
+
+/* Copy button injected into code blocks / mermaid diagrams. */
+.mdo-copy-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: #57606a;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+.markdown-body pre:hover .mdo-copy-btn {
+  opacity: 1;
+}
+.mdo-copy-btn:hover {
+  background: rgba(127, 127, 127, 0.18);
+}
+
+/* Mermaid diagram card (arto-style): centered, rounded, with a hover toolbar.
+   The card background/border are set per-theme from JS so they track the active
+   appearance; this rule owns layout + the toolbar. */
+.mdo-mermaid {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  margin: 16px 0;
+  padding: 20px;
+  border-radius: 10px;
+  overflow: auto;
+}
+.mdo-mermaid pre.mermaid {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  display: flex;
+  justify-content: center;
+  width: 100%;
+}
+.mdo-mermaid svg {
+  display: block;
+  margin: 0 auto;
+  max-width: 100%;
+  height: auto;
+}
+.mdo-mermaid-bar {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 8px;
+  background: rgba(127, 127, 127, 0.14);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.mdo-mermaid:hover .mdo-mermaid-bar {
+  opacity: 1;
+}
+.mdo-mermaid-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: #8b949e;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.mdo-mermaid-btn:hover {
+  background: rgba(127, 127, 127, 0.22);
+  color: inherit;
+}
+
+.mdo-clickable-image {
+  cursor: zoom-in;
+}
+
+.mdo-lightbox[hidden] {
+  display: none;
+}
+.mdo-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: rgba(13, 17, 23, 0.86);
+}
+.mdo-lightbox-img {
+  max-width: min(100%, 1280px);
+  max-height: 100%;
+  object-fit: contain;
+  background: transparent;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+}
+.mdo-lightbox-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  color: #f0f6fc;
+  background: rgba(13, 17, 23, 0.62);
+  border: 1px solid rgba(240, 246, 252, 0.2);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.mdo-lightbox-close:hover {
+  background: rgba(240, 246, 252, 0.14);
+}
+
+/* Project switcher dropdown rows. */
+.mdo-proj-row:hover {
+  background: rgba(127, 127, 127, 0.12);
+}
+
+/* Right-click context-menu items. */
+.mdo-ctx-item:hover {
+  background: rgba(127, 127, 127, 0.16);
+}
+
+/* Top-right toast: brief slide/fade in. */
+.mdo-toast {
+  animation: mdo-toast-in 0.14s ease-out;
+}
+@keyframes mdo-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Quick Access favorites: the remove (✕) button shows on row hover. */
+.mdo-fav-x {
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.mdo-fav-row:hover .mdo-fav-x {
+  opacity: 0.75;
+}
+.mdo-fav-x:hover {
+  opacity: 1 !important;
+}
+
+/* The star toggle on tree rows shows on row hover (or stays when favorited). */
+.mdo-fav-star {
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.mdo-tree-row:hover .mdo-fav-star,
+.mdo-fav-star.on {
+  opacity: 1;
+}
+
+/* Flat dropdown caret (the select itself sets appearance:none inline). A
+   neutral grey chevron reads fine on both light and dark backgrounds. */
+.mdo-select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238b949e' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+
+/* Internal document link (rewritten from a relative .md href). */
+.markdown-body a.mdo-link {
+  color: #0969da;
+  text-decoration: none;
+  cursor: pointer;
+}
+.markdown-body a.mdo-link:hover {
+  text-decoration: underline;
+}
+
+/* Print / "Save as PDF": show only the document body. The app chrome
+   (header, sidebar, tab bar, ToC, palette) sits in sibling/ancestor flex
+   boxes; hide everything, then re-show the body and its ancestor chain so the
+   rendered markdown fills the page. */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .markdown-body,
+  .markdown-body * {
+    visibility: visible;
+  }
+  .markdown-body {
+    position: absolute;
+    inset: 0;
+    max-width: none;
+    margin: 0;
+    padding: 0;
+    zoom: 1 !important;
+    overflow: visible;
+  }
+  /* Don't slice code blocks / tables across page breaks where avoidable. */
+  .markdown-body pre,
+  .markdown-body table,
+  .markdown-body img {
+    page-break-inside: avoid;
+  }
+  /* Copy buttons are interactive-only. */
+  .mdo-copy-btn {
+    display: none !important;
+  }
+  .mdo-lightbox {
+    display: none !important;
+  }
+}
+
+/* Project switcher button (borderless, subtle hover). */
+.mdo-proj-btn:hover { background: rgba(255,255,255,0.10); }

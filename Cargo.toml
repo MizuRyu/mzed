@@ -1,0 +1,34 @@
+[package]
+name = "mzed"
+version = "1.0.0"
+edition = "2021"
+
+[[bin]]
+name = "mzed"
+path = "src/main.rs"
+
+[[bin]]
+name = "zed_watch"
+path = "src/bin/zed_watch.rs"
+
+[dependencies]
+dioxus = { version = "0.7", features = ["desktop"] }
+pulldown-cmark = "0.13"
+rusqlite = { version = "0.32", features = ["bundled"] }
+notify-debouncer-full = "0.4"
+anyhow = "1"
+dirs = "5"
+tokio = { version = "1", features = ["rt", "sync", "time"] }
+lol_html = "2"
+base64 = "0.22"
+open = "5"
+clap = { version = "4", features = ["derive"] }
+interprocess = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dark-light = "2"
+rfd = "0.17"
+
+[dev-dependencies]
+indoc = "2"
+tempfile = "3"

@@ -1,0 +1,22 @@
+[application]
+name = "mzed"
+# Assets referenced via the `asset!` macro live here.
+asset_dir = "assets"
+
+[bundle]
+identifier = "com.mizuryu.mzed"
+icon = ["assets/icon.icns"]
+publisher = "MizuRyu"
+copyright = "Copyright (c) MizuRyu"
+category = "Productivity"
+short_description = "Zed-linked Markdown viewer"
+long_description = """
+mzed is a Markdown viewer that follows the project currently focused in Zed
+and renders its docs with Mermaid/KaTeX, GitHub styling and live reload.
+"""
+
+[bundle.macos]
+# Keep the bundle name lowercase (`mzed.app`) instead of the title-cased default.
+bundle_name = "mzed"
+# Unsigned distribution: no signing identity / notarization.
+minimum_system_version = "11.0"

@@ -1,0 +1,23 @@
+pub mod app;
+
+mod app_state;
+mod cli;
+mod config;
+pub mod domain;
+mod export;
+mod files;
+mod fuzzy;
+pub mod instance;
+mod js;
+mod markdown;
+mod palette;
+mod perf;
+mod project_tabs;
+mod search;
+mod services;
+mod session;
+mod tabs;
+mod theme;
+mod ui;
+mod watcher;
+mod zed;
