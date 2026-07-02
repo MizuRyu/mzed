@@ -75,10 +75,11 @@ body {
 /* github-markdown-css leaves the page container to the host. */
 .markdown-body {
   box-sizing: border-box;
-  /* Fill the available content width. A wide/narrow toggle (FT-04) can
-     reintroduce a readable max-width later as a user setting. */
-  max-width: none;
-  margin: 0;
+  /* Readable column: centred with comfortable horizontal breathing room.
+     Matches the prototype value (900 px); a wide/narrow user setting (FT-04)
+     can override this later. */
+  max-width: 900px;
+  margin: 0 auto;
   padding: 2rem 2.5rem;
 }
 

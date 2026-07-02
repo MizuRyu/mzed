@@ -12,6 +12,14 @@ const MDO_DARK = __MDO_DARK__;
 const MDO_KATEX = __MDO_KATEX__;
 const MDO_POST_RENDER_START = performance.now();
 
+// Keep html/body background in sync with the active theme so WKWebView's
+// rubber-band overscroll (macOS bounce) doesn't expose a white gap.
+// The content pane already carries the right background via inline style;
+// this covers the document root that shows when bouncing past the edge.
+const MDO_PAGE_BG = MDO_DARK ? '#0d1117' : '#ffffff';
+document.documentElement.style.background = MDO_PAGE_BG;
+document.body.style.background = MDO_PAGE_BG;
+
 // lucide-style inline icons for the code-block / mermaid copy buttons.
 const MDO_COPY_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
 const MDO_IMG_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>';
@@ -276,4 +284,63 @@ pub(crate) fn post_render_js(dark: bool, katex: bool) -> String {
     POST_RENDER_TEMPLATE
         .replace("__MDO_DARK__", if dark { "true" } else { "false" })
         .replace("__MDO_KATEX__", if katex { "true" } else { "false" })
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod tests {
+    use super::*;
+
+    /// ダークテーマ時は html/body の背景を #0d1117 に設定するコードが生成される。
+    #[test]
+    fn ダーク時にhtml_body背景がセットされる() {
+        let js = post_render_js(true, false);
+        assert!(
+            js.contains("document.documentElement.style.background = MDO_PAGE_BG"),
+            "html 背景設定コードが見つからない"
+        );
+        assert!(
+            js.contains("document.body.style.background = MDO_PAGE_BG"),
+            "body 背景設定コードが見つからない"
+        );
+        assert!(
+            js.contains("#0d1117"),
+            "ダーク背景色 #0d1117 が見つからない"
+        );
+    }
+
+    /// ライトテーマ時は html/body の背景を #ffffff に設定するコードが生成される。
+    #[test]
+    fn ライト時にhtml_body背景がセットされる() {
+        let js = post_render_js(false, false);
+        assert!(
+            js.contains("#ffffff"),
+            "ライト背景色 #ffffff が見つからない"
+        );
+    }
+
+    /// mdo.css の .markdown-body スタイルが読みやすいカラム幅を持つことを
+    /// アセットファイルのテキストで確認する。
+    #[test]
+    fn mdo_cssに本文カラム幅とマージンが含まれる() {
+        let css = include_str!("../../assets/mdo.css");
+        assert!(
+            css.contains("max-width: 900px"),
+            "max-width: 900px が mdo.css に見つからない"
+        );
+        assert!(
+            css.contains("margin: 0 auto"),
+            "margin: 0 auto が mdo.css に見つからない"
+        );
+    }
+
+    /// mdo.css が overscroll を抑制することを確認する。
+    #[test]
+    fn mdo_cssにoverscroll抑制が含まれる() {
+        let css = include_str!("../../assets/mdo.css");
+        assert!(
+            css.contains("overscroll-behavior: none"),
+            "overscroll-behavior: none が mdo.css に見つからない"
+        );
+    }
 }
