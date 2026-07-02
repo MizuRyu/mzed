@@ -45,6 +45,16 @@ install: bundle
   @echo "CLI symlink: ~/.local/bin/mzed → /Applications/mzed.app/Contents/MacOS/mzed"
   @echo "Make sure ~/.local/bin is in PATH (add to ~/.zshrc: export PATH=\"\$HOME/.local/bin:\$PATH\")"
 
+# Tag, push and publish a GitHub Release with the dmg attached.
+# Expects Cargo.toml's version to be bumped and committed beforehand.
+release:
+  git diff --quiet && git diff --cached --quiet || (echo "error: working tree not clean" && exit 1)
+  just verify
+  git tag v{{version}}
+  git push origin main v{{version}}
+  just bundle
+  gh release create v{{version}} {{bundle_dir}}/mzed_{{version}}_aarch64.dmg --title "mzed v{{version}}" --generate-notes
+
 # Remove /Applications/mzed.app and the ~/.local/bin/mzed CLI symlink.
 uninstall:
   rm -rf /Applications/mzed.app

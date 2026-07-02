@@ -37,10 +37,27 @@ just uninstall    # .app と symlink を削除
 
 ## リリース
 
-1. `Cargo.toml` の version を更新
-2. `git tag vX.Y.Z && git push origin vX.Y.Z`
-3. `just bundle` で `.dmg` を生成
-4. `gh release create vX.Y.Z target/dx/mzed/bundle/macos/macos/*.dmg --title "mzed vX.Y.Z"`
+タグ・Release・dmg は常にワンセット。`scripts/install.sh` は「最新 Release の dmg」を取得するため、タグだけ打っても各端末には配布されない。
+
+### バージョンの目安（semver）
+
+| 種別 | 例 | いつ切るか |
+|---|---|---|
+| patch（v1.0.x） | バグ修正、見た目のリグレッション修正、エラーメッセージ改善 | ユーザーに見える修正が1件でも溜まり、他端末に配りたくなったら。溜め込まず気軽に切る |
+| minor（v1.x.0） | 新機能、キーバインド追加、後方互換な挙動追加 | 機能がひとまとまり動くようになったら |
+| major（vX.0.0） | config/セッションの互換が壊れる変更、UI 大改編 | 移行手順を README に書ける状態になってから |
+
+- main は常にグリーン（`just verify` 通過）を保ち、リリースは main の任意時点から切る
+- リファクタ・docs・CI だけの変更はリリース不要。次の patch/minor に相乗りさせる
+
+### 手順
+
+```sh
+# Cargo.toml の version を上げてコミットした後:
+just release
+```
+
+`just release` は クリーンツリー確認 → verify → タグ付与 → push → bundle → dmg 付き Release 作成（ノートは commit から自動生成）まで行う。
 
 Apple 署名 / notarization はしない（配布規模が小さいため意図的に未署名）。
 
