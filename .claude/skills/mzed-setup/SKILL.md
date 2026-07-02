@@ -100,6 +100,7 @@ mzed [PATH...] [--sync <auto|self|off>]
 | `feature_katex` | bool | `true` | KaTeX 数式レンダリング |
 | `feature_html_export` | bool | `true` | HTML エクスポート機能 |
 | `feature_pdf_export` | bool | `true` | PDF エクスポート機能 |
+| `open_latest_on_project_open` | bool | `false` | プロジェクト切替時に最終更新 Markdown を自動で開く（復元タブが無い場合のみ） |
 
 ### sync_mode の詳細（`src/theme.rs`）
 

@@ -127,6 +127,11 @@ pub struct Config {
     pub feature_html_export: bool,
     #[serde(default = "default_true")]
     pub feature_pdf_export: bool,
+    /// When true, automatically open the most-recently-modified markdown file
+    /// when switching to a project that has no previously parked tabs.
+    /// Falls back to the existing representative-file pick when false (default).
+    #[serde(default)]
+    pub open_latest_on_project_open: bool,
 }
 
 fn default_zoom() -> f32 {
@@ -164,6 +169,7 @@ impl Default for Config {
             feature_katex: true,
             feature_html_export: true,
             feature_pdf_export: true,
+            open_latest_on_project_open: false,
         }
     }
 }

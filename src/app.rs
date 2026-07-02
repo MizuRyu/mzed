@@ -444,6 +444,15 @@ pub(crate) fn App() -> Element {
     let initial_pt = saved_session.restore_project_tabs();
     let mut project_tabs = use_signal(move || initial_pt);
     let mut expanded = use_signal(HashSet::<PathBuf>::new);
+    // Open a file and reveal it in the sidebar (expand its ancestor folders).
+    // Used by palette/search so the user can see where the file lives.
+    let mut open_and_reveal = move |path: PathBuf| {
+        let exp = file_service::ancestor_dirs_multi(&roots(), &path);
+        if !exp.is_empty() {
+            expanded.write().extend(exp);
+        }
+        act_tabs().write().open(path);
+    };
     // Sidebar right-click menu + inline-ish rename (a small centered prompt).
     let mut ctx_menu = use_signal(|| None::<CtxMenu>);
     let mut rename_target = use_signal(|| None::<PathBuf>);
@@ -533,6 +542,7 @@ pub(crate) fn App() -> Element {
     let external_links_in_browser = use_signal(|| saved_config.external_links_in_browser);
     let code_font = use_signal(|| saved_config.code_font.clone());
     let code_font_size = use_signal(|| saved_config.code_font_size);
+    let open_latest_on_project_open = use_signal(|| saved_config.open_latest_on_project_open);
     // Rebindable shortcuts, merged with defaults (fills new actions, drops stale).
     let keymap = use_signal(|| config::merged_keybindings(&saved_config.keybindings));
     // Export destination + feature flags (extension-like toggles).
@@ -648,6 +658,9 @@ pub(crate) fn App() -> Element {
             }
             return;
         }
+        // Keep a reference to the primary path for B4 (latest-file lookup)
+        // before it is consumed by `root.set`.
+        let primary_for_latest = new_primary.clone();
         root.set(Some(new_primary));
         roots.set(new_roots);
         expanded.set(expanded_set);
@@ -656,7 +669,14 @@ pub(crate) fn App() -> Element {
         // generic representative markdown. Only seed with a pick when the
         // project has no tab history at all.
         let effective_pick = if restored.paths().is_empty() {
-            open_pick
+            // B4: when the toggle is on and no explicit pick was supplied,
+            // prefer the most-recently-modified markdown over the
+            // representative-file heuristic (pick_markdown).
+            if open_pick.is_none() && open_latest_on_project_open() {
+                file_service::latest_markdown(&primary_for_latest).or(open_pick)
+            } else {
+                open_pick
+            }
         } else {
             None
         };
@@ -937,24 +957,28 @@ pub(crate) fn App() -> Element {
     });
     let focused_file =
         move || app_state::pane::focused_path(active(), active_r(), split(), active_pane());
-    let copy_to_clipboard = move |text: String, success_message: Option<String>| {
-        let js = services::platform::clipboard_write_result_js(&text);
+    // Copy a filesystem path via the native pbcopy command, bypassing the
+    // WebView clipboard API which can emit a spurious error even on success.
+    let copy_path_native = move |text: String, success_message: Option<String>| {
         spawn(async move {
-            match document::eval(&js).recv::<serde_json::Value>().await {
-                Ok(value) => {
-                    if let Some(error) = js::webview_action_error(&value, "Copy failed") {
-                        show_toast(error);
-                    } else if let Some(message) = success_message {
-                        show_toast(message);
+            let result = tokio::task::spawn_blocking(move || {
+                services::platform::native_clipboard_write(&text)
+            })
+            .await;
+            match result {
+                Ok(Ok(())) => {
+                    if let Some(msg) = success_message {
+                        show_toast(msg);
                     }
                 }
+                Ok(Err(err)) => show_toast(format!("Copy failed: {err}")),
                 Err(err) => show_toast(format!("Copy failed: {err}")),
             }
         });
     };
     let copy_focused_path = move || {
         if let Some(file) = focused_file() {
-            copy_to_clipboard(
+            copy_path_native(
                 services::platform::canonical_clipboard_text(file),
                 Some("Copied!".into()),
             );
@@ -1065,6 +1089,7 @@ pub(crate) fn App() -> Element {
             feature_katex: feature_katex(),
             feature_html_export: feature_html_export(),
             feature_pdf_export: feature_pdf_export(),
+            open_latest_on_project_open: open_latest_on_project_open(),
         };
         let generation = config_save_generation.write().advance();
         spawn(async move {
@@ -1928,7 +1953,7 @@ pub(crate) fn App() -> Element {
                         sel: palette_sel,
                         file_mode: palette_file_mode,
                         open: palette_open,
-                        on_open: move |p| open_active(p),
+                        on_open: move |p| open_and_reveal(p),
                         files: files::flatten_md(&tree()),
                         html_export_on: feature_html_export(),
                         pdf_export_on: feature_pdf_export(),
@@ -1941,7 +1966,7 @@ pub(crate) fn App() -> Element {
                         query: search_query,
                         sel: search_sel,
                         open: search_open,
-                        on_open: move |p| open_active(p),
+                        on_open: move |p| open_and_reveal(p),
                         hits: search_hits(),
                         roots: roots(),
                         dark,
@@ -1967,6 +1992,7 @@ pub(crate) fn App() -> Element {
                         feature_katex,
                         feature_html_export,
                         feature_pdf_export,
+                        open_latest_on_project_open,
                         dark,
                     }
                 }
@@ -2029,13 +2055,13 @@ pub(crate) fn App() -> Element {
                                 div { style: "{sep}" }
                                 button { class: "mdo-ctx-item", style: "{item}",
                                     onclick: move |_| {
-                                        copy_to_clipboard(p_copy.clone(), Some("Copied!".into()));
+                                        copy_path_native(p_copy.clone(), Some("Copied!".into()));
                                         ctx_menu.set(None);
                                     },
                                     "パスをコピー" }
                                 button { class: "mdo-ctx-item", style: "{item}",
                                     onclick: move |_| {
-                                        copy_to_clipboard(p_rel.clone(), Some("Copied!".into()));
+                                        copy_path_native(p_rel.clone(), Some("Copied!".into()));
                                         ctx_menu.set(None);
                                     },
                                     "相対パスをコピー" }

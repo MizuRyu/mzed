@@ -479,4 +479,42 @@ mod tests {
 
         assert_eq!(hits.len(), SearchPolicy::default().max_hits);
     }
+
+    /// B3 regression: a file created *after* a project is opened must be found
+    /// when search_paths_with_policy is called with a freshly-scanned file list.
+    /// This mirrors the app behaviour where tree_refresh forces a re-scan before
+    /// each search run.
+    #[test]
+    fn プロジェクトオープン後に作成したファイルが検索にヒットする() {
+        use std::fs;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+
+        // Simulate "project already open" state: initial scan returns only a.md.
+        let a = root.join("a.md");
+        fs::write(&a, "initial content").unwrap();
+        let initial_paths = vec![a.clone()];
+        let report =
+            search_paths_with_policy(&initial_paths, "initial", SearchPolicy::default(), || false);
+        assert_eq!(report.hits.len(), 1);
+
+        // File created after the project was opened.
+        let new_file = root.join("new_after_open.md");
+        fs::write(&new_file, "unique_new_content").unwrap();
+
+        // Re-scan (as tree_refresh triggers in the app) — now includes the new file.
+        let refreshed_paths = vec![a.clone(), new_file.clone()];
+        let report2 = search_paths_with_policy(
+            &refreshed_paths,
+            "unique_new_content",
+            SearchPolicy::default(),
+            || false,
+        );
+        assert_eq!(
+            report2.hits.len(),
+            1,
+            "newly created file should be searchable after rescan"
+        );
+        assert_eq!(report2.hits[0].path, new_file);
+    }
 }

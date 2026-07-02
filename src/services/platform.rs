@@ -29,6 +29,21 @@ pub(crate) fn canonical_clipboard_text(path: PathBuf) -> String {
         .to_string()
 }
 
+/// Write `text` to the macOS clipboard via `pbcopy`, bypassing the WebView
+/// clipboard API (which can throw `NotAllowedError` in WKWebView sandboxes
+/// even when the write actually succeeds, producing a spurious error toast).
+pub(crate) fn native_clipboard_write(text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut child = std::process::Command::new("pbcopy")
+        .stdin(std::process::Stdio::piped())
+        .spawn()?;
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin.write_all(text.as_bytes())?;
+    }
+    child.wait().and_then(command_status_result)
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn clipboard_write_result_js(text: &str) -> String {
     let text_json = serde_json::to_string(text).unwrap_or_else(|_| "\"\"".to_string());
     format!(
@@ -176,5 +191,24 @@ mod tests {
         let status = std::process::Command::new("false").status().unwrap();
 
         assert!(command_status_result(status).is_err());
+    }
+
+    /// B2: native_clipboard_write must not return an error on the happy path.
+    /// This only verifies the OS call succeeds; we cannot read the clipboard
+    /// back in a headless test environment without additional setup.
+    #[test]
+    fn native_clipboard_writeはエラーを返さない() {
+        // pbcopy is macOS-only; skip on other platforms.
+        if std::process::Command::new("which")
+            .arg("pbcopy")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
+            assert!(
+                native_clipboard_write("test path /tmp/a.md").is_ok(),
+                "native clipboard write should succeed via pbcopy"
+            );
+        }
     }
 }

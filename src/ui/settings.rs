@@ -34,6 +34,7 @@ pub(crate) fn Settings(
     mut feature_katex: Signal<bool>,
     mut feature_html_export: Signal<bool>,
     mut feature_pdf_export: Signal<bool>,
+    mut open_latest_on_project_open: Signal<bool>,
     dark: bool,
 ) -> Element {
     let win = dioxus::desktop::use_window();
@@ -209,6 +210,19 @@ pub(crate) fn Settings(
                                             r#type: "checkbox", checked: external_links_in_browser(),
                                             style: "width: 16px; height: 16px; cursor: pointer;",
                                             onchange: move |e| external_links_in_browser.set(e.value() == "true"),
+                                        }
+                                    }
+                                    // Auto-open latest file on project open.
+                                    div {
+                                        style: "{row} border-bottom: 1px solid {row_border};",
+                                        div {
+                                            div { style: row_title, "プロジェクトを開いたとき最新ファイルを自動で開く" }
+                                            div { style: "{row_desc}", "復元タブがない場合に、最終更新日時が最も新しい Markdown を自動で開く" }
+                                        }
+                                        input {
+                                            r#type: "checkbox", checked: open_latest_on_project_open(),
+                                            style: "width: 16px; height: 16px; cursor: pointer;",
+                                            onchange: move |e| open_latest_on_project_open.set(e.value() == "true"),
                                         }
                                     }
                                     // Export folder.

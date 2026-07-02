@@ -319,6 +319,53 @@ pub(crate) fn canonical_path_or_original(path: PathBuf) -> PathBuf {
     std::fs::canonicalize(&path).unwrap_or(path)
 }
 
+/// Find the markdown file with the most recent modification time under `root`.
+/// Performs a depth-bounded walk (same depth limit as [`find_markdown`]) and
+/// returns `None` when the directory is empty or unreadable.
+pub(crate) fn latest_markdown(root: &Path) -> Option<PathBuf> {
+    latest_markdown_in(root, 0)
+}
+
+fn latest_markdown_in(dir: &Path, depth: usize) -> Option<PathBuf> {
+    const MAX_DEPTH: usize = 8;
+    if depth >= MAX_DEPTH {
+        return None;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return None;
+    };
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        if is_dir {
+            // Skip the same noisy directories as the sidebar tree.
+            if name.starts_with('.') || matches!(name, "node_modules" | "target" | "dist" | "build")
+            {
+                continue;
+            }
+            if let Some((t, p)) = latest_markdown_in(&path, depth + 1)
+                .and_then(|p| p.metadata().and_then(|m| m.modified()).ok().map(|t| (t, p)))
+            {
+                if best.as_ref().is_none_or(|(bt, _)| t > *bt) {
+                    best = Some((t, p));
+                }
+            }
+        } else if crate::files::is_markdown(&path) {
+            if let Ok(mtime) = path.metadata().and_then(|m| m.modified()) {
+                if best.as_ref().is_none_or(|(bt, _)| mtime > *bt) {
+                    best = Some((mtime, path));
+                }
+            }
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
 /// Wrap a rendered body in the markdown-pdf-style document and write it into
 /// `dir`. Always uses the light theme for a white page. Returns the output path.
 pub(crate) fn write_export_html(
@@ -388,6 +435,7 @@ fn failed_read_html(path: &Path) -> String {
 }
 
 #[cfg(test)]
+#[allow(non_snake_case)] // Japanese test names may embed ASCII.
 mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -592,6 +640,73 @@ mod tests {
 
         let err = unique_export_path(dir.path(), "report").unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+    }
+
+    /// B1: opening a deeply nested file from the palette/search should expand
+    /// all ancestor directories up to (and including) the project root.
+    #[test]
+    fn ancestor_dirs_multiはネストしたファイルの全祖先を返す() {
+        let dir = tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let sub = root.join("docs").join("deep");
+        fs::create_dir_all(&sub).unwrap();
+        let file = sub.join("target.md");
+        fs::write(&file, "# target").unwrap();
+
+        let expanded = ancestor_dirs_multi(std::slice::from_ref(&root), &file);
+
+        // Must contain docs/ and docs/deep/ (the parent chain up to root).
+        assert!(
+            expanded.contains(&root.join("docs")),
+            "docs/ should be in expanded set"
+        );
+        assert!(
+            expanded.contains(&root.join("docs").join("deep")),
+            "docs/deep/ should be in expanded set"
+        );
+        // Root itself is included too.
+        assert!(expanded.contains(&root));
+    }
+
+    #[test]
+    fn latest_markdownは最終更新が最も新しいファイルを返す() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("sub")).unwrap();
+
+        // Write files with a deliberate ordering: older first.
+        let older = root.join("older.md");
+        let newer = root.join("sub").join("newer.md");
+        fs::write(&older, "# old").unwrap();
+        // Bump newer's mtime by sleeping briefly so the OS records a later time.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        fs::write(&newer, "# new").unwrap();
+
+        let result = latest_markdown(root).unwrap();
+        assert_eq!(
+            result, newer,
+            "should return the most recently modified file"
+        );
+    }
+
+    #[test]
+    fn latest_markdownは空ディレクトリでNoneを返す() {
+        let dir = tempdir().unwrap();
+        assert!(latest_markdown(dir.path()).is_none());
+    }
+
+    #[test]
+    fn latest_markdownはignored_dirをスキップする() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        // Place a markdown in an ignored dir only — should still return None.
+        fs::create_dir_all(root.join("node_modules")).unwrap();
+        fs::write(root.join("node_modules").join("pkg.md"), "# pkg").unwrap();
+
+        assert!(
+            latest_markdown(root).is_none(),
+            "files inside node_modules should be ignored"
+        );
     }
 
     #[test]
