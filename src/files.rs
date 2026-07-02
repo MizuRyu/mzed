@@ -20,10 +20,9 @@ pub struct TreeNode {
 const MAX_DEPTH: usize = 8;
 
 pub(crate) fn is_markdown(p: &Path) -> bool {
-    matches!(
-        p.extension().and_then(|e| e.to_str()),
-        Some("md") | Some("markdown")
-    )
+    p.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
 }
 
 fn is_ignored_dir(name: &str) -> bool {

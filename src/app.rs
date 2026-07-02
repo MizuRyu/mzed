@@ -232,6 +232,31 @@ pub fn run() {
         .collect();
     let intent = cli::resolve(&parsed);
 
+    // Surface unusable path arguments on stderr instead of letting the IPC
+    // layer drop them silently (the primary ignores non-markdown paths).
+    let intent = match intent.target {
+        cli::Target::Files(files) => {
+            let (valid, invalid): (Vec<_>, Vec<_>) = files
+                .into_iter()
+                .partition(|f| f.is_file() && files::is_markdown(f));
+            for f in &invalid {
+                if !f.exists() {
+                    eprintln!("mzed: no such file: {}", f.display());
+                } else {
+                    eprintln!("mzed: not a markdown file: {}", f.display());
+                }
+            }
+            if valid.is_empty() {
+                std::process::exit(2);
+            }
+            cli::Intent {
+                target: cli::Target::Files(valid),
+                ..intent
+            }
+        }
+        _ => intent,
+    };
+
     // Single instance: hand the startup request to an existing primary. A
     // pathless start is a typed request for another native window.
     let msgs = Msg::for_secondary(&intent.target);
