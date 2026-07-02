@@ -26,18 +26,17 @@ macOS (Apple Silicon). x86_64 Macs and other operating systems are not supported
 
 ## Installation
 
-Download the `.dmg` from [Releases](https://github.com/MizuRyu/mzed/releases) and move `mzed.app` to `/Applications`.
+One-liner install/update (fetches the latest release, strips quarantine, creates the CLI symlink):
 
-The app is unsigned, so remove the quarantine attribute once:
+```sh
+curl -fsSL https://raw.githubusercontent.com/MizuRyu/mzed/main/scripts/install.sh | bash
+```
+
+Or manually: download the `.dmg` from [Releases](https://github.com/MizuRyu/mzed/releases), move `mzed.app` to `/Applications`, then remove the quarantine attribute once (required because the app is unsigned):
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/mzed.app
-```
-
-To use it from the terminal, create a symlink somewhere on your PATH:
-
-```sh
-ln -sf /Applications/mzed.app/Contents/MacOS/mzed ~/.local/bin/mzed
+ln -sf /Applications/mzed.app/Contents/MacOS/mzed ~/.local/bin/mzed  # for CLI use
 ```
 
 To build from source, see [docs/development.md](docs/development.md).

@@ -26,18 +26,17 @@ macOS（Apple Silicon）。x86_64 Mac および他 OS は対象外。
 
 ## インストール
 
-[Releases](https://github.com/MizuRyu/mzed/releases) から `.dmg` をダウンロードし、`mzed.app` を `/Applications` に置く。
+1行でインストール・更新（最新 Release の取得、quarantine 解除、CLI symlink まで自動）:
 
-未署名のため、初回のみ quarantine を解除する:
+```sh
+curl -fsSL https://raw.githubusercontent.com/MizuRyu/mzed/main/scripts/install.sh | bash
+```
+
+手動の場合は [Releases](https://github.com/MizuRyu/mzed/releases) から `.dmg` をダウンロードし、`mzed.app` を `/Applications` に置いてから quarantine を解除する（未署名のため初回のみ必要）:
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/mzed.app
-```
-
-ターミナルから使う場合は PATH の通った場所に symlink を作る:
-
-```sh
-ln -sf /Applications/mzed.app/Contents/MacOS/mzed ~/.local/bin/mzed
+ln -sf /Applications/mzed.app/Contents/MacOS/mzed ~/.local/bin/mzed  # CLI を使う場合
 ```
 
 ソースからビルドする場合は [docs/development.md](docs/development.md) を参照。
