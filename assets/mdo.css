@@ -151,7 +151,9 @@ body {
 }
 .mdo-mermaid svg {
   display: block;
-  margin: 0 auto;
+  /* Fill the card width so wide diagrams (ER, gantt, …) are not capped at the
+     SVG's intrinsic width attribute. height: auto keeps the aspect ratio. */
+  width: 100%;
   max-width: 100%;
   height: auto;
 }

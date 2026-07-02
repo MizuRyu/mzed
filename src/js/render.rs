@@ -201,7 +201,13 @@ async function mdoProcessBody(body) {
       // node text. SVG text measures in user units (zoom-independent). This is
       // what fixed flowchart/sequence/class/state/er. (cline #7398.)
       htmlLabels: false,
-      flowchart: { htmlLabels: false },
+      flowchart: { htmlLabels: false, useMaxWidth: true },
+      er: { useMaxWidth: true },
+      sequence: { useMaxWidth: true },
+      gantt: { useMaxWidth: true },
+      // useMaxWidth: let mermaid stretch the SVG to fill its container width.
+      // Combined with .mdo-mermaid svg { width: 100%; max-width: 100% } this
+      // makes wide diagrams (ER, gantt, …) fill the card without fixed-pixel caps.
       theme: MDO_DARK ? 'dark' : 'default',
       themeVariables: MDO_DARK
         ? {
@@ -342,5 +348,63 @@ mod tests {
             css.contains("overscroll-behavior: none"),
             "overscroll-behavior: none が mdo.css に見つからない"
         );
+    }
+
+    /// インライン mermaid の mermaid.initialize に useMaxWidth: true が含まれる。
+    /// ER 図・ガント図など横長の図がコンテナ幅いっぱいに広がる。
+    #[test]
+    fn インラインmermaidにuseMaxWidthが設定される() {
+        let js = post_render_js(true, false);
+        assert!(
+            js.contains("useMaxWidth: true"),
+            "useMaxWidth: true が生成 JS に見つからない"
+        );
+    }
+
+    /// mdo.css の .mdo-mermaid svg に width: 100% が設定されている。
+    /// SVG 自体に固定 width 属性があっても CSS で上書きしてカード幅に追従させる。
+    #[test]
+    fn mdo_cssのmermaid_svgにwidth_100が含まれる() {
+        let css = include_str!("../../assets/mdo.css");
+        // Both "width: 100%" and "max-width: 100%" must be present inside the
+        // .mdo-mermaid svg rule so intrinsic SVG widths are overridden.
+        assert!(
+            css.contains("width: 100%"),
+            "width: 100% が .mdo-mermaid svg ルールに見つからない"
+        );
+        assert!(
+            css.contains("max-width: 100%"),
+            "max-width: 100% が .mdo-mermaid svg ルールに見つからない"
+        );
+    }
+
+    /// インライン mermaid がダーク時に themeVariables を注入する。
+    #[test]
+    fn インラインmermaidのdarkテーマにthemeVariablesが含まれる() {
+        let js = post_render_js(true, false);
+        assert!(
+            js.contains("primaryColor: '#1c2128'"),
+            "primaryColor が themeVariables に見つからない"
+        );
+        assert!(
+            js.contains("primaryTextColor: '#e6edf3'"),
+            "primaryTextColor が themeVariables に見つからない"
+        );
+        assert!(
+            js.contains("lineColor: '#8b949e'"),
+            "lineColor が themeVariables に見つからない"
+        );
+    }
+
+    /// テーマ切替時も mermaid.initialize の theme 値が MDO_DARK に連動する。
+    #[test]
+    fn mermaidテーマがdarkフラグに連動する() {
+        let dark_js = post_render_js(true, false);
+        let light_js = post_render_js(false, false);
+        assert!(dark_js.contains("theme: MDO_DARK ? 'dark' : 'default'"));
+        assert!(light_js.contains("theme: MDO_DARK ? 'dark' : 'default'"));
+        // The resolved value: dark_js has MDO_DARK=true, light_js has MDO_DARK=false.
+        assert!(dark_js.contains("const MDO_DARK = true;"));
+        assert!(light_js.contains("const MDO_DARK = false;"));
     }
 }
