@@ -89,8 +89,10 @@ mzed [PATH...] [--sync <auto|self|off>]
 | `zoom` | float | `1.0` | Markdown 本文の表示倍率（0.5 〜 2.0、0.1 刻み） |
 | `startup` | `"restore"` \| `"docs"` \| `"blank"` | `"restore"` | 起動時の動作（前回セッション復元 / Zed の docs 表示 / 空） |
 | `favorites` | `["/path", ...]` | `[]` | Quick Access ブックマーク（ファイル・ディレクトリ） |
-| `window_width` | int | `1100` | ウィンドウ幅（px） |
-| `window_height` | int | `760` | ウィンドウ高さ（px） |
+| `window_width` | int | `1100` | ウィンドウ幅（論理 px、手動リサイズで自動追従） |
+| `window_height` | int | `760` | ウィンドウ高さ（論理 px、手動リサイズで自動追従） |
+| `window_x` | int \| null | `null` | ウィンドウ X 座標（物理 px）。null = OS 既定位置 |
+| `window_y` | int \| null | `null` | ウィンドウ Y 座標（物理 px）。null = OS 既定位置。復元時はオフスクリーン検証あり（外部ディスプレイ切断後も安全） |
 | `sidebar_visible_default` | bool | `true` | 起動時にサイドバーを表示するか |
 | `external_links_in_browser` | bool | `true` | 外部リンクをブラウザで開くか |
 | `code_font` | string | `""` | コードブロックのフォントファミリー（空 = 組み込みモノスペース） |

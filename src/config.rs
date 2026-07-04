@@ -103,6 +103,12 @@ pub struct Config {
     pub window_width: i32,
     #[serde(default = "default_window_height")]
     pub window_height: i32,
+    /// Last known window X position (logical pixels). None = let OS decide.
+    #[serde(default)]
+    pub window_x: Option<i32>,
+    /// Last known window Y position (logical pixels). None = let OS decide.
+    #[serde(default)]
+    pub window_y: Option<i32>,
     #[serde(default)]
     pub startup: StartupBehavior,
     #[serde(default = "default_true")]
@@ -159,6 +165,8 @@ impl Default for Config {
             favorites: Vec::new(),
             window_width: default_window_width(),
             window_height: default_window_height(),
+            window_x: None,
+            window_y: None,
             startup: StartupBehavior::default(),
             sidebar_visible_default: true,
             external_links_in_browser: true,

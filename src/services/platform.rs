@@ -4,6 +4,58 @@ use std::process::ExitStatus;
 use dioxus::desktop::tao::dpi::LogicalSize;
 use dioxus::desktop::WindowBuilder;
 
+/// Axis-aligned rectangle in logical pixels. Used for off-screen safety checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rect {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+}
+
+impl Rect {
+    pub fn new(x: i32, y: i32, w: i32, h: i32) -> Self {
+        Self { x, y, w, h }
+    }
+
+    fn intersection_area(self, other: Rect) -> i64 {
+        let ix = self.x.max(other.x);
+        let iy = self.y.max(other.y);
+        let iw = (self.x + self.w).min(other.x + other.w) - ix;
+        let ih = (self.y + self.h).min(other.y + other.h) - iy;
+        if iw <= 0 || ih <= 0 {
+            0
+        } else {
+            iw as i64 * ih as i64
+        }
+    }
+}
+
+/// Decide whether the saved window position is safe to restore.
+///
+/// Returns `Some((x, y))` when the title-bar area of `saved` (top 30 px strip,
+/// minimum 100 px wide) intersects at least one monitor with area ≥ 3 000 px².
+/// Returns `None` when the window would be unreachable (all off-screen), so the
+/// caller should fall back to OS-default positioning.
+///
+/// This is a pure function; no OS calls are made.
+pub fn clamp_to_monitors(saved: Rect, monitors: &[Rect]) -> Option<(i32, i32)> {
+    // Title-bar grab zone: top 30 logical pixels of the window, clamped to w.
+    let title_bar = Rect::new(saved.x, saved.y, saved.w, 30_i32);
+    // Require at least 100 × 30 = 3 000 px² of title-bar overlap.
+    const MIN_AREA: i64 = 3_000;
+
+    let visible = monitors
+        .iter()
+        .any(|m| title_bar.intersection_area(*m) >= MIN_AREA);
+
+    if visible {
+        Some((saved.x, saved.y))
+    } else {
+        None
+    }
+}
+
 pub(crate) fn main_window_builder(width: i32, height: i32) -> WindowBuilder {
     WindowBuilder::new()
         .with_title("mzed")
@@ -136,6 +188,7 @@ fn command_status_result(status: ExitStatus) -> std::io::Result<()> {
 }
 
 #[cfg(test)]
+#[allow(non_snake_case)] // Japanese test names may embed ASCII.
 mod tests {
     use super::*;
 
@@ -185,6 +238,68 @@ mod tests {
 
         assert_eq!(js, expected);
     }
+
+    // ── clamp_to_monitors tests ──────────────────────────────────────────────
+
+    fn built_in_monitor() -> Rect {
+        Rect::new(0, 0, 1440, 900)
+    }
+
+    #[test]
+    fn ウィンドウがモニタ内に完全に収まる場合は座標を返す() {
+        let saved = Rect::new(100, 80, 1100, 760);
+        let result = clamp_to_monitors(saved, &[built_in_monitor()]);
+        assert_eq!(result, Some((100, 80)));
+    }
+
+    #[test]
+    fn ウィンドウが完全にオフスクリーンの場合はNoneを返す() {
+        // Window is entirely to the right of the only monitor (1440 wide).
+        let saved = Rect::new(2000, 100, 1100, 760);
+        let result = clamp_to_monitors(saved, &[built_in_monitor()]);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn タイトルバーが切れているが十分重なる場合は座標を返す() {
+        // Window starts at x=-300 but 1140px of title bar overlaps the monitor.
+        let saved = Rect::new(-300, 0, 1100, 760);
+        let result = clamp_to_monitors(saved, &[built_in_monitor()]);
+        assert_eq!(result, Some((-300, 0)));
+    }
+
+    #[test]
+    fn タイトルバーがわずかしか見えない場合はNoneを返す() {
+        // Only 50px of title bar visible (< 100px threshold for 3 000 px² at 30px height).
+        let saved = Rect::new(1390, 0, 1100, 760);
+        let result = clamp_to_monitors(saved, &[built_in_monitor()]);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn 外部モニタで保存し内蔵のみ残った場合はNoneを返す() {
+        // Saved on a 4K external display to the right.
+        let saved = Rect::new(1440, 200, 1100, 760);
+        let only_internal = built_in_monitor(); // 0..1440 × 0..900
+        let result = clamp_to_monitors(saved, &[only_internal]);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn 複数モニタのいずれかに収まればSomeを返す() {
+        let external = Rect::new(1440, 0, 2560, 1440);
+        let saved = Rect::new(1500, 100, 1100, 760);
+        let result = clamp_to_monitors(saved, &[built_in_monitor(), external]);
+        assert_eq!(result, Some((1500, 100)));
+    }
+
+    #[test]
+    fn モニタリストが空の場合はNoneを返す() {
+        let saved = Rect::new(0, 0, 1100, 760);
+        assert!(clamp_to_monitors(saved, &[]).is_none());
+    }
+
+    // ── end clamp_to_monitors tests ─────────────────────────────────────────
 
     #[test]
     fn command_status_result_reports_nonzero_exit() {

@@ -535,8 +535,89 @@ pub(crate) fn App() -> Element {
     let mut sidebar_visible = use_signal(|| saved_config.sidebar_visible_default);
     // General settings (config-backed): default window size, startup behavior,
     // sidebar default, external-link policy, and the code-block font.
-    let win_w = use_signal(|| saved_config.window_width);
-    let win_h = use_signal(|| saved_config.window_height);
+    let mut win_w = use_signal(|| saved_config.window_width);
+    let mut win_h = use_signal(|| saved_config.window_height);
+    // Last known window position (physical pixels). None until the window is
+    // moved for the first time or a saved position exists.
+    let mut win_x = use_signal(|| saved_config.window_x);
+    let mut win_y = use_signal(|| saved_config.window_y);
+
+    // Capture Moved/Resized events to keep position & size signals current.
+    // Guards filter out anomalous values produced by minimize/maximize.
+    {
+        let window_ev = dioxus::desktop::use_window();
+        dioxus::desktop::use_wry_event_handler(move |event, _| {
+            use dioxus::desktop::tao::event::{Event, WindowEvent};
+            match event {
+                Event::WindowEvent {
+                    event: WindowEvent::Moved(pos),
+                    ..
+                } => {
+                    // Skip values that indicate the window is off-screen or
+                    // being hidden (e.g. macOS minimise sends extreme coords).
+                    if pos.x > -30_000 && pos.y > -30_000 {
+                        win_x.set(Some(pos.x));
+                        win_y.set(Some(pos.y));
+                    }
+                }
+                Event::WindowEvent {
+                    event: WindowEvent::Resized(size),
+                    ..
+                } => {
+                    // Convert physical → logical before persisting so the
+                    // existing window_width/height semantics are preserved.
+                    if size.width > 0 && size.height > 0 {
+                        let sf = window_ev.scale_factor();
+                        win_w.set((size.width as f64 / sf).round() as i32);
+                        win_h.set((size.height as f64 / sf).round() as i32);
+                    }
+                }
+                _ => {}
+            }
+        });
+    }
+
+    // Restore saved position after the first render (once). Validates that the
+    // title-bar area of the saved window rect intersects at least one connected
+    // monitor; skips restoration silently when the window would be off-screen.
+    {
+        let init_x = saved_config.window_x;
+        let init_y = saved_config.window_y;
+        let init_w = saved_config.window_width;
+        let init_h = saved_config.window_height;
+        let window_pos = dioxus::desktop::use_window();
+        use_effect(move || {
+            if let (Some(x), Some(y)) = (init_x, init_y) {
+                use dioxus::desktop::tao::dpi::PhysicalPosition;
+                // Build monitor rects in physical pixels.
+                let sf = window_pos
+                    .current_monitor()
+                    .map(|m| m.scale_factor())
+                    .unwrap_or(1.0);
+                let monitors: Vec<services::platform::Rect> = window_pos
+                    .available_monitors()
+                    .map(|m| {
+                        let mpos = m.position();
+                        let msz = m.size();
+                        services::platform::Rect::new(
+                            mpos.x,
+                            mpos.y,
+                            msz.width as i32,
+                            msz.height as i32,
+                        )
+                    })
+                    .collect();
+                // Convert logical w/h to physical for the intersection check.
+                let phys_w = (init_w as f64 * sf).round() as i32;
+                let phys_h = (init_h as f64 * sf).round() as i32;
+                let saved_rect = services::platform::Rect::new(x, y, phys_w, phys_h);
+                if let Some((sx, sy)) = services::platform::clamp_to_monitors(saved_rect, &monitors)
+                {
+                    window_pos.set_outer_position(PhysicalPosition::new(sx, sy));
+                }
+            }
+        });
+    }
     let startup_behavior = use_signal(|| saved_config.startup);
     let sidebar_default = use_signal(|| saved_config.sidebar_visible_default);
     let external_links_in_browser = use_signal(|| saved_config.external_links_in_browser);
@@ -1079,6 +1160,8 @@ pub(crate) fn App() -> Element {
             favorites: favorites(),
             window_width: win_w(),
             window_height: win_h(),
+            window_x: win_x(),
+            window_y: win_y(),
             startup: startup_behavior(),
             sidebar_visible_default: sidebar_default(),
             external_links_in_browser: external_links_in_browser(),
