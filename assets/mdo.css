@@ -287,6 +287,18 @@ body {
   opacity: 1;
 }
 
+/* The copy-path button on tree rows shows on row hover, like the star. */
+.mdo-copy-path {
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.mdo-tree-row:hover .mdo-copy-path {
+  opacity: 0.75;
+}
+.mdo-copy-path:hover {
+  opacity: 1 !important;
+}
+
 /* Flat dropdown caret (the select itself sets appearance:none inline). A
    neutral grey chevron reads fine on both light and dark backgrounds. */
 .mdo-select {

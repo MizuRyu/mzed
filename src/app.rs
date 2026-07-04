@@ -1795,7 +1795,7 @@ pub(crate) fn App() -> Element {
                                             }
                                         }
                                         for node in nodes {
-                                            TreeView { key: "{node.path.display()}", node, depth: 0, expanded, tabs, on_open: move |p| open_active(p), on_context: move |c| ctx_menu.set(Some(c)), rename_target, rename_buf, on_rename_commit: commit_rename, favorites, on_toggle_fav: move |p| toggle_fav(p), dark }
+                                            TreeView { key: "{node.path.display()}", node, depth: 0, expanded, tabs, on_open: move |p| open_active(p), on_context: move |c| ctx_menu.set(Some(c)), rename_target, rename_buf, on_rename_commit: commit_rename, favorites, on_toggle_fav: move |p| toggle_fav(p), on_copy_path: move |p| copy_path_native(services::platform::canonical_clipboard_text(p), Some("Copied!".into())), dark }
                                         }
                                     }
                                 }

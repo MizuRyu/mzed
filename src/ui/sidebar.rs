@@ -18,6 +18,8 @@ pub(crate) fn TreeView(
     // `on_toggle_fav`.
     favorites: Signal<Vec<PathBuf>>,
     on_toggle_fav: EventHandler<PathBuf>,
+    // Copy the row's absolute path to the clipboard (button left of the star).
+    on_copy_path: EventHandler<PathBuf>,
     dark: bool,
 ) -> Element {
     let path = node.path.clone();
@@ -59,7 +61,7 @@ pub(crate) fn TreeView(
             }
             if open {
                 for child in node.children.clone() {
-                    TreeView { key: "{child.path.display()}", node: child, depth: depth + 1, expanded, tabs, on_open, on_context, rename_target, rename_buf, on_rename_commit, favorites, on_toggle_fav, dark }
+                    TreeView { key: "{child.path.display()}", node: child, depth: depth + 1, expanded, tabs, on_open, on_context, rename_target, rename_buf, on_rename_commit, favorites, on_toggle_fav, on_copy_path, dark }
                 }
             }
         }
@@ -71,6 +73,7 @@ pub(crate) fn TreeView(
         let click_path = path.clone();
         let ctx_path = path.clone();
         let star_path = path.clone();
+        let copy_path = path.clone();
         let path_key = path.to_string_lossy().to_string();
         let editing = rename_target.read().as_deref() == Some(path.as_path());
         let is_fav = favorites.read().iter().any(|p| p == &path);
@@ -107,8 +110,20 @@ pub(crate) fn TreeView(
                 } else {
                     span { style: "overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto;", "{node.name}" }
                     button {
+                        class: "mdo-copy-path",
+                        style: "margin-left: auto; background: transparent; border: none; cursor: pointer; flex: 0 0 auto; padding: 0 2px; display: flex; align-items: center; color: {muted};",
+                        title: "パスをコピー",
+                        onclick: move |e| { e.stop_propagation(); on_copy_path.call(copy_path.clone()); },
+                        svg {
+                            width: "13", height: "13", view_box: "0 0 24 24", fill: "none",
+                            stroke: "currentColor", stroke_width: "2", stroke_linecap: "round", stroke_linejoin: "round",
+                            rect { x: "9", y: "9", width: "13", height: "13", rx: "2", ry: "2" }
+                            path { d: "M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" }
+                        }
+                    }
+                    button {
                         class: if is_fav { "mdo-fav-star on" } else { "mdo-fav-star" },
-                        style: "margin-left: auto; background: transparent; border: none; cursor: pointer; flex: 0 0 auto; padding: 0 2px; display: flex; align-items: center; color: {star_color};",
+                        style: "background: transparent; border: none; cursor: pointer; flex: 0 0 auto; padding: 0 2px; display: flex; align-items: center; color: {star_color};",
                         title: if is_fav { "お気に入りから外す" } else { "お気に入りに追加" },
                         onclick: move |e| { e.stop_propagation(); on_toggle_fav.call(star_path.clone()); },
                         svg {
