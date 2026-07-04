@@ -1901,7 +1901,7 @@ pub(crate) fn App() -> Element {
                                             onmousedown: move |_| active_pane.set(0),
                                             TabBar { tabs, root: root(), dark }
                                             div {
-                                                style: "flex: 1 1 auto; overflow: auto; background: {body_bg};",
+                                                style: "flex: 1 1 auto; width: 100%; overflow: auto; background: {body_bg};",
                                                 // File drag & drop: native absolute paths.
                                                 // Dropped `.md` opens in the focused pane; a
                                                 // dropped directory becomes the project root.
@@ -1933,7 +1933,7 @@ pub(crate) fn App() -> Element {
                                                 onmousedown: move |_| active_pane.set(1),
                                                 TabBar { tabs: tabs_r, root: root(), dark }
                                                 div {
-                                                    style: "flex: 1 1 auto; overflow: auto; background: {body_bg};",
+                                                    style: "flex: 1 1 auto; width: 100%; overflow: auto; background: {body_bg};",
                                                     div { class: "markdown-body", "data-mdo-pane": "1", dangerous_inner_html: "{html_r}" }
                                                 }
                                             }

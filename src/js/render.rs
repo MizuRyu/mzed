@@ -340,6 +340,23 @@ mod tests {
         );
     }
 
+    /// スクロールコンテナ（ペイン本文領域）に `width: 100%` が設定されていることを
+    /// app.rs のソーステキストで確認する。
+    /// サイドバー非表示時でも `.markdown-body` の `margin: 0 auto` が正しく
+    /// 機能するために、親コンテナが確定幅を持つ必要がある。
+    #[test]
+    fn スクロールコンテナにwidth100が設定されている() {
+        let src = include_str!("../../src/app.rs");
+        // Count occurrences: expect at least 2 (pane 0 and pane 1 / split pane).
+        let count = src
+            .matches("flex: 1 1 auto; width: 100%; overflow: auto;")
+            .count();
+        assert!(
+            count >= 2,
+            "スクロールコンテナに `flex: 1 1 auto; width: 100%; overflow: auto;` が {count} 箇所しかない（最低2箇所必要）"
+        );
+    }
+
     /// mdo.css が overscroll を抑制することを確認する。
     #[test]
     fn mdo_cssにoverscroll抑制が含まれる() {
