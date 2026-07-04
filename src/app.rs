@@ -1787,14 +1787,21 @@ pub(crate) fn App() -> Element {
                                 },
                                 on_open_folder: move |_| {
                                     proj_menu_open.set(false);
-                                    if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                                        let pick = file_service::pick_markdown(&path);
-                                        let exp = pick
-                                            .as_ref()
-                                            .map(|f| file_service::ancestor_dirs(&path, f))
-                                            .unwrap_or_default();
-                                        switch_project(path.clone(), vec![path], exp, pick);
-                                    }
+                                    // Use the async dialog + spawn: rfd's synchronous
+                                    // pick_folder() spins a modal NSOpenPanel on the
+                                    // main thread inside the tao event callback, which
+                                    // deadlocks the running event loop (freeze/crash).
+                                    spawn(async move {
+                                        if let Some(handle) = rfd::AsyncFileDialog::new().pick_folder().await {
+                                            let path = handle.path().to_path_buf();
+                                            let pick = file_service::pick_markdown(&path);
+                                            let exp = pick
+                                                .as_ref()
+                                                .map(|f| file_service::ancestor_dirs(&path, f))
+                                                .unwrap_or_default();
+                                            switch_project(path.clone(), vec![path], exp, pick);
+                                        }
+                                    });
                                 },
                             }
                         }

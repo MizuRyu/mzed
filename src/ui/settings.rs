@@ -246,9 +246,13 @@ pub(crate) fn Settings(
                                                     button {
                                                         style: "{reset_btn}",
                                                         onclick: move |_| {
-                                                            if let Some(d) = rfd::FileDialog::new().pick_folder() {
-                                                                export_dir_sig.set(Some(d));
-                                                            }
+                                                            // Async dialog: the sync rfd picker deadlocks the
+                                                            // tao event loop when spun on the main thread.
+                                                            spawn(async move {
+                                                                if let Some(h) = rfd::AsyncFileDialog::new().pick_folder().await {
+                                                                    export_dir_sig.set(Some(h.path().to_path_buf()));
+                                                                }
+                                                            });
                                                         },
                                                         "選択"
                                                     }
