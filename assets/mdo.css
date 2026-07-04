@@ -72,8 +72,15 @@ body {
   color: #1f2328;
 }
 
-/* github-markdown-css leaves the page container to the host. */
-.markdown-body {
+/* github-markdown-css leaves the page container to the host.
+   The selector is doubled (`.markdown-body.markdown-body`) on purpose: the
+   github-markdown theme is injected as an inline <style> in the body while
+   this file is hoisted into <head> as a <link>, so github's
+   `.markdown-body { margin: 0 }` would otherwise win on source order and kill
+   the centering (max-width survives, so the column sticks to the left once the
+   viewport is wider than 900px — e.g. with the sidebar hidden). Doubling the
+   class raises specificity so the centering wins regardless of order. */
+.markdown-body.markdown-body {
   box-sizing: border-box;
   /* Readable column: centred with comfortable horizontal breathing room.
      Matches the prototype value (900 px); a wide/narrow user setting (FT-04)
