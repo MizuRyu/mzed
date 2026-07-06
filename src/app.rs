@@ -743,9 +743,9 @@ pub(crate) fn App() -> Element {
         // Keep a reference to the primary path for B4 (latest-file lookup)
         // before it is consumed by `root.set`.
         let primary_for_latest = new_primary.clone();
+        let roots_for_reveal = new_roots.clone();
         root.set(Some(new_primary));
         roots.set(new_roots);
-        expanded.set(expanded_set);
         // When the project has previously-parked (or session-restored) tabs,
         // trust the restored active tab rather than clobbering it with a
         // generic representative markdown. Only seed with a pick when the
@@ -765,6 +765,16 @@ pub(crate) fn App() -> Element {
         if let Some(f) = effective_pick {
             restored.open(f);
         }
+        // Reveal whatever tab ends up active (restored session tab, the pick,
+        // or the latest-file) in the tree. The caller-provided expansion is
+        // computed from its own pick, which may differ from the file actually
+        // shown -- so expand to the real active file too, otherwise the open
+        // document has no locatable home in the folder tree.
+        let mut expanded_set = expanded_set;
+        if let Some(active) = restored.active() {
+            expanded_set.extend(file_service::ancestor_dirs_multi(&roots_for_reveal, active));
+        }
+        expanded.set(expanded_set);
         tabs.set(restored);
         // The right pane is not per-project (v1); collapse it on a switch.
         if split() {
