@@ -103,6 +103,7 @@ mzed [PATH...] [--sync <auto|self|off>]
 | `feature_html_export` | bool | `true` | HTML エクスポート機能 |
 | `feature_pdf_export` | bool | `true` | PDF エクスポート機能 |
 | `open_latest_on_project_open` | bool | `false` | プロジェクト切替時に最終更新 Markdown を自動で開く（復元タブが無い場合のみ） |
+| `line_height` | float | `1.7` | 本文行間（1.2〜2.4）。設定 Appearance の「行間」から変更可 |
 
 ### sync_mode の詳細（`src/theme.rs`）
 

@@ -229,8 +229,9 @@ async function mdoProcessBody(body) {
   if (MDO_KATEX && window.renderMathInElement) {
     renderMathInElement(body, {
       delimiters: [
-        { left: "$$", right: "$$", display: true },
-        { left: "$",  right: "$",  display: false }
+        { left: "$$",  right: "$$",  display: true  },
+        { left: "\\(", right: "\\)", display: false },
+        { left: "\\[", right: "\\]", display: true  }
       ]
     });
   }
@@ -410,6 +411,48 @@ mod tests {
         assert!(
             js.contains("lineColor: '#8b949e'"),
             "lineColor が themeVariables に見つからない"
+        );
+    }
+
+    /// KaTeX delimiter に単一 `$` が含まれないことを確認する。
+    /// 通貨表記 `$47K` などが数式化されないための要件。
+    #[test]
+    fn katexデリミタに単一ドルが含まれない() {
+        let js = post_render_js(true, true);
+        // Only the `$$` block delimiter should appear; lone `$` must not be a delimiter.
+        // Find the delimiters array in the JS and check it doesn't have `"$"` as a standalone entry.
+        // The pattern `"$",  right: "$"` would indicate the old single-$ delimiter.
+        assert!(
+            !js.contains(r#"left: "$",  right: "$""#) && !js.contains(r#"left: "$", right: "$""#),
+            "単一 $ delimiter が renderMathInElement に残っている"
+        );
+    }
+
+    /// KaTeX delimiter に `\\(` / `\\)` インライン記法が含まれる。
+    #[test]
+    fn katexデリミタにバックスラッシュ丸括弧が含まれる() {
+        let js = post_render_js(true, true);
+        assert!(
+            js.contains(r#"left: "\\(""#),
+            r#"\\( delimiter が renderMathInElement に見つからない"#
+        );
+        assert!(
+            js.contains(r#"right: "\\)""#),
+            r#"\\) delimiter が renderMathInElement に見つからない"#
+        );
+    }
+
+    /// KaTeX delimiter に `\\[` / `\\]` ブロック記法が含まれる。
+    #[test]
+    fn katexデリミタにバックスラッシュ角括弧が含まれる() {
+        let js = post_render_js(false, true);
+        assert!(
+            js.contains(r#"left: "\\[""#),
+            r#"\\[ delimiter が renderMathInElement に見つからない"#
+        );
+        assert!(
+            js.contains(r#"right: "\\]""#),
+            r#"\\] delimiter が renderMathInElement に見つからない"#
         );
     }
 

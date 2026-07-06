@@ -88,6 +88,16 @@ body {
   max-width: 900px;
   margin: 0 auto;
   padding: 2rem 2.5rem;
+  /* A touch more vertical air than github's default 1.5 so body text
+     doesn't feel cramped (headings keep their own tighter line-height). */
+  line-height: 1.7;
+}
+
+/* Subtle horizontal breathing room on prose only — left off code/tables so
+   monospace alignment is untouched. */
+.markdown-body.markdown-body p,
+.markdown-body.markdown-body li {
+  letter-spacing: 0.01em;
 }
 
 /* Frontmatter block (mo-style): a quiet "Metadata" disclosure whose body is a

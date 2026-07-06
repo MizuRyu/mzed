@@ -44,6 +44,7 @@ UI 補足:
 | `theme.mode` | enum | `system` | `system` / `light` / `dark` |
 | `theme.code_font` | string | (既定等幅) | コードブロックのフォント family |
 | `theme.code_font_size` | int(px) | 14 | コードブロックのフォントサイズ |
+| `theme.line_height` | float | 1.7 | 本文行間（1.2〜2.4）。設定 Appearance から変更可 |
 
 本文フォントは GitHub 既定を維持（将来検討 FT-03 の本文版は別途）。
 

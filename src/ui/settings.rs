@@ -29,6 +29,7 @@ pub(crate) fn Settings(
     mut external_links_in_browser: Signal<bool>,
     mut code_font: Signal<String>,
     mut code_font_size: Signal<i32>,
+    mut line_height: Signal<f32>,
     mut keymap: Signal<Vec<config::KeyBinding>>,
     mut export_dir_sig: Signal<Option<PathBuf>>,
     mut feature_katex: Signal<bool>,
@@ -384,6 +385,38 @@ pub(crate) fn Settings(
                                         }
                                         button { style: "{step_btn}", onclick: move |_| code_font_size.set((code_font_size() + 1).clamp(8, 32)), "+" }
                                         button { style: "{reset_btn}", onclick: move |_| code_font_size.set(14), "リセット" }
+                                    }
+                                }
+                                // Body line-height.
+                                div {
+                                    style: "{row} border-top: 1px solid {row_border};",
+                                    div {
+                                        div { style: row_title, "行間" }
+                                        div { style: "{row_desc}", "本文の行間（1.2〜2.4、既定 1.7）" }
+                                    }
+                                    div {
+                                        style: "display: flex; gap: 8px; align-items: center;",
+                                        button {
+                                            style: "{step_btn}",
+                                            onclick: move |_| {
+                                                let v = ((line_height() - 0.1) * 10.0).round() / 10.0;
+                                                line_height.set(v.clamp(1.2, 2.4));
+                                            },
+                                            "−"
+                                        }
+                                        span {
+                                            style: "min-width: 44px; text-align: center; font: 14px -apple-system, sans-serif; font-variant-numeric: tabular-nums;",
+                                            { format!("{:.1}", line_height()) }
+                                        }
+                                        button {
+                                            style: "{step_btn}",
+                                            onclick: move |_| {
+                                                let v = ((line_height() + 0.1) * 10.0).round() / 10.0;
+                                                line_height.set(v.clamp(1.2, 2.4));
+                                            },
+                                            "+"
+                                        }
+                                        button { style: "{reset_btn}", onclick: move |_| line_height.set(1.7), "リセット" }
                                     }
                                 }
                             },

@@ -138,6 +138,10 @@ pub struct Config {
     /// Falls back to the existing representative-file pick when false (default).
     #[serde(default)]
     pub open_latest_on_project_open: bool,
+    /// Body line-height (1.2–2.4). Injected as `!important` CSS so it overrides
+    /// the static `line-height: 1.7` in mdo.css.
+    #[serde(default = "default_line_height")]
+    pub line_height: f32,
 }
 
 fn default_zoom() -> f32 {
@@ -154,6 +158,9 @@ fn default_true() -> bool {
 }
 fn default_code_font_size() -> i32 {
     14
+}
+fn default_line_height() -> f32 {
+    1.7
 }
 
 impl Default for Config {
@@ -178,6 +185,7 @@ impl Default for Config {
             feature_html_export: true,
             feature_pdf_export: true,
             open_latest_on_project_open: false,
+            line_height: default_line_height(),
         }
     }
 }

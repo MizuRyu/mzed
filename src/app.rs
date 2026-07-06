@@ -623,6 +623,7 @@ pub(crate) fn App() -> Element {
     let external_links_in_browser = use_signal(|| saved_config.external_links_in_browser);
     let code_font = use_signal(|| saved_config.code_font.clone());
     let code_font_size = use_signal(|| saved_config.code_font_size);
+    let line_height = use_signal(|| saved_config.line_height);
     let open_latest_on_project_open = use_signal(|| saved_config.open_latest_on_project_open);
     // Rebindable shortcuts, merged with defaults (fills new actions, drops stale).
     let keymap = use_signal(|| config::merged_keybindings(&saved_config.keybindings));
@@ -1173,6 +1174,7 @@ pub(crate) fn App() -> Element {
             feature_html_export: feature_html_export(),
             feature_pdf_export: feature_pdf_export(),
             open_latest_on_project_open: open_latest_on_project_open(),
+            line_height: line_height(),
         };
         let generation = config_save_generation.write().advance();
         spawn(async move {
@@ -1733,6 +1735,14 @@ pub(crate) fn App() -> Element {
             );
             rsx! { style { dangerous_inner_html: "{css}" } }
         }
+        {
+            // Body line-height (Appearance settings). Clamp to readable range.
+            let lh = line_height().clamp(1.2, 2.4);
+            let css = format!(
+                ".markdown-body.markdown-body {{ line-height: {lh} !important; }}"
+            );
+            rsx! { style { dangerous_inner_html: "{css}" } }
+        }
         document::Stylesheet { href: MDO_CSS }
         document::Stylesheet { href: KATEX_CSS }
         document::Script { src: HLJS_JS }
@@ -2077,6 +2087,7 @@ pub(crate) fn App() -> Element {
                         external_links_in_browser,
                         code_font,
                         code_font_size,
+                        line_height,
                         keymap,
                         export_dir_sig,
                         feature_katex,
