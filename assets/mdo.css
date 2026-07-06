@@ -1,5 +1,14 @@
 /* mdo-specific styles layered on top of github-markdown-css. */
 
+/* Text selection: a soft translucent highlight so selected prose stays
+   readable (the default opaque system blue reads as a heavy block). Works on
+   both light and dark themes; text keeps its own colour. Note: on wrapped
+   lines the highlight fills to the line-box end by design — that is standard
+   selection behaviour, not something CSS can trim to individual glyphs. */
+::selection {
+  background-color: rgba(56, 139, 253, 0.3);
+}
+
 /* Kill the default body/html margin so the app frame fills the window with no
    white gutter around it. */
 html,
@@ -29,6 +38,31 @@ body {
 .mdo-tabbar::-webkit-scrollbar {
   height: 0;
   display: none;
+}
+
+/* Slim, unobtrusive scrollbars everywhere else (WKWebView renders the default
+   thick macOS bar otherwise). Transparent track, subtle rounded thumb that
+   darkens on hover. Theme-neutral grey reads on both light and dark. */
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(127, 127, 127, 0.32);
+  border-radius: 6px;
+  /* Inset the thumb from the track edges so it reads as a thin pill. */
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(127, 127, 127, 0.55);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 /* Sidebar tree rows: subtle hover background. */
