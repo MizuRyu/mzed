@@ -104,6 +104,10 @@ mzed [PATH...] [--sync <auto|self|off>]
 | `feature_pdf_export` | bool | `true` | PDF エクスポート機能 |
 | `open_latest_on_project_open` | bool | `false` | プロジェクト切替時に最終更新 Markdown を自動で開く（復元タブが無い場合のみ） |
 | `line_height` | float | `1.7` | 本文行間（1.2〜2.4）。設定 Appearance の「行間」から変更可 |
+| `feature_task_view` | bool | `true` | Task View モード（Cmd+Shift+D）の有効/無効。設定 Features タブでトグル |
+| `task_view_tasks_subpath` | string | `"docs/memo/tasks"` | プロジェクトルートからタスクフォルダまでの相対パス |
+| `task_view_scan_roots` | `["/path", ...]` | `[]` | All Projects スキャン対象の親ディレクトリ群。空なら現プロジェクトのみ表示 |
+| `task_view_days` | int | `7` | All Projects で表示する直近日数（`created` が今日から N 日以内） |
 
 ### sync_mode の詳細（`src/theme.rs`）
 
@@ -148,9 +152,11 @@ mzed [PATH...] [--sync <auto|self|off>]
 | `toggle_sidebar` | Cmd+B | サイドバー表示切替 |
 | `toggle_split` | Cmd+\\ | 分割ペイン切替 |
 | `toggle_fav` | Cmd+D | お気に入り登録/解除 |
+| `open_task_view` | Cmd+Shift+D | Task View モードをトグル（`feature_task_view` が ON のとき有効） |
 | `copy_path` | Cmd+Shift+C | ファイルパスをコピー |
 | `close_tab` | Cmd+W | タブを閉じる |
 | `settings` | Cmd+, | 設定画面を開く |
+| `toggle_sync_pin` | Cmd+Shift+L | Zed 連動モードを auto ⇄ self でトグル |
 
 ### 固定ショートカット（変更不可）
 

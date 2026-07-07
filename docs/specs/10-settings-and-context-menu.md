@@ -71,6 +71,7 @@ UI 補足:
 | タブ番号移動 | Cmd+1〜9 |
 | 左右分割 | Cmd+\ |
 | Toggle Sync Pin（auto⇄self） | Cmd+Shift+L |
+| Task View トグル | Cmd+Shift+D |
 | ズーム | Cmd+= / Cmd+- / Cmd+0 |
 
 ## 右クリックメニュー（サイドバーのファイル行）
