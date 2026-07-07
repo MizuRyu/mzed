@@ -4,9 +4,14 @@
    readable (the default opaque system blue reads as a heavy block). Works on
    both light and dark themes; text keeps its own colour. Note: on wrapped
    lines the highlight fills to the line-box end by design — that is standard
-   selection behaviour, not something CSS can trim to individual glyphs. */
+   selection behaviour, not something CSS can trim to individual glyphs.
+   WebKit only honours the `background` shorthand here (not `background-color`),
+   so use the shorthand or the rule is silently ignored. */
 ::selection {
-  background-color: rgba(56, 139, 253, 0.3);
+  background: rgba(56, 139, 253, 0.32);
+}
+::-webkit-selection {
+  background: rgba(56, 139, 253, 0.32);
 }
 
 /* Kill the default body/html margin so the app frame fills the window with no
@@ -399,3 +404,10 @@ body {
 
 /* Project switcher button (borderless, subtle hover). */
 .mdo-proj-btn:hover { background: rgba(255,255,255,0.10); }
+
+/* Unresolved Obsidian wikilinks: muted colour + dotted underline, not clickable. */
+.mdo-wikilink-unresolved {
+  color: var(--color-fg-muted, #8b949e);
+  text-decoration: underline dotted;
+  cursor: default;
+}

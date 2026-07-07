@@ -47,8 +47,46 @@ fn image_mime(path: &Path) -> Option<&'static str> {
         Some("jpg") | Some("jpeg") => Some("image/jpeg"),
         Some("gif") => Some("image/gif"),
         Some("webp") => Some("image/webp"),
+        // SVG can embed scripts and external references, but loading it as an
+        // `<img src="data:image/svg+xml;base64,…">` runs neither (browser spec:
+        // images loaded via <img>/data: are a non-scripted, non-fetching
+        // context). mzed also fully escapes raw HTML before re-parsing, so there
+        // is no inline `<svg>` path — this data-URL `<img>` route is the only
+        // way an SVG reaches the WebView, and it is safe.
+        Some("svg") => Some("image/svg+xml"),
         _ => None,
     }
+}
+
+/// Decode `%XX` escapes so a percent-encoded relative URL (as emitted by the
+/// Markdown renderer for paths containing spaces or parentheses) maps back to
+/// the real on-disk filename. Non-`%XX` bytes pass through unchanged. The
+/// decoded path is still gated by the canonical-root containment check below,
+/// so decoding cannot broaden filesystem access.
+fn percent_decode(s: &str) -> String {
+    fn hex(b: u8) -> Option<u8> {
+        match b {
+            b'0'..=b'9' => Some(b - b'0'),
+            b'a'..=b'f' => Some(b - b'a' + 10),
+            b'A'..=b'F' => Some(b - b'A' + 10),
+            _ => None,
+        }
+    }
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(h), Some(l)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+                out.push(h * 16 + l);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn local_path_part(url: &str) -> &str {
@@ -81,11 +119,11 @@ fn canonical_roots(allowed_roots: &[PathBuf], base_dir: &Path) -> Vec<PathBuf> {
 }
 
 fn resolve_inside_roots(base_dir: &Path, target: &str, roots: &[PathBuf]) -> Option<PathBuf> {
-    let local = local_path_part(target).trim();
-    if local.is_empty() || is_unsafe_absolute_url(local) {
+    let local = percent_decode(local_path_part(target).trim());
+    if local.is_empty() || is_unsafe_absolute_url(&local) {
         return None;
     }
-    let local = Path::new(local);
+    let local = Path::new(&local);
     if has_forbidden_absolute_component(local) {
         return None;
     }
@@ -124,6 +162,12 @@ fn to_data_url(base_dir: &Path, src: &str, roots: &[PathBuf]) -> Option<String> 
 
 /// Rewrite relative image/link URLs in `html` relative to `base_dir`.
 pub fn post_process(html: &str, base_dir: &Path, allowed_roots: &[PathBuf]) -> String {
+    // Re-introduce the allow-listed raw-HTML subset (`<img>`, `<p align>`, …)
+    // by rebuilding validated tags from the escaped text. This must run before
+    // the lol_html rewrites so the reconstructed `<img src>` rides the same
+    // data-URL / roots-containment path as Markdown images.
+    let html = super::raw_html::reconstruct_allowed(html);
+    let html = html.as_str();
     let base_dir = base_dir.to_path_buf();
     let roots = canonical_roots(allowed_roots, &base_dir);
     let img_base = base_dir.clone();
@@ -136,6 +180,18 @@ pub fn post_process(html: &str, base_dir: &Path, allowed_roots: &[PathBuf]) -> S
                 el.remove_attribute("src");
             }
         }
+        // Obsidian embeds `![[img|400]]` carry the display width as an
+        // `alt="mdo-width-<N>"` side-channel from the wikilink pre-processor
+        // (Markdown image syntax has no width). Promote it to a real `width`
+        // attribute and clear the marker so it never shows as alt text.
+        if let Some(alt) = el.get_attribute("alt") {
+            if let Some(w) = alt.strip_prefix(super::wikilink::WIDTH_ALT_PREFIX) {
+                if !w.is_empty() && w.bytes().all(|b| b.is_ascii_digit()) {
+                    el.set_attribute("width", w).ok();
+                    el.set_attribute("alt", "").ok();
+                }
+            }
+        }
         Ok(())
     });
 
@@ -143,6 +199,12 @@ pub fn post_process(html: &str, base_dir: &Path, allowed_roots: &[PathBuf]) -> S
     let anchor_roots = roots;
     let anchor = element!("a[href]", move |el| {
         if let Some(href) = el.get_attribute("href") {
+            // Unresolved wikilinks: demote to a styled span-like anchor with no href.
+            if href == super::wikilink::UNRESOLVED_SENTINEL {
+                el.remove_attribute("href");
+                el.set_attribute("class", "mdo-wikilink-unresolved").ok();
+                return Ok(());
+            }
             if is_external_link(&href) {
                 return Ok(());
             }
@@ -204,6 +266,54 @@ mod tests {
 
     fn post_process_in_root(html: &str, base_dir: &Path) -> String {
         post_process(html, base_dir, &[base_dir.to_path_buf()])
+    }
+
+    // End-to-end: Markdown source containing an allow-listed raw <img> must
+    // reach the WebView through the exact same data-URL path as a Markdown
+    // image, and `<p align="center">` must survive as a real centering tag.
+    #[test]
+    fn 生htmlのimgはrender経由でdataURL化されalignが効く() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("icon.png"), PNG).unwrap();
+
+        let md = r#"<p align="center"><img src="icon.png" width="128"></p>"#;
+        let rendered = super::super::render::render(md);
+        // After render the raw HTML is escaped text, not a real tag.
+        assert!(rendered.contains("&lt;img"), "render leaked a raw tag");
+
+        let out = post_process_in_root(&rendered, dir.path());
+        assert!(out.contains(r#"align="center""#), "got: {out}");
+        assert!(out.contains("src=\"data:image/png;base64,"), "got: {out}");
+        assert!(out.contains(r#"width="128""#), "got: {out}");
+        assert!(!out.contains("&lt;img"), "img was not reconstructed: {out}");
+        assert!(!out.contains("onerror"));
+    }
+
+    // End-to-end adversarial: script / unsafe src / unknown tags stay escaped.
+    #[test]
+    fn 生htmlの敵対ケースはrender経由でも無害化される() {
+        let dir = tempdir().unwrap();
+        let md = concat!(
+            "<script>alert(1)</script>\n\n",
+            "<img src=x onerror=alert(1)>\n\n",
+            r#"<img src="javascript:alert(1)">"#,
+            "\n\n<iframe src=x></iframe>",
+        );
+        let rendered = super::super::render::render(md);
+        let out = post_process_in_root(&rendered, dir.path());
+        assert!(!out.contains("onerror"), "got: {out}");
+        assert!(!out.contains("<script"), "got: {out}");
+        assert!(!out.contains("<iframe"), "got: {out}");
+        // The javascript: img is never emitted as a real tag; it stays as inert
+        // escaped text (so the literal string is present, but harmless).
+        assert!(!out.contains(r#"<img src="javascript:"#), "got: {out}");
+        assert!(
+            out.contains(r#"&lt;img src="javascript:alert(1)"&gt;"#),
+            "got: {out}"
+        );
+        // script / iframe remain escaped text.
+        assert!(out.contains("&lt;script&gt;"), "got: {out}");
+        assert!(out.contains("&lt;iframe"), "got: {out}");
     }
 
     #[test]
@@ -271,9 +381,93 @@ mod tests {
     fn 拡張子からMIMEを決める() {
         assert_eq!(image_mime(Path::new("a.jpg")), Some("image/jpeg"));
         assert_eq!(image_mime(Path::new("a.jpeg")), Some("image/jpeg"));
-        assert_eq!(image_mime(Path::new("a.svg")), None);
+        assert_eq!(image_mime(Path::new("a.svg")), Some("image/svg+xml"));
+        assert_eq!(image_mime(Path::new("a.txt")), None);
         assert_eq!(image_mime(Path::new("a.webp")), Some("image/webp"));
         assert_eq!(image_mime(Path::new("a.gif")), Some("image/gif"));
+    }
+
+    // Minimal valid SVG document.
+    const SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg"/>"#;
+
+    #[test]
+    fn ローカルsvgをdataURLに変換する() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("icon.svg"), SVG).unwrap();
+
+        let html = r#"<img src="icon.svg" alt="i">"#;
+        let out = post_process_in_root(html, dir.path());
+        assert!(
+            out.contains("src=\"data:image/svg+xml;base64,"),
+            "got: {out}"
+        );
+        assert!(!out.contains("\"icon.svg\""));
+    }
+
+    #[test]
+    fn project外のsvgはsrcを削除する() {
+        let dir = tempdir().unwrap();
+        let root = dir.path().join("repo");
+        let docs = root.join("docs");
+        fs::create_dir_all(&docs).unwrap();
+        fs::write(dir.path().join("secret.svg"), SVG).unwrap();
+
+        let html = r#"<img src="../../secret.svg">"#;
+        let out = post_process(html, &docs, &[root]);
+        assert!(!out.contains("secret.svg"));
+        assert!(!out.contains("src="));
+    }
+
+    #[test]
+    fn 上限を超えるsvgは読み込まない() {
+        let dir = tempdir().unwrap();
+        let f = fs::File::create(dir.path().join("big.svg")).unwrap();
+        f.set_len((MAX_INLINE_IMAGE_BYTES + 1) as u64).unwrap();
+        let out = post_process_in_root(r#"<img src="big.svg">"#, dir.path());
+        assert!(!out.contains("src="));
+        assert!(!out.contains("data:image/svg"));
+    }
+
+    #[test]
+    fn width用altマーカーをwidth属性に変換する() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.png"), PNG).unwrap();
+        let html = r#"<img src="a.png" alt="mdo-width-400">"#;
+        let out = post_process_in_root(html, dir.path());
+        assert!(out.contains(r#"width="400""#), "got: {out}");
+        assert!(out.contains(r#"alt="""#), "got: {out}");
+        assert!(!out.contains("mdo-width-400"), "got: {out}");
+        assert!(out.contains("src=\"data:image/png;base64,"));
+    }
+
+    #[test]
+    fn 非数値のwidthマーカー風altはそのまま() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.png"), PNG).unwrap();
+        // Not a valid width marker (non-digits) → alt left untouched.
+        let html = r#"<img src="a.png" alt="mdo-width-abc">"#;
+        let out = post_process_in_root(html, dir.path());
+        assert!(!out.contains("width="), "got: {out}");
+        assert!(out.contains(r#"alt="mdo-width-abc""#), "got: {out}");
+    }
+
+    #[test]
+    fn パーセントエンコードされた空白入り画像を解決する() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("my file.png"), PNG).unwrap();
+        // Renderer emits spaces as %20 in src; post_process must decode.
+        let html = r#"<img src="my%20file.png">"#;
+        let out = post_process_in_root(html, dir.path());
+        assert!(out.contains("src=\"data:image/png;base64,"), "got: {out}");
+    }
+
+    #[test]
+    fn パーセントエンコードされた括弧入り画像を解決する() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a(b).png"), PNG).unwrap();
+        let html = r#"<img src="a%28b%29.png">"#;
+        let out = post_process_in_root(html, dir.path());
+        assert!(out.contains("src=\"data:image/png;base64,"), "got: {out}");
     }
 
     #[test]
@@ -365,6 +559,20 @@ mod tests {
         assert!(!out.contains("secret-link.png"));
         assert!(!out.contains("data:image/png"));
         assert!(!out.contains("src="));
+    }
+
+    #[test]
+    fn 未解決wikilinksentinelはhref除去とクラス付与をする() {
+        let dir = tempdir().unwrap();
+        let sentinel = super::super::wikilink::UNRESOLVED_SENTINEL;
+        let html = format!(r#"<a href="{sentinel}">broken link</a>"#);
+        let out = post_process_in_root(&html, dir.path());
+        assert!(!out.contains("href="), "got: {out}");
+        assert!(
+            out.contains(r#"class="mdo-wikilink-unresolved""#),
+            "got: {out}"
+        );
+        assert!(out.contains("broken link"), "got: {out}");
     }
 
     #[test]

@@ -178,13 +178,21 @@ pub(crate) fn load_document(file: Option<PathBuf>, roots: &[PathBuf]) -> Documen
             };
         }
     };
-    let rendered = crate::perf::measure(
-        "markdown.render",
-        &[("input_bytes", source.len().to_string())],
-        || markdown::render(&source),
-    );
     let base = path.parent().unwrap_or(Path::new("."));
     let allowed_roots = allowed_roots_for_file(base, roots);
+    // Wikilink pre-processing expands `[[...]]` to standard Markdown links.
+    // We keep the original `source` for clipboard/raw display and use the
+    // expanded form only for rendering.
+    let source_for_render = crate::perf::measure(
+        "markdown.wikilinks",
+        &[("input_bytes", source.len().to_string())],
+        || markdown::preprocess_wikilinks(&source, base, &allowed_roots),
+    );
+    let rendered = crate::perf::measure(
+        "markdown.render",
+        &[("input_bytes", source_for_render.len().to_string())],
+        || markdown::render(&source_for_render),
+    );
     let rendered_html = crate::perf::measure(
         "markdown.post_process",
         &[

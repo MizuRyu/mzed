@@ -303,7 +303,11 @@ timeline
 - 内部リンク（同ディレクトリの別 md）: [リンク先ドキュメント](./linked.md)
 - 外部リンク: [Zed](https://zed.dev) / [GitHub](https://github.com)
 - 相対画像（同ディレクトリに sample.png があれば表示）: ![サンプル画像](./sample.png)
+- ローカル SVG（同ディレクトリに sample.svg があれば表示）: ![サンプルSVG](./sample.svg)
 - リモート画像: ![placeholder](https://placehold.co/120x40/png)
+- Obsidian 埋め込み: `![[sample.png]]`（画像化） → ![[sample.png]]
+- Obsidian 埋め込み（幅指定 400px）: `![[sample.png|400]]` → ![[sample.png|400]]
+- Obsidian 埋め込み（alt テキスト）: `![[sample.png|サンプル説明]]` → ![[sample.png|サンプル説明]]
 
 ## 9. 脚注
 
@@ -334,6 +338,19 @@ let hidden = true;
 ##### 3.1.1.1 さらに深い見出し
 
 ###### 最深の見出し
+
+## 12. 生 HTML 許可サブセット（allowlist）
+
+GitHub README 定番の中央寄せ画像（同ディレクトリに sample.png があれば data URL 化＋中央寄せで表示）:
+
+<p align="center"><img src="./sample.png" width="128" alt="ロゴ"></p>
+
+インライン要素: キー操作は <kbd>Cmd</kbd>+<kbd>K</kbd>、化学式は H<sub>2</sub>O、指数は x<sup>2</sup>。<br>改行もできる。
+
+未許可タグ・危険属性はエスケープ表示のまま（`<script>` や `onerror` は実行されない）:
+
+<img src="x" onerror="alert(1)">
+<script>alert(1)</script>
 
 ---
 

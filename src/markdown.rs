@@ -6,13 +6,16 @@
 mod alerts;
 mod frontmatter;
 mod post_process;
+mod raw_html;
 mod render;
 mod security;
 mod toc;
+mod wikilink;
 
 pub use post_process::post_process;
 pub use render::render;
 pub use toc::{toc, TocEntry};
+pub use wikilink::preprocess_wikilinks;
 
 /// Minimal HTML text escaping shared by the submodules.
 fn escape_html(s: &str) -> String {
