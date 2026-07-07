@@ -28,6 +28,8 @@ pub enum AppCommand {
     RenameActive,
     /// Toggle sync mode between Auto and SelfPinned (Off -> Auto).
     ToggleSyncPin,
+    /// Toggle the Task View mode (Cmd+Shift+D). No-op when feature_task_view is off.
+    OpenTaskView,
     Escape,
 }
 

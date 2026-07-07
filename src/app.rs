@@ -632,6 +632,12 @@ pub(crate) fn App() -> Element {
     let feature_katex = use_signal(|| saved_config.feature_katex);
     let feature_html_export = use_signal(|| saved_config.feature_html_export);
     let feature_pdf_export = use_signal(|| saved_config.feature_pdf_export);
+    // Task View feature flags and configuration.
+    let feature_task_view = use_signal(|| saved_config.feature_task_view);
+    let task_view_tasks_subpath = use_signal(|| saved_config.task_view_tasks_subpath.clone());
+    let task_view_scan_roots = use_signal(|| saved_config.task_view_scan_roots.clone());
+    let task_view_days = use_signal(|| saved_config.task_view_days);
+    let mut task_view_open = use_signal(|| false);
     // Transient top-right toast (e.g. "Copied!"). Auto-hides after ~1.5s; a
     // generation counter ensures only the latest toast clears itself.
     let mut toast = use_signal(|| None::<String>);
@@ -1185,6 +1191,10 @@ pub(crate) fn App() -> Element {
             feature_pdf_export: feature_pdf_export(),
             open_latest_on_project_open: open_latest_on_project_open(),
             line_height: line_height(),
+            feature_task_view: feature_task_view(),
+            task_view_tasks_subpath: task_view_tasks_subpath(),
+            task_view_scan_roots: task_view_scan_roots(),
+            task_view_days: task_view_days(),
         };
         let generation = config_save_generation.write().advance();
         spawn(async move {
@@ -1476,6 +1486,11 @@ pub(crate) fn App() -> Element {
                             rename_target.set(Some(p));
                         }
                     }
+                    AppCommand::OpenTaskView => {
+                        if feature_task_view() {
+                            task_view_open.set(!task_view_open());
+                        }
+                    }
                     AppCommand::ToggleSyncPin => {
                         let new_mode = match sync_mode() {
                             theme::SyncMode::Auto => theme::SyncMode::SelfPinned,
@@ -1497,6 +1512,8 @@ pub(crate) fn App() -> Element {
                             settings_open.set(false);
                         } else if palette_open() {
                             palette_open.set(false);
+                        } else if task_view_open() {
+                            task_view_open.set(false);
                         } else if search_open() {
                             search_open.set(false);
                         } else if find_open() {
@@ -2104,6 +2121,19 @@ pub(crate) fn App() -> Element {
                         feature_html_export,
                         feature_pdf_export,
                         open_latest_on_project_open,
+                        feature_task_view,
+                        task_view_tasks_subpath,
+                        task_view_scan_roots,
+                        task_view_days,
+                        dark,
+                    }
+                }
+                if task_view_open() && feature_task_view() {
+                    TaskView {
+                        roots,
+                        scan_roots: task_view_scan_roots,
+                        subpath: task_view_tasks_subpath,
+                        default_days: task_view_days,
                         dark,
                     }
                 }

@@ -1,0 +1,99 @@
+# 11. Task View モード
+
+タスク専用ビューア。`task-creator` スキルが `docs/memo/tasks/` に作るタスクフォルダを、ツリーを辿らず一覧・status 別に把握し、クリックで `task.md` を即読みするためのモード。個人向け実験機能として feature フラグ管理。
+
+最終確認日: 2026-07-06（モック合意 variant-2 ベース）
+
+## 目的と動機
+
+- 通常はサイドバーのファイルツリーを `docs/memo/tasks/<yymmdd-NN-名前>/task.md` まで辿る必要があり面倒。
+- タスクの `status` / `created` は frontmatter で固定スキーマ。これを解析して専用画面を出す。
+- さらに「**全プロジェクトの直近 N 日に作ったタスク**」を横断で見たい（複数リポにまたがる作業把握）。
+
+## データモデル（task-creator 準拠 / 固定）
+
+- タスク = `<project>/docs/memo/tasks/<yymmdd-NN-タスク名>/task.md`
+- `task.md` frontmatter: `status`(todo|in_progress|review|done), `created`(yymmdd), `outputs`([ファイル名]), ほか `task_ref` / `project` / `worklog_sync` / `referenced_knowledge`
+- 本文: `## TODO`, `## 成果物（完了条件）`(任意), `## userの依頼`
+- タスクフォルダ内の追加成果物ファイル（`outputs` に列挙）も子として扱う
+
+## 起動と全体構成
+
+- **キーバインド `Cmd+Shift+D`** で Task View をトグル（開く/閉じる）。`Esc` でも閉じる。既存のキーバインド機構（`src/config.rs` `default_keybindings()` / `src/js/keyboard.rs`）に `open_task_view` として追加、ユーザー変更可。
+- Task View は通常のサイドバー＋本文領域を置き換える**2ペインモード**:
+  - 左ペイン: タスク一覧（下記スコープ切替つきツリー）
+  - 右ペイン: 選択タスクの `task.md` を既存 Markdown レンダリングパイプラインで表示
+- feature フラグ OFF のときは起動導線ごと無効（キーバインドも無反応）。
+
+## 左ペイン: スコープ切替
+
+上部に **This Project ⇄ All Projects** トグル。
+
+### This Project
+- 現在開いているルート（複数ルート時は各ルート）の `docs/memo/tasks/` を対象。
+- 全期間表示（日数フィルタなし）。
+- ルートノード = プロジェクト（variant-2 表示: **プロジェクト名（太字）＋下に muted のフルパス**）、配下にタスクフォルダ、さらに `task.md`＋成果物ファイルをぶら下げる既存ツリー同等の折りたたみツリー。
+
+### All Projects
+- 設定した**スキャンルート**群（下記 config）配下を走査し、`<any>/docs/memo/tasks/<task>/task.md` を収集（Zed 非依存。ファイルシステム走査）。
+- **直近 N 日**（`created` が今日から N 日以内）で絞る。上部に日数セレクタ（既定 7 日）。
+- プロジェクトごとに variant-2 のルートノードを縦に並べ、各配下に該当タスク。
+
+### ツリー行の見た目（既存 `src/ui/sidebar.rs` 準拠）
+- インデント（深さ×14px）、chevron、フォルダ/ファイルアイコン、13px、hover `rgba(127,127,127,0.12)`、アクティブ行 `rgba(9,105,218,0.1)`＋左 `#0969da` 2px。
+- **タスクフォルダ行に status 色**（ドット or 左ボーダー、控えめ）: todo=`#8b949e`, in_progress=`#1f6feb`, review=`#d29922`, done=`#3fb950`。
+- 並び順: `created` 降順（新しいタスクが上）。
+
+## 右ペイン: タスク詳細
+
+- 選択したタスクフォルダ行 or `task.md` 行クリックで、その `task.md` を既存レンダリングで表示。
+- 成果物（`outputs`）はファイルリンクとして辿れる（クリックで同ペインに表示 or タブで開く。既存の `.md` リンク遷移機構を流用）。
+- ヘッダに status バッジ・`created`・フルパス（muted）。
+
+## 設定（config）
+
+`src/config.rs` `Config` に追加（すべて `#[serde(default)]` で後方互換）:
+
+| フィールド | 型 | デフォルト | 意味 |
+|---|---|---|---|
+| `feature_task_view` | bool | `true` | Task View 機能の有効/無効。Features タブでトグル |
+| `task_view_tasks_subpath` | string | `"docs/memo/tasks"` | プロジェクト内のタスクフォルダ相対パス |
+| `task_view_scan_roots` | `[string]` | `[]` | All Projects でプロジェクトを探すルートディレクトリ群（例: `~/dev/repos`）。空なら All Projects は現プロジェクトのみ表示＋設定への誘導ヒント |
+| `task_view_days` | int | `7` | All Projects で表示する直近日数 |
+
+設定 UI:
+- **Features タブ**: `feature_task_view` トグル。
+- **General or 専用セクション**: `task_view_tasks_subpath`（テキスト）、`task_view_scan_roots`（ディレクトリ追加/削除リスト）、`task_view_days`（数値、既定7）。
+
+## 走査・解析の実装方針
+
+タスクの場所は `<project>/<task_view_tasks_subpath>`（既定 `docs/memo/tasks`）という既知の相対パス。これを **scan_root 配下の任意の深さから、枝刈り付きディレクトリ walk で発見**する（ユーザーは `~/dev` や `~` のような広い親を指定する）。
+
+- **リポ境界で止める walk（重要）**: `docs/memo/tasks` はリポルート直下にある。よってリポの中身は歩かない。各ディレクトリで:
+  1. `<dir>/<subpath>` が `is_dir` なら project = `dir` として採用（タスク列挙へ）。
+  2. `<dir>/.git` が存在すれば**リポルート**とみなし、それ以上**子へ潜らない**（1 で直接確認済み）。
+  3. どちらでもなければ、枝刈りしつつ子ディレクトリへ再帰。
+  これで `~/go` や各リポ内部の巨大ツリーに一切入らず、辿るのは「リポより上の浅い足場」だけになる。
+- **枝刈り（必須）**: 次の名前のディレクトリには入らない — `node_modules` / `target` / `dist` / `build` / `.git` / `Library` / 先頭が `.` の隠しディレクトリ。深さ上限を設ける（例: 10）。
+- **タスク列挙**: 発見した `<subpath>` を `readdir` し、各エントリ配下の `task.md` を確認。
+- **セッションキャッシュ**: 走査結果はアプリ内にキャッシュし、Task View を開くたび・スコープ/日数を変えるたびに**丸ごと再 walk しない**。キャッシュキーは (scope, scan_roots, subpath, days)。ヘッダに手動「↻ 更新」を置き、明示時のみ再走査。初回だけコストを払う。
+- **frontmatter だけ読む**: 各 `task.md` は先頭の frontmatter（最初の `---` 〜 次の `---`）だけ読み、`status`/`created`/`outputs` を抽出。本文は読まない（詳細ペインを開いたときに初めて全体を読む）。既存 `src/markdown/frontmatter.rs` を参考に最小パーサを用意。
+- スキャンは非同期（`spawn` + `spawn_blocking`）でバックグラウンド実行。UI は止めない。
+- 壊れた frontmatter は status 不明扱いで一覧には出す（クラッシュしない）。
+- `created`(yymmdd) を今日のローカル日付と比較して N 日以内を判定。
+- 走査結果はモードを開くたび最新化（ファイル監視までは v1 不要）。
+- 目安コスト: ディレクトリのみの枝刈り walk＋frontmatter 先頭読み。`~/dev` 規模なら数十 ms〜、`~` 全体でも枝刈り（Library/隠し/依存ディレクトリ除外）＋深さ上限で現実的な範囲。OS がディレクトリキャッシュを持つ 2 回目以降は速い。`spawn_blocking` で UI は止めない。パフォーマンス方針（`docs/review/performance-guide.md`）順守。
+
+## v1 スコープ / 割り切り
+
+- リアルタイム更新（watcher 連動）は入れない。Task View を開いた時点で走査。
+- タスクの status 編集・並べ替え等の書き込み操作はしない（読み取り専用ビューア）。
+- カンバン/ダッシュボード表示は入れない（B案ツリーのみ）。将来 feature 拡張余地として残す。
+- `task_view_scan_roots` が空のときの All Projects は現プロジェクトのみ（設定誘導ヒントを出す）。
+
+## テスト
+
+- frontmatter 抽出（status/created/outputs、壊れ入力）の純粋関数ユニットテスト。
+- 「直近 N 日」判定の純粋関数ユニットテスト（境界: ちょうど N 日前、N+1 日前）。
+- 走査結果の集約（プロジェクト別グルーピング、created 降順ソート）のユニットテスト。
+- 手動 TC を `docs/specs/manual-test-cases.md` に追加（起動トグル / This⇔All / 日数フィルタ / status 色 / 詳細表示 / feature OFF 無効化 / scan_roots 空時）。

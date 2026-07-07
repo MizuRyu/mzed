@@ -36,6 +36,10 @@ pub(crate) fn Settings(
     mut feature_html_export: Signal<bool>,
     mut feature_pdf_export: Signal<bool>,
     mut open_latest_on_project_open: Signal<bool>,
+    mut feature_task_view: Signal<bool>,
+    mut task_view_tasks_subpath: Signal<String>,
+    mut task_view_scan_roots: Signal<Vec<PathBuf>>,
+    mut task_view_days: Signal<u32>,
     dark: bool,
 ) -> Element {
     let win = dioxus::desktop::use_window();
@@ -300,7 +304,7 @@ pub(crate) fn Settings(
                                         }
                                     }
                                     div {
-                                        style: "{row}",
+                                        style: "{row} border-bottom: 1px solid {row_border};",
                                         div {
                                             div { style: row_title, "PDF エクスポート" }
                                             div { style: "{row_desc}", "コマンドパレットから PDF 出力（印刷ダイアログ）" }
@@ -309,6 +313,125 @@ pub(crate) fn Settings(
                                             r#type: "checkbox", checked: feature_pdf_export(),
                                             style: "width: 16px; height: 16px; cursor: pointer;",
                                             onchange: move |e| feature_pdf_export.set(e.value() == "true"),
+                                        }
+                                    }
+                                    // ── Task View ────────────────────────────────────────
+                                    div {
+                                        style: "font: 600 12px -apple-system, sans-serif; color: {muted}; \
+                                                text-transform: uppercase; letter-spacing: 0.4px; \
+                                                padding: 14px 0 4px;",
+                                        "Task View (Cmd+Shift+D)"
+                                    }
+                                    div {
+                                        style: "{row} border-bottom: 1px solid {row_border};",
+                                        div {
+                                            div { style: row_title, "Task View を有効にする" }
+                                            div { style: "{row_desc}", "Cmd+Shift+D でタスク一覧モードを開く（個人向け実験機能）" }
+                                        }
+                                        input {
+                                            r#type: "checkbox", checked: feature_task_view(),
+                                            style: "width: 16px; height: 16px; cursor: pointer;",
+                                            onchange: move |e| feature_task_view.set(e.value() == "true"),
+                                        }
+                                    }
+                                    div {
+                                        style: "{row} border-bottom: 1px solid {row_border};",
+                                        div {
+                                            div { style: row_title, "タスクフォルダのサブパス" }
+                                            div { style: "{row_desc}", "プロジェクトルートからの相対パス（既定: docs/memo/tasks）" }
+                                        }
+                                        input {
+                                            r#type: "text",
+                                            value: "{task_view_tasks_subpath}",
+                                            placeholder: "docs/memo/tasks",
+                                            style: "width: 200px; box-sizing: border-box; -webkit-appearance: none; \
+                                                    padding: 6px 10px; border: 1px solid {btn_border}; \
+                                                    border-radius: 6px; background: transparent; \
+                                                    color: {text_color}; font: 13px -apple-system, sans-serif; outline: none;",
+                                            oninput: move |e| task_view_tasks_subpath.set(e.value()),
+                                        }
+                                    }
+                                    div {
+                                        style: "{row} border-bottom: 1px solid {row_border};",
+                                        div {
+                                            div { style: row_title, "All Projects スキャンルート" }
+                                            div { style: "{row_desc}", "プロジェクトを探す親ディレクトリ（空なら現プロジェクトのみ）" }
+                                        }
+                                        div {
+                                            style: "display: flex; flex-direction: column; gap: 6px; max-width: 300px;",
+                                            for (i, root_path) in task_view_scan_roots().iter().enumerate() {
+                                                {
+                                                    let display = root_path.display().to_string();
+                                                    let remove_idx = i;
+                                                    rsx! {
+                                                        div {
+                                                            key: "{display}",
+                                                            style: "display: flex; align-items: center; gap: 6px;",
+                                                            span {
+                                                                style: "font: 11px ui-monospace, monospace; color: {muted}; \
+                                                                        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; \
+                                                                        flex: 1 1 auto; direction: rtl;",
+                                                                title: "{display}",
+                                                                "{display}"
+                                                            }
+                                                            button {
+                                                                style: "background: transparent; border: none; color: {muted}; \
+                                                                        cursor: pointer; font-size: 14px; flex: 0 0 auto; padding: 0 4px;",
+                                                                title: "削除",
+                                                                onclick: move |_| {
+                                                                    let mut roots = task_view_scan_roots.write();
+                                                                    if remove_idx < roots.len() {
+                                                                        roots.remove(remove_idx);
+                                                                    }
+                                                                },
+                                                                "✕"
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            button {
+                                                style: "{reset_btn}",
+                                                onclick: move |_| {
+                                                    spawn(async move {
+                                                        if let Some(h) = rfd::AsyncFileDialog::new().pick_folder().await {
+                                                            task_view_scan_roots.write().push(h.path().to_path_buf());
+                                                        }
+                                                    });
+                                                },
+                                                "+ ディレクトリを追加"
+                                            }
+                                        }
+                                    }
+                                    div {
+                                        style: "{row}",
+                                        div {
+                                            div { style: row_title, "All Projects 表示日数" }
+                                            div { style: "{row_desc}", "直近 N 日に作成したタスクを表示（既定: 7）" }
+                                        }
+                                        div {
+                                            style: "display: flex; gap: 8px; align-items: center;",
+                                            button {
+                                                style: "{step_btn}",
+                                                onclick: move |_| task_view_days.set(task_view_days().saturating_sub(1).max(1)),
+                                                "−"
+                                            }
+                                            span {
+                                                style: "min-width: 44px; text-align: center; \
+                                                        font: 14px -apple-system, sans-serif; \
+                                                        font-variant-numeric: tabular-nums;",
+                                                "{task_view_days()} 日"
+                                            }
+                                            button {
+                                                style: "{step_btn}",
+                                                onclick: move |_| task_view_days.set(task_view_days().saturating_add(1).min(365)),
+                                                "+"
+                                            }
+                                            button {
+                                                style: "{reset_btn}",
+                                                onclick: move |_| task_view_days.set(7),
+                                                "リセット"
+                                            }
                                         }
                                     }
                                 }
@@ -536,9 +659,11 @@ fn action_label(action: &str) -> &'static str {
         "toggle_sidebar" => "サイドバー開閉",
         "toggle_split" => "左右分割",
         "toggle_fav" => "お気に入り切替",
+        "open_task_view" => "Task View",
         "copy_path" => "パスをコピー",
         "close_tab" => "タブを閉じる",
         "settings" => "設定",
+        "toggle_sync_pin" => "Sync モード切替",
         other => Box::leak(other.to_string().into_boxed_str()),
     }
 }

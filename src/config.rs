@@ -64,6 +64,7 @@ pub fn default_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("toggle_sidebar", "KeyB", true, false, false),
         KeyBinding::new("toggle_split", "Backslash", true, false, false),
         KeyBinding::new("toggle_fav", "KeyD", true, false, false),
+        KeyBinding::new("open_task_view", "KeyD", true, true, false),
         KeyBinding::new("copy_path", "KeyC", true, true, false),
         KeyBinding::new("close_tab", "KeyW", true, false, false),
         KeyBinding::new("settings", "Comma", true, false, false),
@@ -142,6 +143,19 @@ pub struct Config {
     /// the static `line-height: 1.7` in mdo.css.
     #[serde(default = "default_line_height")]
     pub line_height: f32,
+    /// Enable the Task View mode (Cmd+Shift+D). Toggle in the Features tab.
+    #[serde(default = "default_true")]
+    pub feature_task_view: bool,
+    /// Relative subpath within a project root where task folders live.
+    #[serde(default = "default_task_view_tasks_subpath")]
+    pub task_view_tasks_subpath: String,
+    /// Root directories whose direct children are candidate projects for
+    /// the "All Projects" scan. Empty = show current project only.
+    #[serde(default)]
+    pub task_view_scan_roots: Vec<PathBuf>,
+    /// Number of days used in the "All Projects" date filter.
+    #[serde(default = "default_task_view_days")]
+    pub task_view_days: u32,
 }
 
 fn default_zoom() -> f32 {
@@ -161,6 +175,12 @@ fn default_code_font_size() -> i32 {
 }
 fn default_line_height() -> f32 {
     1.7
+}
+fn default_task_view_tasks_subpath() -> String {
+    "docs/memo/tasks".to_string()
+}
+fn default_task_view_days() -> u32 {
+    7
 }
 
 impl Default for Config {
@@ -186,6 +206,10 @@ impl Default for Config {
             feature_pdf_export: true,
             open_latest_on_project_open: false,
             line_height: default_line_height(),
+            feature_task_view: true,
+            task_view_tasks_subpath: default_task_view_tasks_subpath(),
+            task_view_scan_roots: Vec::new(),
+            task_view_days: default_task_view_days(),
         }
     }
 }
