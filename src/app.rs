@@ -1510,10 +1510,15 @@ pub(crate) fn App() -> Element {
                     AppCommand::Escape => {
                         // Close the topmost open overlay, if any. Order mirrors
                         // visual stacking (modals over the inline find bar).
+                        // proj_menu comes before task_view: the menu can sit on
+                        // top of the Task View overlay, and Esc must peel one
+                        // layer at a time (menu first, Task View on the next).
                         if settings_open() {
                             settings_open.set(false);
                         } else if palette_open() {
                             palette_open.set(false);
+                        } else if proj_menu_open() {
+                            proj_menu_open.set(false);
                         } else if task_view_open() {
                             task_view_open.set(false);
                         } else if search_open() {

@@ -84,11 +84,12 @@ pub(crate) fn ProjectMenu(
                     query.set(e.value());
                     sel.set(0);
                 },
+                // Escape is intentionally NOT handled here: the window-level
+                // keyboard bridge receives the same native keydown regardless
+                // (Dioxus stop_propagation cannot stop it), so handling it in
+                // both places closed two overlay layers per keypress. The
+                // global Escape chain in app.rs closes this menu first.
                 onkeydown: move |e| match e.key() {
-                    Key::Escape => {
-                        e.prevent_default();
-                        open.set(false);
-                    }
                     Key::ArrowDown => {
                         e.prevent_default();
                         sel.set((cur + 1) % total);
