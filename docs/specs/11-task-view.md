@@ -112,7 +112,7 @@ Task View 固有の `TaskCtxMenu` overlay（`task_view.rs` 内）。メインの
 
 ## v1 スコープ / 割り切り
 
-- リアルタイム更新（watcher 連動）は入れない。Task View を開いた時点で走査。
+- リアルタイム更新は **This Project のみ watcher 連動**（既存の現プロジェクト監視 `tree_refresh` に相乗り。ファイル変更で自動再スキャン）。All Projects は監視しない（他リポへの watcher 大量設置を避ける。↻ か開き直しで更新）。
 - タスクの status 編集・並べ替え等の書き込み操作はしない（読み取り専用ビューア）。
 - カンバン/ダッシュボード表示は入れない（B案ツリーのみ）。将来 feature 拡張余地として残す。
 - `task_view_scan_roots` が空のときの All Projects は現プロジェクトのみ（設定誘導ヒントを出す）。

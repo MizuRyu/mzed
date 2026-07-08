@@ -2102,6 +2102,7 @@ pub(crate) fn App() -> Element {
                 if task_view_open() && feature_task_view() {
                     TaskView {
                         roots,
+                        fs_tick: tree_refresh,
                         scan_roots: task_view_scan_roots,
                         scan_exclude: task_view_scan_exclude,
                         subpath: task_view_tasks_subpath,

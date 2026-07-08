@@ -29,6 +29,9 @@ struct TaskCtxMenu {
 #[component]
 pub(crate) fn TaskView(
     roots: Signal<Vec<PathBuf>>,
+    /// Bumped by the app's file watcher on any change under the current
+    /// roots. Subscribed only in This Project scope for live rescans.
+    fs_tick: Signal<u32>,
     scan_roots: Signal<Vec<PathBuf>>,
     scan_exclude: Signal<Vec<String>>,
     subpath: Signal<String>,
@@ -77,6 +80,13 @@ pub(crate) fn TaskView(
         let current_subpath = subpath();
         let n_days = selected_days();
         let _ = refresh_token();
+        // Live rescan on file changes, This Project only: the watcher covers
+        // the current roots, and dioxus tracks reads dynamically, so this
+        // subscription simply doesn't exist while in All Projects scope
+        // (avoiding a full multi-repo re-walk on every local file save).
+        if current_scope == Scope::ThisProject {
+            let _ = fs_tick();
+        }
 
         let gen_id = {
             let mut g = scan_gen.write();
