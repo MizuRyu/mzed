@@ -3,6 +3,7 @@ repos:
     rev: v8.30.0
     hooks:
       - id: gitleaks
+        stages: [pre-commit]
   - repo: local
     hooks:
       - id: cargo-fmt
@@ -11,3 +12,11 @@ repos:
         language: system
         types: [rust]
         pass_filenames: false
+        stages: [pre-commit]
+      - id: push-gate
+        name: push gate (gitleaks history + personal info + verify)
+        entry: scripts/check-push.sh
+        language: script
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

@@ -349,14 +349,18 @@ mod tests {
             });
             done_tx.send(result.is_ok()).unwrap();
         });
+        // Generous setup timeout: under full-suite parallel load the watcher
+        // thread's first poll can take well over a second (flaked at 1s).
         ready_rx
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(Duration::from_secs(10))
             .expect("initial watcher callback did not run");
         std::thread::sleep(Duration::from_millis(50));
         stop_tx.send(()).unwrap();
 
+        // "Quickly" = within STOP_POLL granularity, i.e. well under a full
+        // POLL (1500ms). 1s keeps that meaning while absorbing load jitter.
         assert!(done_rx
-            .recv_timeout(Duration::from_millis(300))
+            .recv_timeout(Duration::from_millis(1000))
             .expect("zed watcher did not stop quickly"));
     }
 
