@@ -30,6 +30,8 @@ pub enum AppCommand {
     ToggleSyncPin,
     /// Toggle the Task View mode (Cmd+Shift+D). No-op when feature_task_view is off.
     OpenTaskView,
+    /// Re-scan the Task View task list (Cmd+R). No-op unless Task View is open.
+    TaskViewRefresh,
     Escape,
 }
 

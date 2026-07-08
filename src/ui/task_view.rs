@@ -32,6 +32,8 @@ pub(crate) fn TaskView(
     /// Bumped by the app's file watcher on any change under the current
     /// roots. Subscribed only in This Project scope for live rescans.
     fs_tick: Signal<u32>,
+    /// Bumped by the app (Cmd+R) or the ↻ header button to force a re-scan.
+    mut refresh_token: Signal<u32>,
     scan_roots: Signal<Vec<PathBuf>>,
     scan_exclude: Signal<Vec<String>>,
     subpath: Signal<String>,
@@ -63,8 +65,8 @@ pub(crate) fn TaskView(
     let mut doc_gen = use_signal(|| 0u32);
     let mut expanded: Signal<HashSet<PathBuf>> = use_signal(HashSet::new);
     let mut scan_gen = use_signal(|| 0u32);
-    // Incrementing this triggers a forced re-scan.
-    let mut refresh_token = use_signal(|| 0u32);
+    // Left pane width (px), adjustable via the drag divider. Session-local.
+    let mut pane_width = use_signal(|| 300u32);
     // Task View local context menu (independent of the sidebar CtxMenu).
     let mut ctx_menu: Signal<Option<TaskCtxMenu>> = use_signal(|| None);
 
@@ -188,7 +190,7 @@ pub(crate) fn TaskView(
 
             // ── Left pane ─────────────────────────────────────────────────
             div {
-                style: "width: 300px; flex: 0 0 auto; display: flex; flex-direction: column; \
+                style: "width: {pane_width}px; flex: 0 0 auto; display: flex; flex-direction: column; \
                         border-right: 1px solid {panel_border}; background: {panel_bg};",
 
                 // Header
@@ -609,6 +611,25 @@ pub(crate) fn TaskView(
                         }
                     }
                 }
+            }
+
+            // Drag divider: same document-level drag bridge as the sidebar's
+            // (streams cursor X to Rust, clamped here).
+            div {
+                style: "flex: 0 0 auto; width: 5px; cursor: col-resize; background: transparent; align-self: stretch;",
+                class: "mdo-sidebar-divider",
+                onmousedown: move |e| {
+                    e.prevent_default();
+                    spawn(async move {
+                        let mut eval = document::eval(js::sidebar_resize_js());
+                        while let Ok(msg) = eval.recv::<serde_json::Value>().await {
+                            if let Some(x) = msg.get("x").and_then(|v| v.as_f64()) {
+                                let w = (x.round() as i64).clamp(200, 600) as u32;
+                                pane_width.set(w);
+                            }
+                        }
+                    });
+                },
             }
 
             // ── Right pane ────────────────────────────────────────────────

@@ -65,6 +65,7 @@ pub fn default_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("toggle_split", "Backslash", true, false, false),
         KeyBinding::new("toggle_fav", "KeyD", true, false, false),
         KeyBinding::new("open_task_view", "KeyD", true, true, false),
+        KeyBinding::new("task_view_refresh", "KeyR", true, false, false),
         KeyBinding::new("copy_path", "KeyC", true, true, false),
         KeyBinding::new("close_tab", "KeyW", true, false, false),
         KeyBinding::new("settings", "Comma", true, false, false),

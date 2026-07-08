@@ -153,6 +153,7 @@ mzed [PATH...] [--sync <auto|self|off>]
 | `toggle_split` | Cmd+\\ | 分割ペイン切替 |
 | `toggle_fav` | Cmd+D | お気に入り登録/解除 |
 | `open_task_view` | Cmd+Shift+D | Task View モードをトグル（`feature_task_view` が ON のとき有効） |
+| `task_view_refresh` | Cmd+R | Task View のタスク一覧を再スキャン（Task View 表示中のみ） |
 | `copy_path` | Cmd+Shift+C | ファイルパスをコピー |
 | `close_tab` | Cmd+W | タブを閉じる |
 | `settings` | Cmd+, | 設定画面を開く |

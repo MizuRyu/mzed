@@ -639,6 +639,8 @@ pub(crate) fn App() -> Element {
     let task_view_scan_exclude = use_signal(|| saved_config.task_view_scan_exclude.clone());
     let task_view_days = use_signal(|| saved_config.task_view_days);
     let mut task_view_open = use_signal(|| false);
+    // Bumped to force a Task View re-scan (Cmd+R and the ↻ header button).
+    let mut task_view_refresh_token = use_signal(|| 0u32);
     // Transient top-right toast (e.g. "Copied!"). Auto-hides after ~1.5s; a
     // generation counter ensures only the latest toast clears itself.
     let mut toast = use_signal(|| None::<String>);
@@ -1493,6 +1495,11 @@ pub(crate) fn App() -> Element {
                             task_view_open.set(!task_view_open());
                         }
                     }
+                    AppCommand::TaskViewRefresh => {
+                        if task_view_open() {
+                            task_view_refresh_token += 1;
+                        }
+                    }
                     AppCommand::ToggleSyncPin => {
                         let new_mode = match sync_mode() {
                             theme::SyncMode::Auto => theme::SyncMode::SelfPinned,
@@ -2103,6 +2110,7 @@ pub(crate) fn App() -> Element {
                     TaskView {
                         roots,
                         fs_tick: tree_refresh,
+                        refresh_token: task_view_refresh_token,
                         scan_roots: task_view_scan_roots,
                         scan_exclude: task_view_scan_exclude,
                         subpath: task_view_tasks_subpath,

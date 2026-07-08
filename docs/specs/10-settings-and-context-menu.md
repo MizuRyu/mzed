@@ -72,6 +72,7 @@ UI 補足:
 | 左右分割 | Cmd+\ |
 | Toggle Sync Pin（auto⇄self） | Cmd+Shift+L |
 | Task View トグル | Cmd+Shift+D |
+| Task View 再スキャン | Cmd+R |
 | ズーム | Cmd+= / Cmd+- / Cmd+0 |
 
 ## 右クリックメニュー（サイドバーのファイル行）
