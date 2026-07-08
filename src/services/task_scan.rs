@@ -304,13 +304,37 @@ pub fn scan_project_tasks(project_path: &Path, subpath: &str) -> Vec<TaskItem> {
 const MAX_WALK_DEPTH: usize = 10;
 
 /// Returns true for directory names that should never be entered during the
-/// project-discovery walk. Keeps the scan cost bounded even under `~`.
+/// project-discovery walk. Keeps the scan cost bounded even under `~`, and —
+/// just as important on macOS — keeps the walk out of TCC-protected folders
+/// (Desktop/Documents/Downloads/…) and cloud-drive roots: touching those
+/// triggers "mzed would like to access…" permission prompts, and because the
+/// app is ad-hoc signed the grants reset on every rebuild. Repos living in
+/// one of these folders can still be scanned by adding that folder as an
+/// explicit scan root.
 pub(crate) fn is_walk_pruned(name: &str, extra_exclude: &[String]) -> bool {
     name.starts_with('.')
         || matches!(
             name,
-            "node_modules" | "target" | "dist" | "build" | "Library"
+            "node_modules"
+                | "target"
+                | "dist"
+                | "build"
+                | "Library"
+                // macOS TCC-protected home folders.
+                | "Desktop"
+                | "Documents"
+                | "Downloads"
+                | "Pictures"
+                | "Movies"
+                | "Music"
+                | "Public"
+                | "Applications"
+                // Cloud-drive roots (also TCC-gated, and huge).
+                | "Dropbox"
+                | "Google Drive"
         )
+        // OneDrive mounts as "OneDrive" or "OneDrive - <Org>".
+        || name.starts_with("OneDrive")
         || extra_exclude.iter().any(|e| e == name)
 }
 
@@ -604,10 +628,24 @@ outputs:
             "Library",
             ".hidden",
             ".DS_Store",
+            // TCC-protected / cloud folders: entering them fires macOS
+            // permission prompts on every rebuild (ad-hoc signature).
+            "Desktop",
+            "Documents",
+            "Downloads",
+            "Pictures",
+            "Movies",
+            "Music",
+            "Public",
+            "Applications",
+            "Dropbox",
+            "Google Drive",
+            "OneDrive",
+            "OneDrive - SomeOrg",
         ] {
             assert!(is_walk_pruned(name, &[]), "{name} should be pruned");
         }
-        for name in &["src", "docs", "memo", "tasks", "proj"] {
+        for name in &["src", "docs", "memo", "tasks", "proj", "dev", "repos"] {
             assert!(!is_walk_pruned(name, &[]), "{name} should not be pruned");
         }
     }

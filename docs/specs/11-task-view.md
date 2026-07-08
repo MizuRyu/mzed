@@ -74,7 +74,7 @@
   2. `<dir>/.git` が存在すれば**リポルート**とみなし、それ以上**子へ潜らない**（1 で直接確認済み）。
   3. どちらでもなければ、枝刈りしつつ子ディレクトリへ再帰。
   これで `~/go` や各リポ内部の巨大ツリーに一切入らず、辿るのは「リポより上の浅い足場」だけになる。
-- **枝刈り（必須）**: 次の名前のディレクトリには入らない — `node_modules` / `target` / `dist` / `build` / `.git` / `Library` / 先頭が `.` の隠しディレクトリ。深さ上限を設ける（例: 10）。
+- **枝刈り（必須）**: 次の名前のディレクトリには入らない — `node_modules` / `target` / `dist` / `build` / `.git` / `Library` / 先頭が `.` の隠しディレクトリ、および **macOS の TCC 保護・クラウドフォルダ**（`Desktop` / `Documents` / `Downloads` / `Pictures` / `Movies` / `Music` / `Public` / `Applications` / `Dropbox` / `Google Drive` / `OneDrive*`）。保護フォルダに触れるとアクセス許可ダイアログが出る（ad-hoc 署名のため再ビルドごとにリセットされる）ので、走査自体が触れないことが重要。そこにリポを置いている場合は該当フォルダを scan_roots に明示追加する。深さ上限を設ける（例: 10）。加えて config の `task_view_scan_exclude` でユーザー定義の除外名を追加できる。
 - **タスク列挙**: 発見した `<subpath>` を `readdir` し、各エントリ配下の `task.md` を確認。
 - **セッションキャッシュ**: 走査結果はアプリ内にキャッシュし、Task View を開くたび・スコープ/日数を変えるたびに**丸ごと再 walk しない**。キャッシュキーは (scope, scan_roots, subpath, days)。ヘッダに手動「↻ 更新」を置き、明示時のみ再走査。初回だけコストを払う。
 - **frontmatter だけ読む**: 各 `task.md` は先頭の frontmatter（最初の `---` 〜 次の `---`）だけ読み、`status`/`created`/`outputs` を抽出。本文は読まない（詳細ペインを開いたときに初めて全体を読む）。既存 `src/markdown/frontmatter.rs` を参考に最小パーサを用意。
