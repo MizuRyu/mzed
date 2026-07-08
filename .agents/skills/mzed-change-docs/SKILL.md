@@ -53,7 +53,7 @@ description: >
 
 ### 3. mzed-setup スキル（config / キーバインドを変えたら）
 
-`.claude/skills/mzed-setup/SKILL.md` を更新:
+`.agents/skills/mzed-setup/SKILL.md` を更新:
 
 - config フィールド追加 → 「config.json フィールド一覧」表に行を追加
   （フィールド名 / 型 / デフォルト / 意味）
@@ -65,7 +65,7 @@ description: >
 同期漏れの機械チェック（新しい config フィールド名・キーバインドアクション名で）:
 
 ```sh
-rg -l "<新フィールド名>" src/config.rs docs/specs/10-settings-and-context-menu.md .claude/skills/mzed-setup/SKILL.md
+rg -l "<新フィールド名>" src/config.rs docs/specs/10-settings-and-context-menu.md .agents/skills/mzed-setup/SKILL.md
 # → 3ファイルすべてに現れること
 ```
 

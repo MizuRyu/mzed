@@ -10,9 +10,9 @@ mzed — Zed 連動 Markdown ビューア（Rust + Dioxus 0.7、macOS desktop）
   - mzed 固有設計（レンダリング責務、Zed 連動、security）: `docs/review/mzed-engineering-guide.md`
   - 性能方針: `docs/review/performance-guide.md`
 - 手動回帰テスト: `docs/specs/manual-test-cases.md`（TC-ID 付き）
-- インストール・設定・キーバインドの操作手順: `.claude/skills/mzed-setup/SKILL.md`
-- リリース手順: `.claude/skills/mzed-release/SKILL.md`（タグ=Release=dmg ワンセット、手書きノート）
-- 変更後の docs 同期: `.claude/skills/mzed-change-docs/SKILL.md`（specs / TC / setup スキルの3点）
+- インストール・設定・キーバインドの操作手順: `.agents/skills/mzed-setup/SKILL.md`
+- リリース手順: `.agents/skills/mzed-release/SKILL.md`（タグ=Release=dmg ワンセット、手書きノート）
+- 変更後の docs 同期: `.agents/skills/mzed-change-docs/SKILL.md`（specs / TC / setup スキルの3点）
 
 ## コマンド
 
