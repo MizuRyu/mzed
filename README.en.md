@@ -17,6 +17,7 @@ A Markdown viewer that follows Zed. It detects the project currently focused in 
 - **Rich rendering** — GitHub styling, syntax highlighting, Mermaid, KaTeX, GitHub Alerts, frontmatter, image lightbox
 - **Live reload** — re-renders on file save
 - **Comfortable navigation** — sidebar, multi-tab, split pane, table of contents, command palette, fuzzy finder, full-text search
+- **Task View (`Cmd+Shift+D`)** — a dedicated view that lists `docs/memo/tasks/` task folders by status and opens each task.md instantly, across multiple projects
 - **Export** — self-contained HTML / PDF
 - **CLI** — `mzed file.md` forwards to the single running instance; drag & drop and session restore included
 
@@ -67,6 +68,7 @@ Three sync modes:
 | `Cmd+P` | Fuzzy file finder |
 | `Cmd+F` | In-document search |
 | `Cmd+O` | Switch project |
+| `Cmd+Shift+D` | Toggle Task View |
 | `Cmd+\` | Split pane |
 | `Cmd+= / Cmd+-` / `Cmd+0` | Zoom in / out / reset |
 

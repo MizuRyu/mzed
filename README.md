@@ -17,6 +17,7 @@ English version: [README.en.md](README.en.md)
 - **リッチなレンダリング** — GitHub スタイル、シンタックスハイライト、Mermaid、KaTeX、GitHub Alerts、frontmatter、画像 lightbox
 - **ライブリロード** — ファイル保存を検知して即再描画
 - **快適なナビゲーション** — サイドバー、マルチタブ、左右分割、目次、コマンドパレット、ファジー検索、全文検索
+- **Task View（`Cmd+Shift+D`）** — `docs/memo/tasks/` のタスクフォルダを status 別に一覧し、task.md を即読みする専用ビュー。複数プロジェクト横断にも対応
 - **エクスポート** — self-contained な HTML / PDF
 - **CLI** — `mzed file.md` で単一インスタンスに転送。ドラッグ&ドロップ、セッション復元も対応
 
@@ -67,6 +68,7 @@ mzed --sync self   # 連動モード指定
 | `Cmd+P` | ファイルのファジー検索 |
 | `Cmd+F` | ドキュメント内検索 |
 | `Cmd+O` | プロジェクト切替 |
+| `Cmd+Shift+D` | Task View（タスク一覧）のトグル |
 | `Cmd+\` | 左右分割 |
 | `Cmd+= / Cmd+-` / `Cmd+0` | ズームイン / アウト / リセット |
 
