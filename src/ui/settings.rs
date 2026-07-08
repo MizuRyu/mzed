@@ -39,6 +39,7 @@ pub(crate) fn Settings(
     mut feature_task_view: Signal<bool>,
     mut task_view_tasks_subpath: Signal<String>,
     mut task_view_scan_roots: Signal<Vec<PathBuf>>,
+    mut task_view_scan_exclude: Signal<Vec<String>>,
     mut task_view_days: Signal<u32>,
     dark: bool,
 ) -> Element {
@@ -400,6 +401,53 @@ pub(crate) fn Settings(
                                                     });
                                                 },
                                                 "+ ディレクトリを追加"
+                                            }
+                                        }
+                                    }
+                                    // Scan exclude list
+                                    div {
+                                        style: "{row} border-bottom: 1px solid {row_border};",
+                                        div {
+                                            div { style: row_title, "スキャン除外ディレクトリ名" }
+                                            div { style: "{row_desc}", "ビルトイン（node_modules, target 等）に加え、スキャンをスキップするディレクトリ名" }
+                                        }
+                                        div {
+                                            style: "display: flex; flex-direction: column; gap: 4px; align-items: flex-end;",
+                                            for (i, name) in task_view_scan_exclude().iter().enumerate() {
+                                                div {
+                                                    key: "excl-{i}",
+                                                    style: "display: flex; gap: 6px; align-items: center;",
+                                                    span { style: "font: 13px -apple-system, sans-serif; color: {text_color};", "{name}" }
+                                                    button {
+                                                        style: "{reset_btn} padding: 2px 8px; font-size: 11px;",
+                                                        onclick: move |_| { task_view_scan_exclude.write().remove(i); },
+                                                        "✕"
+                                                    }
+                                                }
+                                            }
+                                            {
+                                                let mut excl_input = use_signal(String::new);
+                                                rsx! {
+                                                    div {
+                                                        style: "display: flex; gap: 4px; align-items: center;",
+                                                        input {
+                                                            r#type: "text",
+                                                            value: "{excl_input}",
+                                                            placeholder: "ディレクトリ名",
+                                                            style: "padding: 4px 8px; border: 1px solid {btn_border}; border-radius: 6px; background: {overlay_bg}; color: {text_color}; font: 12px -apple-system, sans-serif; width: 140px;",
+                                                            oninput: move |e| excl_input.set(e.value()),
+                                                            onkeydown: move |e| {
+                                                                if e.key() == Key::Enter {
+                                                                    let v = excl_input().trim().to_string();
+                                                                    if !v.is_empty() && !task_view_scan_exclude().contains(&v) {
+                                                                        task_view_scan_exclude.write().push(v);
+                                                                        excl_input.set(String::new());
+                                                                    }
+                                                                }
+                                                            },
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                     }

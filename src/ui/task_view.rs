@@ -1,6 +1,6 @@
 use super::*;
 use crate::services::task_scan::{self, TaskItem};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Scope {
@@ -8,20 +8,18 @@ enum Scope {
     AllProjects,
 }
 
-/// Cache key for session-scoped scan results.
-///
-/// When the key matches an existing cache entry the walk is skipped entirely.
-/// The user can force a re-scan via the ↻ button in the header.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct ScanCacheKey {
-    scope: Scope,
-    scan_roots: Vec<PathBuf>,
-    subpath: String,
-    days: u32,
+/// Context-menu state for a Task View row.
+#[derive(Clone, PartialEq)]
+struct TaskCtxMenu {
+    x: i32,
+    y: i32,
+    /// The absolute path of the row (file or directory).
+    path: PathBuf,
+    /// `true` for project-root and task-folder rows (directories), `false` for files.
+    is_dir: bool,
+    /// `false` for project-root rows — favorites apply only to task folders and files.
+    show_fav: bool,
 }
-
-/// Session-scoped scan cache: maps a [`ScanCacheKey`] to grouped task results.
-type ScanCache = HashMap<ScanCacheKey, Vec<(String, PathBuf, Vec<TaskItem>)>>;
 
 /// Full-screen Task View mode (Cmd+Shift+D).
 ///
@@ -32,9 +30,17 @@ type ScanCache = HashMap<ScanCacheKey, Vec<(String, PathBuf, Vec<TaskItem>)>>;
 pub(crate) fn TaskView(
     roots: Signal<Vec<PathBuf>>,
     scan_roots: Signal<Vec<PathBuf>>,
+    scan_exclude: Signal<Vec<String>>,
     subpath: Signal<String>,
     default_days: Signal<u32>,
+    /// Current project name (directory basename) shown in the header.
+    proj_name: String,
     dark: bool,
+    favorites: Signal<Vec<PathBuf>>,
+    on_toggle_fav: EventHandler<PathBuf>,
+    on_copy_path: EventHandler<PathBuf>,
+    on_toast: EventHandler<String>,
+    on_open_project_menu: EventHandler<()>,
 ) -> Element {
     let panel_bg = if dark { "#161b22" } else { "#f6f8fa" };
     let panel_border = if dark { "#30363d" } else { "#d0d7de" };
@@ -54,35 +60,23 @@ pub(crate) fn TaskView(
     let mut doc_gen = use_signal(|| 0u32);
     let mut expanded: Signal<HashSet<PathBuf>> = use_signal(HashSet::new);
     let mut scan_gen = use_signal(|| 0u32);
-    // Session-scoped cache: keyed by (scope, scan_roots, subpath, days).
-    let mut scan_cache: Signal<ScanCache> = use_signal(HashMap::new);
-    // Incrementing this triggers a forced re-scan (cache bypassed).
+    // Incrementing this triggers a forced re-scan.
     let mut refresh_token = use_signal(|| 0u32);
+    // Task View local context menu (independent of the sidebar CtxMenu).
+    let mut ctx_menu: Signal<Option<TaskCtxMenu>> = use_signal(|| None);
 
     // ── Scan effect ────────────────────────────────────────────────────────
-    // Triggers on: scope, selected_days, roots, scan_roots, subpath, refresh_token changes.
+    // Runs every time scope/days/roots/scan_roots/subpath/refresh_token change.
+    // No cache — always re-scans. Walk is cheap (repo-boundary-pruned) and runs
+    // in spawn_blocking so the UI never blocks.
     use_effect(move || {
         let current_scope = scope();
         let current_roots = roots();
         let current_scan_roots = scan_roots();
+        let current_exclude = scan_exclude();
         let current_subpath = subpath();
         let n_days = selected_days();
-        let _ = refresh_token(); // subscribe for manual refresh
-
-        let cache_key = ScanCacheKey {
-            scope: current_scope,
-            scan_roots: current_scan_roots.clone(),
-            subpath: current_subpath.clone(),
-            days: n_days,
-        };
-
-        // Cache hit: serve immediately without re-scanning.
-        // Use peek() to avoid subscribing — writing to the cache must not re-trigger this effect.
-        if let Some(cached) = scan_cache.peek().get(&cache_key).cloned() {
-            loading.set(false);
-            groups.set(cached);
-            return;
-        }
+        let _ = refresh_token();
 
         let gen_id = {
             let mut g = scan_gen.write();
@@ -90,7 +84,6 @@ pub(crate) fn TaskView(
             *g
         };
         loading.set(true);
-        groups.set(Vec::new());
 
         spawn(async move {
             let result = tokio::task::spawn_blocking(move || match current_scope {
@@ -103,6 +96,7 @@ pub(crate) fn TaskView(
                         &current_roots,
                         &current_subpath,
                         Some(n_days),
+                        &current_exclude,
                     ))
                 }
             })
@@ -113,7 +107,6 @@ pub(crate) fn TaskView(
             }
             loading.set(false);
             if let Ok(g) = result {
-                scan_cache.write().insert(cache_key, g.clone());
                 groups.set(g);
             }
         });
@@ -169,6 +162,15 @@ pub(crate) fn TaskView(
         )
     };
 
+    // Shared context-menu item styles.
+    let menu_bg = if dark { "#1c2128" } else { "#ffffff" };
+    let menu_border = if dark { "#30363d" } else { "#d0d7de" };
+    let item_fg = if dark { "#e6edf3" } else { "#1f2328" };
+    let item_style = "display: block; width: 100%; text-align: left; padding: 6px 12px; \
+                      border: none; background: transparent; color: inherit; cursor: pointer; \
+                      border-radius: 5px; font: 13px -apple-system, sans-serif;";
+    let sep_style = format!("height: 1px; margin: 4px 6px; background: {menu_border};");
+
     rsx! {
         // Full-screen 2-pane layout (sits below the 37px top bar).
         div {
@@ -196,14 +198,6 @@ pub(crate) fn TaskView(
                             style: "background: none; border: none; cursor: pointer; \
                                     color: {muted}; font-size: 13px; padding: 0 2px; line-height: 1;",
                             onclick: move |_| {
-                                // Evict the current key from cache, then trigger re-scan.
-                                let key = ScanCacheKey {
-                                    scope: scope(),
-                                    scan_roots: scan_roots(),
-                                    subpath: subpath(),
-                                    days: selected_days(),
-                                };
-                                scan_cache.write().remove(&key);
                                 *refresh_token.write() += 1;
                             },
                             "↻"
@@ -274,14 +268,46 @@ pub(crate) fn TaskView(
                             // Project root node (variant-2: bold name + muted full path)
                             {
                                 let proj_display = proj_path.display().to_string();
+                                let ctx_path = proj_path.clone();
+                                let copy_path = proj_path.clone();
                                 rsx! {
                                     div {
                                         style: "padding: 8px 12px 4px; user-select: none;",
+                                        class: "mdo-tree-row",
+                                        oncontextmenu: move |e| {
+                                            e.prevent_default();
+                                            let c = e.client_coordinates();
+                                            ctx_menu.set(Some(TaskCtxMenu {
+                                                x: c.x as i32,
+                                                y: c.y as i32,
+                                                path: ctx_path.clone(),
+                                                is_dir: true,
+                                                show_fav: false,
+                                            }));
+                                        },
+                                        // First line: project name + hover copy button
                                         div {
-                                            style: "font: 600 13px -apple-system, sans-serif; \
-                                                    color: {fg}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
-                                            "{proj_name}"
+                                            style: "display: flex; align-items: center; gap: 4px;",
+                                            span {
+                                                style: "font: 600 13px -apple-system, sans-serif; \
+                                                        color: {fg}; overflow: hidden; text-overflow: ellipsis; \
+                                                        white-space: nowrap; flex: 1 1 auto;",
+                                                "{proj_name}"
+                                            }
+                                            button {
+                                                class: "mdo-copy-path",
+                                                style: "background: transparent; border: none; cursor: pointer; \
+                                                        flex: 0 0 auto; padding: 0 2px; display: flex; \
+                                                        align-items: center; color: {muted};",
+                                                title: "パスをコピー",
+                                                onclick: move |e| {
+                                                    e.stop_propagation();
+                                                    on_copy_path.call(copy_path.clone());
+                                                },
+                                                {copy_icon()}
+                                            }
                                         }
+                                        // Second line: muted absolute path
                                         div {
                                             style: "font: 11px ui-monospace, monospace; color: {muted}; \
                                                     overflow: hidden; text-overflow: ellipsis; \
@@ -315,6 +341,12 @@ pub(crate) fn TaskView(
                                             let open_proj = project_path.clone();
                                             let chevron = if is_open { "▾" } else { "▸" };
 
+                                            let ctx_folder_path = folder_path.clone();
+                                            let copy_folder_path = folder_path.clone();
+                                            let fav_folder_path = folder_path.clone();
+                                            let is_fav_folder = favorites.read().iter().any(|p| p == &folder_path);
+                                            let star_folder_color = if is_fav_folder { "#e3b341" } else { muted };
+
                                             rsx! {
                                                 // Task folder row
                                                 div {
@@ -334,6 +366,17 @@ pub(crate) fn TaskView(
                                                         }
                                                         selected.set(Some((open_md.clone(), open_proj.clone())));
                                                     },
+                                                    oncontextmenu: move |e| {
+                                                        e.prevent_default();
+                                                        let c = e.client_coordinates();
+                                                        ctx_menu.set(Some(TaskCtxMenu {
+                                                            x: c.x as i32,
+                                                            y: c.y as i32,
+                                                            path: ctx_folder_path.clone(),
+                                                            is_dir: true,
+                                                            show_fav: true,
+                                                        }));
+                                                    },
                                                     // Chevron
                                                     span {
                                                         style: "color: {muted}; font-size: 10px; flex: 0 0 auto; width: 10px;",
@@ -351,6 +394,37 @@ pub(crate) fn TaskView(
                                                                 white-space: nowrap; flex: 1 1 auto;",
                                                         "{folder_name}"
                                                     }
+                                                    // Hover copy button
+                                                    button {
+                                                        class: "mdo-copy-path",
+                                                        style: "background: transparent; border: none; cursor: pointer; \
+                                                                flex: 0 0 auto; padding: 0 2px; display: flex; \
+                                                                align-items: center; color: {muted};",
+                                                        title: "パスをコピー",
+                                                        onclick: move |e| {
+                                                            e.stop_propagation();
+                                                            on_copy_path.call(copy_folder_path.clone());
+                                                        },
+                                                        {copy_icon()}
+                                                    }
+                                                    // Hover star button (task folders only)
+                                                    button {
+                                                        class: if is_fav_folder { "mdo-fav-star on" } else { "mdo-fav-star" },
+                                                        style: "background: transparent; border: none; cursor: pointer; \
+                                                                flex: 0 0 auto; padding: 0 2px; display: flex; \
+                                                                align-items: center; color: {star_folder_color};",
+                                                        title: if is_fav_folder { "お気に入りから外す" } else { "お気に入りに追加" },
+                                                        onclick: move |e| {
+                                                            e.stop_propagation();
+                                                            on_toggle_fav.call(fav_folder_path.clone());
+                                                        },
+                                                        svg {
+                                                            width: "13", height: "13", view_box: "0 0 24 24",
+                                                            fill: if is_fav_folder { "currentColor" } else { "none" },
+                                                            stroke: "currentColor", stroke_width: "2", stroke_linejoin: "round",
+                                                            path { d: "M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z" }
+                                                        }
+                                                    }
                                                 }
                                                 // Children (task.md + output files)
                                                 if is_open {
@@ -364,6 +438,11 @@ pub(crate) fn TaskView(
                                                         let row_border = if is_sel { "#0969da" } else { "transparent" };
                                                         let c_path = task_md.clone();
                                                         let c_proj = project_path.clone();
+                                                        let ctx_md_path = task_md.clone();
+                                                        let copy_md_path = task_md.clone();
+                                                        let fav_md_path = task_md.clone();
+                                                        let is_fav_md = favorites.read().iter().any(|p| p == &task_md);
+                                                        let star_md_color = if is_fav_md { "#e3b341" } else { muted };
                                                         rsx! {
                                                             div {
                                                                 style: "padding: 4px 8px 4px 48px; cursor: pointer; \
@@ -376,8 +455,54 @@ pub(crate) fn TaskView(
                                                                 onclick: move |_| {
                                                                     selected.set(Some((c_path.clone(), c_proj.clone())));
                                                                 },
+                                                                oncontextmenu: move |e| {
+                                                                    e.prevent_default();
+                                                                    let c = e.client_coordinates();
+                                                                    ctx_menu.set(Some(TaskCtxMenu {
+                                                                        x: c.x as i32,
+                                                                        y: c.y as i32,
+                                                                        path: ctx_md_path.clone(),
+                                                                        is_dir: false,
+                                                                        show_fav: true,
+                                                                    }));
+                                                                },
                                                                 {task_view_file_icon(muted)}
-                                                                span { "task.md" }
+                                                                span {
+                                                                    style: "flex: 1 1 auto; overflow: hidden; \
+                                                                            text-overflow: ellipsis; white-space: nowrap;",
+                                                                    "task.md"
+                                                                }
+                                                                // Hover copy button
+                                                                button {
+                                                                    class: "mdo-copy-path",
+                                                                    style: "background: transparent; border: none; cursor: pointer; \
+                                                                            flex: 0 0 auto; padding: 0 2px; display: flex; \
+                                                                            align-items: center; color: {muted};",
+                                                                    title: "パスをコピー",
+                                                                    onclick: move |e| {
+                                                                        e.stop_propagation();
+                                                                        on_copy_path.call(copy_md_path.clone());
+                                                                    },
+                                                                    {copy_icon()}
+                                                                }
+                                                                // Hover star button
+                                                                button {
+                                                                    class: if is_fav_md { "mdo-fav-star on" } else { "mdo-fav-star" },
+                                                                    style: "background: transparent; border: none; cursor: pointer; \
+                                                                            flex: 0 0 auto; padding: 0 2px; display: flex; \
+                                                                            align-items: center; color: {star_md_color};",
+                                                                    title: if is_fav_md { "お気に入りから外す" } else { "お気に入りに追加" },
+                                                                    onclick: move |e| {
+                                                                        e.stop_propagation();
+                                                                        on_toggle_fav.call(fav_md_path.clone());
+                                                                    },
+                                                                    svg {
+                                                                        width: "13", height: "13", view_box: "0 0 24 24",
+                                                                        fill: if is_fav_md { "currentColor" } else { "none" },
+                                                                        stroke: "currentColor", stroke_width: "2", stroke_linejoin: "round",
+                                                                        path { d: "M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z" }
+                                                                    }
+                                                                }
                                                             }
                                                         }
                                                     }
@@ -395,6 +520,11 @@ pub(crate) fn TaskView(
                                                             let row_border = if is_sel { "#0969da" } else { "transparent" };
                                                             let c_path = extra.clone();
                                                             let c_proj = project_path.clone();
+                                                            let ctx_extra_path = extra.clone();
+                                                            let copy_extra_path = extra.clone();
+                                                            let fav_extra_path = extra.clone();
+                                                            let is_fav_extra = favorites.read().iter().any(|p| p == &extra);
+                                                            let star_extra_color = if is_fav_extra { "#e3b341" } else { muted };
                                                             rsx! {
                                                                 div {
                                                                     key: "{extra.display()}",
@@ -408,8 +538,54 @@ pub(crate) fn TaskView(
                                                                     onclick: move |_| {
                                                                         selected.set(Some((c_path.clone(), c_proj.clone())));
                                                                     },
+                                                                    oncontextmenu: move |e| {
+                                                                        e.prevent_default();
+                                                                        let c = e.client_coordinates();
+                                                                        ctx_menu.set(Some(TaskCtxMenu {
+                                                                            x: c.x as i32,
+                                                                            y: c.y as i32,
+                                                                            path: ctx_extra_path.clone(),
+                                                                            is_dir: false,
+                                                                            show_fav: true,
+                                                                        }));
+                                                                    },
                                                                     {task_view_file_icon(muted)}
-                                                                    span { "{name}" }
+                                                                    span {
+                                                                        style: "flex: 1 1 auto; overflow: hidden; \
+                                                                                text-overflow: ellipsis; white-space: nowrap;",
+                                                                        "{name}"
+                                                                    }
+                                                                    // Hover copy button
+                                                                    button {
+                                                                        class: "mdo-copy-path",
+                                                                        style: "background: transparent; border: none; cursor: pointer; \
+                                                                                flex: 0 0 auto; padding: 0 2px; display: flex; \
+                                                                                align-items: center; color: {muted};",
+                                                                        title: "パスをコピー",
+                                                                        onclick: move |e| {
+                                                                            e.stop_propagation();
+                                                                            on_copy_path.call(copy_extra_path.clone());
+                                                                        },
+                                                                        {copy_icon()}
+                                                                    }
+                                                                    // Hover star button
+                                                                    button {
+                                                                        class: if is_fav_extra { "mdo-fav-star on" } else { "mdo-fav-star" },
+                                                                        style: "background: transparent; border: none; cursor: pointer; \
+                                                                                flex: 0 0 auto; padding: 0 2px; display: flex; \
+                                                                                align-items: center; color: {star_extra_color};",
+                                                                        title: if is_fav_extra { "お気に入りから外す" } else { "お気に入りに追加" },
+                                                                        onclick: move |e| {
+                                                                            e.stop_propagation();
+                                                                            on_toggle_fav.call(fav_extra_path.clone());
+                                                                        },
+                                                                        svg {
+                                                                            width: "13", height: "13", view_box: "0 0 24 24",
+                                                                            fill: if is_fav_extra { "currentColor" } else { "none" },
+                                                                            stroke: "currentColor", stroke_width: "2", stroke_linejoin: "round",
+                                                                            path { d: "M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z" }
+                                                                        }
+                                                                    }
                                                                 }
                                                             }
                                                         }
@@ -444,6 +620,89 @@ pub(crate) fn TaskView(
                     }
                 }
             }
+
+            // ── Task View context menu overlay ─────────────────────────────
+            if let Some(c) = ctx_menu() {
+                {
+                    let is_fav = favorites.read().iter().any(|p| p == &c.path);
+                    let (p_copy, p_reveal, p_app, p_fav) = (
+                        c.path.clone(), c.path.clone(), c.path.clone(), c.path.clone(),
+                    );
+                    rsx! {
+                        // Backdrop: click closes the menu.
+                        div {
+                            style: "position: fixed; inset: 0; z-index: 200;",
+                            onclick: move |_| ctx_menu.set(None),
+                            oncontextmenu: move |e| { e.prevent_default(); ctx_menu.set(None); },
+                        }
+                        // Menu panel.
+                        div {
+                            style: "position: fixed; left: {c.x}px; top: {c.y}px; z-index: 201; \
+                                    min-width: 200px; background: {menu_bg}; border: 1px solid {menu_border}; \
+                                    border-radius: 8px; padding: 4px; \
+                                    box-shadow: 0 8px 24px rgba(0,0,0,0.3); color: {item_fg};",
+                            // 絶対パスをコピー
+                            button {
+                                class: "mdo-ctx-item", style: "{item_style}",
+                                onclick: move |_| {
+                                    on_copy_path.call(p_copy.clone());
+                                    ctx_menu.set(None);
+                                },
+                                "絶対パスをコピー"
+                            }
+                            div { style: "{sep_style}" }
+                            // Finder で表示
+                            button {
+                                class: "mdo-ctx-item", style: "{item_style}",
+                                onclick: move |_| {
+                                    if let Err(err) = services::platform::reveal_in_finder(&p_reveal) {
+                                        on_toast.call(format!("Finder failed: {err}"));
+                                    }
+                                    ctx_menu.set(None);
+                                },
+                                "Finder で表示"
+                            }
+                            // デフォルトアプリで開く (files only; dirs → Finder と同義なので省略)
+                            if !c.is_dir {
+                                button {
+                                    class: "mdo-ctx-item", style: "{item_style}",
+                                    onclick: move |_| {
+                                        if let Err(err) = services::platform::open_target(&p_app) {
+                                            on_toast.call(format!("Open failed: {err}"));
+                                        }
+                                        ctx_menu.set(None);
+                                    },
+                                    "デフォルトアプリで開く"
+                                }
+                            }
+                            // お気に入り (task folders + files; not project-root rows)
+                            if c.show_fav {
+                                div { style: "{sep_style}" }
+                                button {
+                                    class: "mdo-ctx-item", style: "{item_style}",
+                                    onclick: move |_| {
+                                        on_toggle_fav.call(p_fav.clone());
+                                        ctx_menu.set(None);
+                                    },
+                                    if is_fav { "お気に入りから外す" } else { "お気に入りに追加" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Compact copy icon (clipboard) for hover copy buttons in task view rows.
+fn copy_icon() -> Element {
+    rsx! {
+        svg {
+            width: "13", height: "13", view_box: "0 0 24 24", fill: "none",
+            stroke: "currentColor", stroke_width: "2", stroke_linecap: "round", stroke_linejoin: "round",
+            rect { x: "9", y: "9", width: "13", height: "13", rx: "2", ry: "2" }
+            path { d: "M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" }
         }
     }
 }

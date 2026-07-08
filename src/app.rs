@@ -636,6 +636,7 @@ pub(crate) fn App() -> Element {
     let feature_task_view = use_signal(|| saved_config.feature_task_view);
     let task_view_tasks_subpath = use_signal(|| saved_config.task_view_tasks_subpath.clone());
     let task_view_scan_roots = use_signal(|| saved_config.task_view_scan_roots.clone());
+    let task_view_scan_exclude = use_signal(|| saved_config.task_view_scan_exclude.clone());
     let task_view_days = use_signal(|| saved_config.task_view_days);
     let mut task_view_open = use_signal(|| false);
     // Transient top-right toast (e.g. "Copied!"). Auto-hides after ~1.5s; a
@@ -1194,6 +1195,7 @@ pub(crate) fn App() -> Element {
             feature_task_view: feature_task_view(),
             task_view_tasks_subpath: task_view_tasks_subpath(),
             task_view_scan_roots: task_view_scan_roots(),
+            task_view_scan_exclude: task_view_scan_exclude(),
             task_view_days: task_view_days(),
         };
         let generation = config_save_generation.write().advance();
@@ -2124,6 +2126,7 @@ pub(crate) fn App() -> Element {
                         feature_task_view,
                         task_view_tasks_subpath,
                         task_view_scan_roots,
+                        task_view_scan_exclude,
                         task_view_days,
                         dark,
                     }
@@ -2132,9 +2135,22 @@ pub(crate) fn App() -> Element {
                     TaskView {
                         roots,
                         scan_roots: task_view_scan_roots,
+                        scan_exclude: task_view_scan_exclude,
                         subpath: task_view_tasks_subpath,
                         default_days: task_view_days,
+                        proj_name: current_proj(),
                         dark,
+                        favorites,
+                        on_toggle_fav: move |p| toggle_fav(p),
+                        on_copy_path: move |p: PathBuf| copy_path_native(
+                            services::platform::canonical_clipboard_text(p),
+                            Some("Copied!".into()),
+                        ),
+                        on_toast: move |msg| show_toast(msg),
+                        on_open_project_menu: move |_| {
+                            proj_menu_open.set(true);
+                            proj_menu_query.set(String::new());
+                        },
                     }
                 }
                 // Sidebar right-click context menu.

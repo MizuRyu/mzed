@@ -156,6 +156,10 @@ pub struct Config {
     /// Number of days used in the "All Projects" date filter.
     #[serde(default = "default_task_view_days")]
     pub task_view_days: u32,
+    /// Directory names to skip during the All Projects scan (in addition to
+    /// the built-in prune list). Case-sensitive.
+    #[serde(default)]
+    pub task_view_scan_exclude: Vec<String>,
 }
 
 fn default_zoom() -> f32 {
@@ -210,6 +214,7 @@ impl Default for Config {
             task_view_tasks_subpath: default_task_view_tasks_subpath(),
             task_view_scan_roots: Vec::new(),
             task_view_days: default_task_view_days(),
+            task_view_scan_exclude: Vec::new(),
         }
     }
 }

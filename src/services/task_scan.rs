@@ -39,9 +39,9 @@ impl TaskStatus {
     pub fn color(&self) -> &'static str {
         match self {
             TaskStatus::Todo => "#8b949e",
-            TaskStatus::InProgress => "#1f6feb",
+            TaskStatus::InProgress => "#3fb950",
             TaskStatus::Review => "#d29922",
-            TaskStatus::Done => "#3fb950",
+            TaskStatus::Done => "#1f6feb",
             TaskStatus::Unknown => "#8b949e",
         }
     }
@@ -305,12 +305,13 @@ const MAX_WALK_DEPTH: usize = 10;
 
 /// Returns true for directory names that should never be entered during the
 /// project-discovery walk. Keeps the scan cost bounded even under `~`.
-pub(crate) fn is_walk_pruned(name: &str) -> bool {
+pub(crate) fn is_walk_pruned(name: &str, extra_exclude: &[String]) -> bool {
     name.starts_with('.')
         || matches!(
             name,
             "node_modules" | "target" | "dist" | "build" | "Library"
         )
+        || extra_exclude.iter().any(|e| e == name)
 }
 
 /// Recursively walk directories under `root`, pruning ignored names and the
@@ -334,6 +335,7 @@ pub fn discover_projects(
     subpath_segments: &[&str],
     depth: usize,
     found: &mut Vec<PathBuf>,
+    extra_exclude: &[String],
 ) {
     if depth > MAX_WALK_DEPTH {
         return;
@@ -343,12 +345,11 @@ pub fn discover_projects(
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        // Only walk directories; files are never relevant here.
         if !path.is_dir() {
             continue;
         }
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if is_walk_pruned(name) {
+        if is_walk_pruned(name, extra_exclude) {
             continue;
         }
 
@@ -368,7 +369,7 @@ pub fn discover_projects(
 
         // Step 3: no tasks dir and not a repo root → recurse.
         if !has_tasks {
-            discover_projects(&path, subpath_segments, depth + 1, found);
+            discover_projects(&path, subpath_segments, depth + 1, found, extra_exclude);
         }
     }
 }
@@ -384,6 +385,7 @@ pub fn scan_all_projects_blocking(
     current_roots: &[PathBuf],
     subpath: &str,
     n_days: Option<u32>,
+    extra_exclude: &[String],
 ) -> Vec<TaskItem> {
     let today = today_jdn();
     let use_fallback = scan_roots.is_empty();
@@ -394,7 +396,7 @@ pub fn scan_all_projects_blocking(
         let subpath_segs: Vec<&str> = subpath.split('/').filter(|s| !s.is_empty()).collect();
         let mut v: Vec<PathBuf> = Vec::new();
         for root in scan_roots {
-            discover_projects(root, &subpath_segs, 0, &mut v);
+            discover_projects(root, &subpath_segs, 0, &mut v, extra_exclude);
         }
         v
     };
@@ -603,10 +605,10 @@ outputs:
             ".hidden",
             ".DS_Store",
         ] {
-            assert!(is_walk_pruned(name), "{name} should be pruned");
+            assert!(is_walk_pruned(name, &[]), "{name} should be pruned");
         }
         for name in &["src", "docs", "memo", "tasks", "proj"] {
-            assert!(!is_walk_pruned(name), "{name} should not be pruned");
+            assert!(!is_walk_pruned(name, &[]), "{name} should not be pruned");
         }
     }
 
@@ -620,7 +622,7 @@ outputs:
 
         let segs = ["docs", "memo", "tasks"];
         let mut found = Vec::new();
-        discover_projects(root, &segs, 0, &mut found);
+        discover_projects(root, &segs, 0, &mut found, &[]);
 
         assert_eq!(found.len(), 1);
         assert_eq!(found[0], root.join("a/b/proj"));
@@ -642,7 +644,7 @@ outputs:
 
         let segs = ["docs", "memo", "tasks"];
         let mut found = Vec::new();
-        discover_projects(root, &segs, 0, &mut found);
+        discover_projects(root, &segs, 0, &mut found, &[]);
 
         assert_eq!(found.len(), 1);
         assert_eq!(found[0], root.join("real-proj"));
@@ -663,7 +665,7 @@ outputs:
 
         let segs = ["docs", "memo", "tasks"];
         let mut found = Vec::new();
-        discover_projects(root, &segs, 0, &mut found);
+        discover_projects(root, &segs, 0, &mut found, &[]);
 
         assert!(
             found.is_empty(),
@@ -683,7 +685,7 @@ outputs:
 
         let segs = ["docs", "memo", "tasks"];
         let mut found = Vec::new();
-        discover_projects(root, &segs, 0, &mut found);
+        discover_projects(root, &segs, 0, &mut found, &[]);
 
         assert_eq!(found.len(), 3);
         for proj in &["alpha", "beta", "gamma"] {
@@ -711,7 +713,7 @@ outputs:
 
         let segs = ["docs", "memo", "tasks"];
         let mut found = Vec::new();
-        discover_projects(root, &segs, 0, &mut found);
+        discover_projects(root, &segs, 0, &mut found, &[]);
 
         assert_eq!(found.len(), 1);
         assert_eq!(found[0], root.join("proj"));
@@ -743,7 +745,7 @@ outputs:
 
         let segs = ["docs", "memo", "tasks"];
         let mut found = Vec::new();
-        discover_projects(root, &segs, 0, &mut found);
+        discover_projects(root, &segs, 0, &mut found, &[]);
 
         // repo itself is found (its docs/memo/tasks exists).
         assert_eq!(found.len(), 1, "expected exactly the repo root to be found");
@@ -766,7 +768,7 @@ outputs:
 
         let segs = ["docs", "memo", "tasks"];
         let mut found = Vec::new();
-        discover_projects(root, &segs, 0, &mut found);
+        discover_projects(root, &segs, 0, &mut found, &[]);
 
         assert!(
             found.is_empty(),
