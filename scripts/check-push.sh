@@ -24,7 +24,9 @@ echo "==> [2/3] personal info: scanning tracked files..."
 # Absolute home paths (test fixtures use the fake user "me", which is allowed)
 # and personal email providers. Generic patterns on purpose: the real values
 # must not appear in this public script either.
-paths_hit=$(git ls-files -z | xargs -0 grep -nE '/Users/[A-Za-z0-9._-]+' 2>/dev/null | grep -v '/Users/me[/"'"'"']' || true)
+# ':!scripts/check-push.sh' excludes this script itself (it contains the
+# patterns it searches for).
+paths_hit=$(git ls-files -z -- . ':!scripts/check-push.sh' | xargs -0 grep -nE '/Users/[A-Za-z0-9._-]+' 2>/dev/null | grep -v '/Users/me[/"'"'"']' || true)
 if [ -n "$paths_hit" ]; then
   echo "error: absolute /Users/ paths in tracked files:" >&2
   echo "$paths_hit" | head -10 >&2

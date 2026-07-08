@@ -26,7 +26,7 @@ pre-commit install --hook-type pre-commit --hook-type pre-push
 | 層 | タイミング | 内容 |
 |---|---|---|
 | pre-commit | コミット時 | gitleaks（staged 差分）+ cargo fmt --check |
-| pre-push | push 時 | `scripts/check-push.sh` — gitleaks 全履歴スキャン + 個人情報検査（絶対 /Users/ パス・個人メール。フィクスチャの `/Users/me` は許可）+ `just verify` |
+| pre-push | push 時 | `scripts/check-push.sh` — gitleaks 全履歴スキャン + 個人情報検査（絶対ホームパス・個人メール。テストフィクスチャの偽ユーザーは許可）+ `just verify` |
 | CI | push 後 | `.github/workflows/gitleaks.yml`（履歴込み） |
 
 verify だけ飛ばしたいとき: `MZED_SKIP_VERIFY=1 git push`
