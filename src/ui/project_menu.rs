@@ -65,7 +65,10 @@ pub(crate) fn ProjectMenu(
             onclick: move |_| open.set(false),
         }
         div {
-            style: "position: absolute; top: 38px; left: 12px; z-index: 1001; width: 320px; max-height: 60vh; display: flex; flex-direction: column; background: {menu_bg}; border-radius: 10px; box-shadow: 0 8px 32px rgba(0,0,0,0.30); overflow: hidden; color: {text_color};",
+            // position: fixed (viewport-anchored): the menu is mounted at the
+            // overlay layer outside the app frame div, so absolute positioning
+            // would resolve against the wrong containing block.
+            style: "position: fixed; top: 38px; left: 12px; z-index: 1001; width: 320px; max-height: 60vh; display: flex; flex-direction: column; background: {menu_bg}; border-radius: 10px; box-shadow: 0 8px 32px rgba(0,0,0,0.30); overflow: hidden; color: {text_color};",
             onclick: move |e| e.stop_propagation(),
             input {
                 autofocus: true,

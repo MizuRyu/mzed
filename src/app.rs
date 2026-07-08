@@ -1805,45 +1805,8 @@ pub(crate) fn App() -> Element {
                             span { "{current_proj}" }
                             span { style: "opacity: 0.7; font-size: 10px;", "▾" }
                         }
-                        if proj_menu_open() {
-                            ProjectMenu {
-                                open: proj_menu_open,
-                                query: proj_menu_query,
-                                candidates: proj_candidates(),
-                                current: root(),
-                                dark,
-                                on_pick: move |path: PathBuf| {
-                                    proj_menu_open.set(false);
-                                    if root().as_ref() == Some(&path) {
-                                        return;
-                                    }
-                                    let pick = file_service::pick_markdown(&path);
-                                    let exp = pick
-                                        .as_ref()
-                                        .map(|f| file_service::ancestor_dirs(&path, f))
-                                        .unwrap_or_default();
-                                    switch_project(path.clone(), vec![path], exp, pick);
-                                },
-                                on_open_folder: move |_| {
-                                    proj_menu_open.set(false);
-                                    // Use the async dialog + spawn: rfd's synchronous
-                                    // pick_folder() spins a modal NSOpenPanel on the
-                                    // main thread inside the tao event callback, which
-                                    // deadlocks the running event loop (freeze/crash).
-                                    spawn(async move {
-                                        if let Some(handle) = rfd::AsyncFileDialog::new().pick_folder().await {
-                                            let path = handle.path().to_path_buf();
-                                            let pick = file_service::pick_markdown(&path);
-                                            let exp = pick
-                                                .as_ref()
-                                                .map(|f| file_service::ancestor_dirs(&path, f))
-                                                .unwrap_or_default();
-                                            switch_project(path.clone(), vec![path], exp, pick);
-                                        }
-                                    });
-                                },
-                            }
-                        }
+                        // (ProjectMenu is mounted at the overlay layer near the end of
+                        // this rsx, outside the app frame div — see the comment there.)
                     }
                     div {
                         style: "display: flex; flex: 1 1 auto; min-height: 0;",
@@ -2150,6 +2113,48 @@ pub(crate) fn App() -> Element {
                         on_open_project_menu: move |_| {
                             proj_menu_open.set(true);
                             proj_menu_query.set(String::new());
+                        },
+                    }
+                }
+                // Project switcher dropdown. Mounted at the overlay layer (a
+                // sibling of the app frame div, after the Task View overlay):
+                // the frame div is position:fixed with z-index auto, so anything
+                // nested inside it — whatever its own z-index — paints below the
+                // Task View overlay. Out here, DOM order + z 1000/1001 win.
+                if proj_menu_open() {
+                    ProjectMenu {
+                        open: proj_menu_open,
+                        query: proj_menu_query,
+                        candidates: proj_candidates(),
+                        current: root(),
+                        dark,
+                        on_pick: move |path: PathBuf| {
+                            proj_menu_open.set(false);
+                            if root().as_ref() == Some(&path) {
+                                return;
+                            }
+                            let pick = file_service::pick_markdown(&path);
+                            let exp = pick
+                                .as_ref()
+                                .map(|f| file_service::ancestor_dirs(&path, f))
+                                .unwrap_or_default();
+                            switch_project(path.clone(), vec![path], exp, pick);
+                        },
+                        on_open_folder: move |_| {
+                            proj_menu_open.set(false);
+                            // Async dialog: the sync rfd picker deadlocks the tao
+                            // event loop when spun on the main thread.
+                            spawn(async move {
+                                if let Some(handle) = rfd::AsyncFileDialog::new().pick_folder().await {
+                                    let path = handle.path().to_path_buf();
+                                    let pick = file_service::pick_markdown(&path);
+                                    let exp = pick
+                                        .as_ref()
+                                        .map(|f| file_service::ancestor_dirs(&path, f))
+                                        .unwrap_or_default();
+                                    switch_project(path.clone(), vec![path], exp, pick);
+                                }
+                            });
                         },
                     }
                 }
