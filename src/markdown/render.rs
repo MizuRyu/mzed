@@ -110,7 +110,11 @@ fn autolink_pass(events: Vec<Event<'_>>) -> Vec<Event<'static>> {
         if buf.is_empty() {
             return;
         }
-        if buf.contains("http://") || buf.contains("https://") {
+        if buf.contains("http://")
+            || buf.contains("https://")
+            || buf.contains("www.")
+            || buf.contains('@')
+        {
             out.extend(linkify_bare_urls(buf));
         } else {
             out.push(Event::Text(std::mem::take(buf).into()));
@@ -267,13 +271,7 @@ fn linkify_bare_urls(text: &str) -> Vec<Event<'static>> {
                     | '%'
             )
     }
-    let mut out = Vec::new();
-    let mut rest = text;
-    while let Some(start) = find_url_start(rest) {
-        let (before, tail) = rest.split_at(start);
-        let end = tail.find(|c: char| !is_url_char(c)).unwrap_or(tail.len());
-        let (mut url, _) = tail.split_at(end);
-        // Trim trailing punctuation that belongs to the sentence, not the URL.
+    fn trim_trailing(mut url: &str) -> &str {
         while let Some(last) = url.chars().last() {
             let trim = match last {
                 '.' | ',' | ':' | ';' | '!' | '?' | '\'' | '*' | '_' | '~' => true,
@@ -285,49 +283,115 @@ fn linkify_bare_urls(text: &str) -> Vec<Event<'static>> {
             }
             url = &url[..url.len() - last.len_utf8()];
         }
-        // A bare scheme with no host is not a link.
-        if url == "http://" || url == "https://" {
-            let consumed = start + end.max(1);
-            out.push(Event::Text(rest[..consumed].to_string().into()));
-            rest = &rest[consumed..];
-            continue;
+        url
+    }
+    // Word boundary before a scheme/www match.
+    fn boundary_before(s: &str, i: usize) -> bool {
+        match s[..i].chars().last() {
+            None => true,
+            Some(prev) => !prev.is_alphanumeric() && !matches!(prev, '/' | '.' | '-' | '_' | '@'),
         }
-        if !before.is_empty() {
-            out.push(Event::Text(before.to_string().into()));
+    }
+    // The earliest valid http(s):// or www. match in `s`: (start, literal, dest).
+    fn find_url(s: &str) -> Option<(usize, &str, String)> {
+        let mut starts: Vec<usize> = s
+            .match_indices("http")
+            .filter(|(i, _)| {
+                let tail = &s[*i..];
+                (tail.starts_with("http://") || tail.starts_with("https://"))
+                    && boundary_before(s, *i)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        starts.extend(
+            s.match_indices("www.")
+                .filter(|(i, _)| boundary_before(s, *i))
+                .map(|(i, _)| i),
+        );
+        starts.sort_unstable();
+        for start in starts {
+            let tail = &s[start..];
+            let end = tail.find(|c: char| !is_url_char(c)).unwrap_or(tail.len());
+            let url = trim_trailing(&tail[..end]);
+            // A bare scheme / bare "www." with no host is not a link.
+            if url.is_empty() || url == "http://" || url == "https://" || url == "www." {
+                continue;
+            }
+            let dest = if url.starts_with("www.") {
+                // GFM www autolinks assume http.
+                format!("http://{url}")
+            } else {
+                url.to_string()
+            };
+            return Some((start, url, dest));
         }
-        let dest: CowStr = url.to_string().into();
+        None
+    }
+    // The earliest bare e-mail in `s` (GFM-flavoured, simplified).
+    fn find_email(s: &str) -> Option<(usize, &str, String)> {
+        fn is_local(c: char) -> bool {
+            c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '%' | '+' | '-')
+        }
+        fn is_domain(c: char) -> bool {
+            c.is_ascii_alphanumeric() || matches!(c, '.' | '-')
+        }
+        for (at, _) in s.match_indices('@') {
+            let local_start = s[..at]
+                .char_indices()
+                .rev()
+                .take_while(|(_, c)| is_local(*c))
+                .last()
+                .map(|(i, _)| i);
+            let Some(local_start) = local_start else {
+                continue;
+            };
+            if !boundary_before(s, local_start) {
+                continue;
+            }
+            let after = &s[at + 1..];
+            let dom_end = after.find(|c: char| !is_domain(c)).unwrap_or(after.len());
+            let mut domain = &after[..dom_end];
+            while domain.ends_with('.') || domain.ends_with('-') {
+                domain = &domain[..domain.len() - 1];
+            }
+            if domain.is_empty() || !domain.contains('.') {
+                continue;
+            }
+            let literal = &s[local_start..at + 1 + domain.len()];
+            return Some((local_start, literal, format!("mailto:{literal}")));
+        }
+        None
+    }
+
+    let mut out = Vec::new();
+    let mut rest = text;
+    loop {
+        let url = find_url(rest);
+        let email = find_email(rest);
+        let m = match (url, email) {
+            (Some(u), Some(e)) => Some(if u.0 <= e.0 { u } else { e }),
+            (u, e) => u.or(e),
+        };
+        let Some((start, literal, dest)) = m else {
+            break;
+        };
+        if start > 0 {
+            out.push(Event::Text(rest[..start].to_string().into()));
+        }
         out.push(Event::Start(Tag::Link {
             link_type: LinkType::Autolink,
-            dest_url: dest,
+            dest_url: dest.into(),
             title: "".into(),
             id: "".into(),
         }));
-        out.push(Event::Text(url.to_string().into()));
+        out.push(Event::Text(literal.to_string().into()));
         out.push(Event::End(TagEnd::Link));
-        rest = &rest[start + url.len()..];
+        rest = &rest[start + literal.len()..];
     }
     if !rest.is_empty() {
         out.push(Event::Text(rest.to_string().into()));
     }
     out
-}
-
-/// Find the byte offset of the next bare-URL start in `s`, if any.
-fn find_url_start(s: &str) -> Option<usize> {
-    for (i, _) in s.match_indices("http") {
-        let tail = &s[i..];
-        if !(tail.starts_with("http://") || tail.starts_with("https://")) {
-            continue;
-        }
-        let boundary = match s[..i].chars().last() {
-            None => true,
-            Some(prev) => !prev.is_alphanumeric() && !matches!(prev, '/' | '.' | '-' | '_'),
-        };
-        if boundary {
-            return Some(i);
-        }
-    }
-    None
 }
 
 #[cfg(test)]
@@ -482,6 +546,36 @@ mod tests {
     fn 既存リンクのラベル内URLは二重リンク化しない() {
         let html = render("[https://example.com](https://example.com)");
         assert_eq!(html.matches("<a href=").count(), 1);
+    }
+
+    #[test]
+    fn wwwドット始まりが自動リンクになる() {
+        let html = render("www.example.com を見て。xwww.example.com は境界なし");
+        assert!(html.contains(r#"<a href="http://www.example.com">www.example.com</a>"#));
+        assert!(!html.contains(r#"href="http://xwww"#));
+        assert_eq!(html.matches("<a href=").count(), 1);
+    }
+
+    #[test]
+    fn 裸のメールアドレスがmailtoリンクになる() {
+        let html = render(
+            "連絡は a.b+c@example.co.jp まで。user@localhost はドメインにドットがないので対象外",
+        );
+        assert!(html.contains(r#"<a href="mailto:a.b+c@example.co.jp">a.b+c@example.co.jp</a>"#));
+        assert!(!html.contains(r#"mailto:user@localhost"#));
+    }
+
+    #[test]
+    fn URL内のアットマークはメールとして誤検出しない() {
+        let html = render("https://example.com/user@name/path を参照");
+        assert!(html.contains(r#"<a href="https://example.com/user@name/path">"#));
+        assert!(!html.contains("mailto:"));
+    }
+
+    #[test]
+    fn コード内のメールとwwwはリンク化しない() {
+        let html = render("`a@b.com` と `www.example.com`");
+        assert!(!html.contains("<a href="));
     }
 
     #[test]

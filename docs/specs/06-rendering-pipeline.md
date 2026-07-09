@@ -36,7 +36,7 @@ sequenceDiagram
 
 ### 裸 URL の自動リンク（autolink）
 
-pulldown-cmark に GFM の bare-URL autolink 拡張は無いため、`render()` 内の後処理パス（`autolink_pass`）で実装している。プレーンテキスト中の `http(s)://…` を `<a>` に変換する。
+pulldown-cmark に GFM の autolink 拡張は無いため、`render()` 内の後処理パス（`autolink_pass`）で実装している。GFM 準拠で3種を `<a>` に変換する: `http(s)://…`、`www.…`（href は `http://` 前置）、裸のメールアドレス（href は `mailto:` 前置。ドメインに `.` が必要）。`:emoji:` ショートコードは GFM 仕様外のため対象外。
 
 - コードブロック・インラインコード・既存リンク内は対象外
 - pulldown が強調候補文字（`_` 等）で Text イベントを分割するため、連続 Text をマージしてから linkify する（URL が途中で切れるのを防ぐ）
