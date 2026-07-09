@@ -572,6 +572,16 @@ pub(crate) fn App() -> Element {
                         win_h.set((size.height as f64 / sf).round() as i32);
                     }
                 }
+                Event::WindowEvent {
+                    event: WindowEvent::Focused(true),
+                    ..
+                } => {
+                    // Safety net for missed filesystem events (watcher re-arm
+                    // races, atomic saves): rescan the tree whenever the window
+                    // regains focus, like most editors do. Cheap — one pruned
+                    // walk of the current roots.
+                    tree_refresh += 1;
+                }
                 _ => {}
             }
         });
