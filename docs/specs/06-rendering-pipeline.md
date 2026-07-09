@@ -25,6 +25,15 @@ sequenceDiagram
 
 ## Rust 側の処理
 
+### 裸 URL の自動リンク（autolink）
+
+pulldown-cmark に GFM の bare-URL autolink 拡張は無いため、`render()` 内の後処理パス（`autolink_pass`）で実装している。プレーンテキスト中の `http(s)://…` を `<a>` に変換する。
+
+- コードブロック・インラインコード・既存リンク内は対象外
+- pulldown が強調候補文字（`_` 等）で Text イベントを分割するため、連続 Text をマージしてから linkify する（URL が途中で切れるのを防ぐ）
+- URL は ASCII の URL 文字集合のみで構成（日本語文が空白なしで続いても正しく終端する）。末尾の句読点は除外、閉じ括弧は URL 内の `(` とバランスする分だけ保持（Wikipedia 形式対応）
+- 生成リンクは http(s) 限定なので既存の URL 検証と整合。クリックは外部ブラウザで開く既存経路
+
 ### Obsidian wikilink 前処理
 
 `markdown::preprocess_wikilinks(source, base_dir, roots)` が `render()` の前に走る。

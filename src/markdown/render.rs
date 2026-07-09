@@ -1,6 +1,6 @@
 //! Markdown -> HTML pipeline.
 
-use pulldown_cmark::{html, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{html, CodeBlockKind, CowStr, Event, LinkType, Options, Parser, Tag, TagEnd};
 use std::collections::HashMap;
 
 use super::toc::{slugify, unique_anchor};
@@ -84,12 +84,250 @@ pub fn render(input: &str) -> String {
         }
     }
 
+    let events = autolink_pass(events);
+
     let mut out = String::new();
     if let Some(front) = front {
         out.push_str(&frontmatter::frontmatter_to_html(&front));
     }
     html::push_html(&mut out, events.into_iter());
     out
+}
+
+/// GFM-style autolink pass for bare `http(s)://…` URLs in prose.
+///
+/// Runs over the final event stream because pulldown-cmark splits `Text`
+/// runs at emphasis-candidate characters (`_`, `*`, …), which would cut
+/// URLs mid-way if linkified per event: consecutive `Text` events outside
+/// code blocks and links are coalesced first, then linkified as one run.
+fn autolink_pass(events: Vec<Event<'_>>) -> Vec<Event<'static>> {
+    let mut out: Vec<Event<'static>> = Vec::new();
+    let mut in_code_block = false;
+    let mut in_link = false;
+    let mut text_buf = String::new();
+
+    fn flush(buf: &mut String, out: &mut Vec<Event<'static>>) {
+        if buf.is_empty() {
+            return;
+        }
+        if buf.contains("http://") || buf.contains("https://") {
+            out.extend(linkify_bare_urls(buf));
+        } else {
+            out.push(Event::Text(std::mem::take(buf).into()));
+        }
+        buf.clear();
+    }
+
+    for event in events {
+        match &event {
+            Event::Start(Tag::CodeBlock(_)) => in_code_block = true,
+            Event::End(TagEnd::CodeBlock) => in_code_block = false,
+            Event::Start(Tag::Link { .. }) => in_link = true,
+            Event::End(TagEnd::Link) => in_link = false,
+            _ => {}
+        }
+        match event {
+            Event::Text(t) if !in_code_block && !in_link => text_buf.push_str(&t),
+            other => {
+                flush(&mut text_buf, &mut out);
+                out.push(own_event(other));
+            }
+        }
+    }
+    flush(&mut text_buf, &mut out);
+    out
+}
+
+/// Convert a borrowed event into an owned (`'static`) one.
+fn own_event(event: Event<'_>) -> Event<'static> {
+    fn own(s: CowStr<'_>) -> CowStr<'static> {
+        s.into_string().into()
+    }
+    match event {
+        Event::Text(t) => Event::Text(own(t)),
+        Event::Code(t) => Event::Code(own(t)),
+        Event::Html(t) => Event::Html(own(t)),
+        Event::InlineHtml(t) => Event::InlineHtml(own(t)),
+        Event::InlineMath(t) => Event::InlineMath(own(t)),
+        Event::DisplayMath(t) => Event::DisplayMath(own(t)),
+        Event::FootnoteReference(t) => Event::FootnoteReference(own(t)),
+        Event::SoftBreak => Event::SoftBreak,
+        Event::HardBreak => Event::HardBreak,
+        Event::Rule => Event::Rule,
+        Event::TaskListMarker(b) => Event::TaskListMarker(b),
+        Event::Start(tag) => Event::Start(own_tag(tag)),
+        Event::End(end) => Event::End(end),
+    }
+}
+
+fn own_tag(tag: Tag<'_>) -> Tag<'static> {
+    fn own(s: CowStr<'_>) -> CowStr<'static> {
+        s.into_string().into()
+    }
+    match tag {
+        Tag::Paragraph => Tag::Paragraph,
+        Tag::Heading {
+            level,
+            id,
+            classes,
+            attrs,
+        } => Tag::Heading {
+            level,
+            id: id.map(own),
+            classes: classes.into_iter().map(own).collect(),
+            attrs: attrs
+                .into_iter()
+                .map(|(k, v)| (own(k), v.map(own)))
+                .collect(),
+        },
+        Tag::BlockQuote(kind) => Tag::BlockQuote(kind),
+        Tag::CodeBlock(kind) => Tag::CodeBlock(match kind {
+            CodeBlockKind::Indented => CodeBlockKind::Indented,
+            CodeBlockKind::Fenced(l) => CodeBlockKind::Fenced(own(l)),
+        }),
+        Tag::HtmlBlock => Tag::HtmlBlock,
+        Tag::List(n) => Tag::List(n),
+        Tag::Item => Tag::Item,
+        Tag::FootnoteDefinition(l) => Tag::FootnoteDefinition(own(l)),
+        Tag::DefinitionList => Tag::DefinitionList,
+        Tag::DefinitionListTitle => Tag::DefinitionListTitle,
+        Tag::DefinitionListDefinition => Tag::DefinitionListDefinition,
+        Tag::Table(a) => Tag::Table(a),
+        Tag::TableHead => Tag::TableHead,
+        Tag::TableRow => Tag::TableRow,
+        Tag::TableCell => Tag::TableCell,
+        Tag::Emphasis => Tag::Emphasis,
+        Tag::Strong => Tag::Strong,
+        Tag::Strikethrough => Tag::Strikethrough,
+        Tag::Superscript => Tag::Superscript,
+        Tag::Subscript => Tag::Subscript,
+        Tag::Link {
+            link_type,
+            dest_url,
+            title,
+            id,
+        } => Tag::Link {
+            link_type,
+            dest_url: own(dest_url),
+            title: own(title),
+            id: own(id),
+        },
+        Tag::Image {
+            link_type,
+            dest_url,
+            title,
+            id,
+        } => Tag::Image {
+            link_type,
+            dest_url: own(dest_url),
+            title: own(title),
+            id: own(id),
+        },
+        Tag::MetadataBlock(k) => Tag::MetadataBlock(k),
+    }
+}
+
+/// Split a prose text run into Text/Link events, turning bare `http(s)://…`
+/// substrings into autolinks (GFM-flavoured, simplified).
+///
+/// - URL start requires a word boundary (start of text, or a preceding char
+///   that is not alphanumeric / `/` / `.` / `-` / `_`).
+/// - URL runs over ASCII URL characters only, so it naturally stops at
+///   whitespace and at CJK prose that follows a pasted URL without a space
+///   (raw non-ASCII URLs are out of scope; browsers copy them
+///   percent-encoded).
+/// - Trailing ASCII punctuation is trimmed; a trailing `)` is kept only
+///   while the URL has an unmatched `(`.
+fn linkify_bare_urls(text: &str) -> Vec<Event<'static>> {
+    fn is_url_char(c: char) -> bool {
+        c.is_ascii_alphanumeric()
+            || matches!(
+                c,
+                '-' | '.'
+                    | '_'
+                    | '~'
+                    | ':'
+                    | '/'
+                    | '?'
+                    | '#'
+                    | '['
+                    | ']'
+                    | '@'
+                    | '!'
+                    | '$'
+                    | '&'
+                    | '\''
+                    | '('
+                    | ')'
+                    | '*'
+                    | '+'
+                    | ','
+                    | ';'
+                    | '='
+                    | '%'
+            )
+    }
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(start) = find_url_start(rest) {
+        let (before, tail) = rest.split_at(start);
+        let end = tail.find(|c: char| !is_url_char(c)).unwrap_or(tail.len());
+        let (mut url, _) = tail.split_at(end);
+        // Trim trailing punctuation that belongs to the sentence, not the URL.
+        while let Some(last) = url.chars().last() {
+            let trim = match last {
+                '.' | ',' | ':' | ';' | '!' | '?' | '\'' | '*' | '_' | '~' => true,
+                ')' => url.matches('(').count() < url.matches(')').count(),
+                _ => false,
+            };
+            if !trim {
+                break;
+            }
+            url = &url[..url.len() - last.len_utf8()];
+        }
+        // A bare scheme with no host is not a link.
+        if url == "http://" || url == "https://" {
+            let consumed = start + end.max(1);
+            out.push(Event::Text(rest[..consumed].to_string().into()));
+            rest = &rest[consumed..];
+            continue;
+        }
+        if !before.is_empty() {
+            out.push(Event::Text(before.to_string().into()));
+        }
+        let dest: CowStr = url.to_string().into();
+        out.push(Event::Start(Tag::Link {
+            link_type: LinkType::Autolink,
+            dest_url: dest,
+            title: "".into(),
+            id: "".into(),
+        }));
+        out.push(Event::Text(url.to_string().into()));
+        out.push(Event::End(TagEnd::Link));
+        rest = &rest[start + url.len()..];
+    }
+    if !rest.is_empty() {
+        out.push(Event::Text(rest.to_string().into()));
+    }
+    out
+}
+
+/// Find the byte offset of the next bare-URL start in `s`, if any.
+fn find_url_start(s: &str) -> Option<usize> {
+    for (i, _) in s.match_indices("http") {
+        let tail = &s[i..];
+        if !(tail.starts_with("http://") || tail.starts_with("https://")) {
+            continue;
+        }
+        let boundary = match s[..i].chars().last() {
+            None => true,
+            Some(prev) => !prev.is_alphanumeric() && !matches!(prev, '/' | '.' | '-' | '_'),
+        };
+        if boundary {
+            return Some(i);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -206,6 +444,50 @@ mod tests {
         assert!(html.contains(r#"<pre class="mermaid">"#));
         assert!(html.contains("&lt;/pre&gt;&lt;img src=x onerror=alert(1)&gt;"));
         assert!(!html.contains(r#"</pre><img"#));
+    }
+
+    #[test]
+    fn 裸のURLが自動リンクになる() {
+        let html = render("参照: https://example.com/path?q=1 を見て。");
+        assert!(html.contains(
+            r#"<a href="https://example.com/path?q=1">https://example.com/path?q=1</a>"#
+        ));
+    }
+
+    #[test]
+    fn 裸URLの末尾句読点はリンクに含めない() {
+        let html = render("See https://example.com. Also https://example.com/a、次へ");
+        assert!(html.contains(r#"<a href="https://example.com">"#));
+        assert!(html.contains(r#"<a href="https://example.com/a">"#));
+        assert!(!html.contains(r#"href="https://example.com.""#));
+    }
+
+    #[test]
+    fn 括弧内の裸URLは閉じ括弧を含めない() {
+        let html = render("(https://example.com/x) と (https://en.wikipedia.org/wiki/Foo_(bar))");
+        assert!(html.contains(r#"<a href="https://example.com/x">"#));
+        // バランスした括弧は URL の一部として保持（Wikipedia 形式）
+        assert!(html.contains(r#"<a href="https://en.wikipedia.org/wiki/Foo_(bar)">"#));
+    }
+
+    #[test]
+    fn コードブロックとインラインコード内のURLはリンク化しない() {
+        let md = "`https://inline.example` \n\n```\nhttps://block.example\n```\n";
+        let html = render(md);
+        assert!(!html.contains(r#"href="https://inline.example""#));
+        assert!(!html.contains(r#"href="https://block.example""#));
+    }
+
+    #[test]
+    fn 既存リンクのラベル内URLは二重リンク化しない() {
+        let html = render("[https://example.com](https://example.com)");
+        assert_eq!(html.matches("<a href=").count(), 1);
+    }
+
+    #[test]
+    fn 単語に埋め込まれたhttpはリンク化しない() {
+        let html = render("xhttps://example.com は境界がないのでリンクにしない");
+        assert!(!html.contains("<a href="));
     }
 
     #[test]
