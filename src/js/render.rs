@@ -263,7 +263,7 @@ async function mdoProcessBody(body) {
   body.querySelectorAll('a[href]').forEach((a) => {
     const href = a.getAttribute('href') || '';
     const normalizedHref = href.toLowerCase();
-    if (!(normalizedHref.startsWith('http://') || normalizedHref.startsWith('https://'))) return;
+    if (!(normalizedHref.startsWith('http://') || normalizedHref.startsWith('https://') || normalizedHref.startsWith('mailto:'))) return;
     if (a.dataset.mdoBound) return;
     a.dataset.mdoBound = '1';
     a.addEventListener('click', (e) => {
@@ -313,6 +313,16 @@ mod tests {
         assert!(
             js.contains("#0d1117"),
             "ダーク背景色 #0d1117 が見つからない"
+        );
+    }
+
+    /// 外部リンクブリッジが mailto: も external メッセージに流すコードを含む。
+    #[test]
+    fn 外部リンクブリッジがmailtoを含む() {
+        let js = post_render_js(false, false);
+        assert!(
+            js.contains("startsWith('mailto:')"),
+            "mailto: の external ブリッジが生成 JS に見つからない"
         );
     }
 

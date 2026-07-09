@@ -11,6 +11,7 @@ sequenceDiagram
     participant WV as WebView (Dioxus desktop)
 
     FS->>BG: md 読み込み
+    BG->>BG: 正規化（先頭 BOM 除去・CRLF/CR → LF）
     BG->>BG: [[wikilink]] 前処理（resolve → 相対 .md リンクに展開）
     BG->>BG: frontmatter 抽出
     BG->>BG: pulldown-cmark event 変換
@@ -24,6 +25,14 @@ sequenceDiagram
 ```
 
 ## Rust 側の処理
+
+### 入力の正規化（BOM / 改行）
+
+`markdown::normalize_source(source)` が wikilink 前処理より前に走り、後続の行指向処理を安定させる。
+
+- 先頭の UTF-8 BOM（`U+FEFF`）を除去する。BOM が残ると `---\n` 判定が外れて frontmatter が本文に漏れる。
+- `CRLF` および単独 `CR` を `LF` に変換する。Windows 由来ファイルでも frontmatter / GitHub Alerts / wikilink 前処理が正しく動く。
+- 正規化結果は render / toc / find インデックスに使う。クリップボード・raw 表示用の元ソースはバイト等価のまま保持する。
 
 ### 裸 URL の自動リンク（autolink）
 
@@ -58,7 +67,7 @@ pulldown-cmark に GFM の bare-URL autolink 拡張は無いため、`render()` 
 
 解決できなかった wikilink は `post_process` が `<a class="mdo-wikilink-unresolved">` に変換し、CSS でミュートカラー＋点線下線を付ける（href は無し）。
 
-セキュリティ: roots 外へのパス解決は拒否し、生成した相対リンクは既存の `post_process` 検証（roots 包含・`.md` 拡張子チェック）を通る。
+セキュリティ: roots 外へのパス解決は拒否し、生成した相対リンクは既存の `post_process` 検証（roots 包含・markdown 拡張子チェック）を通る。内部リンク扱いにする拡張子はサイドバー/オープン許可（`files::is_markdown`）と揃え、`.md` / `.markdown`（大文字小文字非依存）を対象とする。
 
 ### pulldown-cmark 設定
 
@@ -161,7 +170,8 @@ md ファイルの位置を基準に相対パスを解決する。ただし cano
 
 - 画像 `![](./img/a.png)` → data URL として埋め込む（svg 含む）
 - Obsidian 埋め込み `![[img.png]]` / 幅指定 `![[img.png\|400]]` → 標準画像に展開後、同じ data URL 経路で埋め込む
-- ドキュメント間リンク `[x](./other.md)` → クリックで mzed 内遷移（R-13）。外部 URL は OS の既定ブラウザで開く
+- ドキュメント間リンク `[x](./other.md)` / `[x](./note.markdown)` → クリックで mzed 内遷移（R-13）。`.md` / `.markdown`（大文字小文字非依存）が対象
+- 外部 URL（`http(s)://` / `mailto:`）は WebView 側ブリッジ経由で OS の既定アプリ（ブラウザ・メールクライアント）で開く。`mailto:` も external 経路に乗り、`external_links_in_browser` 設定に従う
 
 ### frontmatter 表示
 

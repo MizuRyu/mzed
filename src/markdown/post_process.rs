@@ -214,7 +214,10 @@ pub fn post_process(html: &str, base_dir: &Path, allowed_roots: &[PathBuf]) -> S
             }
 
             let path_part = local_path_part(&href);
-            let is_markdown = path_part.to_ascii_lowercase().ends_with(".md");
+            let lower = path_part.to_ascii_lowercase();
+            // Match the sidebar/open allowlist (`files::is_markdown`): both
+            // `.md` and `.markdown` are internal-navigable.
+            let is_markdown = lower.ends_with(".md") || lower.ends_with(".markdown");
             if is_markdown {
                 if let Some(abs) = resolve_inside_roots(&anchor_base, path_part, &anchor_roots)
                     .filter(|p| p.is_file())
@@ -480,6 +483,28 @@ mod tests {
         assert!(out.contains("data-path="));
         assert!(out.contains("other.md")); // 絶対パス内に残る
         assert!(!out.contains("href="));
+    }
+
+    #[test]
+    fn 相対markdown拡張子リンクも内部リンクに書き換える() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("note.markdown"), "# N").unwrap();
+        let out = post_process_in_root(r#"<a href="./note.markdown">x</a>"#, dir.path());
+        assert!(out.contains(r#"class="mdo-link""#), "got: {out}");
+        assert!(out.contains("data-path="), "got: {out}");
+        assert!(out.contains("note.markdown"), "got: {out}");
+        assert!(!out.contains("data-original-href"), "got: {out}");
+    }
+
+    #[test]
+    fn 大文字拡張子の内部リンクも書き換える() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("up.MD"), "# U").unwrap();
+        fs::write(dir.path().join("cap.Markdown"), "# C").unwrap();
+        let out = post_process_in_root(r#"<a href="./up.MD">y</a>"#, dir.path());
+        assert!(out.contains(r#"class="mdo-link""#), "got: {out}");
+        let out = post_process_in_root(r#"<a href="./cap.Markdown">z</a>"#, dir.path());
+        assert!(out.contains(r#"class="mdo-link""#), "got: {out}");
     }
 
     #[test]

@@ -17,6 +17,67 @@ pub use render::render;
 pub use toc::{toc, TocEntry};
 pub use wikilink::preprocess_wikilinks;
 
+/// Normalize a source file before Markdown processing:
+/// strip a leading UTF-8 BOM and convert CRLF / lone CR to LF.
+///
+/// Windows-authored notes (`\r\n`) and BOM-prefixed files otherwise break
+/// frontmatter detection (`strip_prefix("---\n")`) and other line-oriented
+/// pre-processing. Kept separate from the original source so raw/clipboard
+/// views stay byte-faithful.
+pub fn normalize_source(input: &str) -> String {
+    let input = input.strip_prefix('\u{feff}').unwrap_or(input);
+    if !input.contains('\r') {
+        return input.to_string();
+    }
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\r' {
+            if chars.peek() == Some(&'\n') {
+                chars.next();
+            }
+            out.push('\n');
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod normalize_tests {
+    use super::normalize_source;
+
+    #[test]
+    fn 先頭BOMを除去する() {
+        assert_eq!(normalize_source("\u{feff}# H"), "# H");
+    }
+
+    #[test]
+    fn CRLFをLFに変換する() {
+        assert_eq!(normalize_source("a\r\nb\r\n"), "a\nb\n");
+    }
+
+    #[test]
+    fn 単独CRもLFに変換する() {
+        assert_eq!(normalize_source("a\rb"), "a\nb");
+    }
+
+    #[test]
+    fn BOMとCRLFを同時に処理する() {
+        assert_eq!(
+            normalize_source("\u{feff}---\r\ntitle: T\r\n---\r\n"),
+            "---\ntitle: T\n---\n"
+        );
+    }
+
+    #[test]
+    fn CRが無ければ割り当てを避けても内容は同じ() {
+        assert_eq!(normalize_source("plain\ntext"), "plain\ntext");
+    }
+}
+
 /// Minimal HTML text escaping shared by the submodules.
 fn escape_html(s: &str) -> String {
     s.replace('&', "&amp;")

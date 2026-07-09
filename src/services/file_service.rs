@@ -180,13 +180,17 @@ pub(crate) fn load_document(file: Option<PathBuf>, roots: &[PathBuf]) -> Documen
     };
     let base = path.parent().unwrap_or(Path::new("."));
     let allowed_roots = allowed_roots_for_file(base, roots);
+    // Normalize BOM / CRLF before any line-oriented processing (frontmatter,
+    // alerts, wikilinks). The original `source` is kept byte-faithful for
+    // clipboard/raw display and for the find index over the on-disk text.
+    let normalized = markdown::normalize_source(&source);
     // Wikilink pre-processing expands `[[...]]` to standard Markdown links.
     // We keep the original `source` for clipboard/raw display and use the
     // expanded form only for rendering.
     let source_for_render = crate::perf::measure(
         "markdown.wikilinks",
-        &[("input_bytes", source.len().to_string())],
-        || markdown::preprocess_wikilinks(&source, base, &allowed_roots),
+        &[("input_bytes", normalized.len().to_string())],
+        || markdown::preprocess_wikilinks(&normalized, base, &allowed_roots),
     );
     let rendered = crate::perf::measure(
         "markdown.render",
@@ -208,13 +212,13 @@ pub(crate) fn load_document(file: Option<PathBuf>, roots: &[PathBuf]) -> Documen
     );
     let lower_source = crate::perf::measure(
         "markdown.find_index",
-        &[("input_bytes", source.len().to_string())],
-        || source.to_lowercase(),
+        &[("input_bytes", normalized.len().to_string())],
+        || normalized.to_lowercase(),
     );
     let toc = crate::perf::measure(
         "markdown.toc",
-        &[("input_bytes", source.len().to_string())],
-        || markdown::toc(&source),
+        &[("input_bytes", normalized.len().to_string())],
+        || markdown::toc(&normalized),
     );
 
     DocumentSnapshot {

@@ -491,6 +491,29 @@ mod tests {
     }
 
     #[test]
+    fn BOM付きファイルは正規化後にフロントマターと見出しが効く() {
+        // A raw BOM breaks frontmatter/heading parsing; normalize_source strips it.
+        let raw = "\u{feff}---\ntitle: T\n---\n\n# 見出し\n";
+        let broken = render(raw);
+        assert!(!broken.contains("<details"), "BOM未処理でも壊れない前提");
+
+        let fixed = render(&super::super::normalize_source(raw));
+        assert!(fixed.contains("<details"), "got: {fixed}");
+        assert!(
+            fixed.contains(r#"<h1 id="見出し">見出し</h1>"#),
+            "got: {fixed}"
+        );
+    }
+
+    #[test]
+    fn CRLFファイルは正規化後にフロントマターが効く() {
+        let raw = "---\r\ntitle: T\r\n---\r\n\r\n# 本文\r\n";
+        let fixed = render(&super::super::normalize_source(raw));
+        assert!(fixed.contains("<details"), "got: {fixed}");
+        assert!(fixed.contains(r#"<h1 id="本文">"#), "got: {fixed}");
+    }
+
+    #[test]
     fn alert_body_raw_html_is_not_double_escaped() {
         let html = render("> [!NOTE]\n> <b>x</b>\n");
 
