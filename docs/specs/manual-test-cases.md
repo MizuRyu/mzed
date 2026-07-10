@@ -822,3 +822,21 @@ allowlist 方式で再構築する安全な生 HTML サブセット（`<img>` / 
 | **前提** | Task View を開く |
 | **手順** | 左ペインと右ペインの境界をドラッグする |
 | **期待結果** | 左ペイン幅が 200〜600px の範囲で追従する。ドラッグ解除後も維持される（アプリ再起動での永続化は対象外） |
+
+### TV-20 足場フォルダ配下のネストしたプロジェクトを発見する
+
+| 項目 | 内容 |
+|---|---|
+| **前提** | `task_view_scan_roots` の配下に、`docs/memo/tasks` を持つ非 repo フォルダ（例 `hoge`）があり、さらにその子（例 `hoge/workspace`）も `docs/memo/tasks` を持つ |
+| **手順** | Task View → All Projects に切り替える |
+| **期待結果** | `hoge` と `hoge/workspace` の両方がプロジェクトとして表示される。tasks ツリー自体（`hoge/docs` 配下）は別プロジェクトとして走査されない |
+| **自動化済み** | `src/services/task_scan.rs` の `discover_projects_finds_nested_project_under_adopted_dir`, `discover_projects_nested_stops_at_repo_boundary` |
+
+### TV-21 プロジェクトルートを scan_root に直接指定できる
+
+| 項目 | 内容 |
+|---|---|
+| **前提** | `task_view_scan_roots` にプロジェクトルート自体（`<root>/docs/memo/tasks` を持つパス）を指定 |
+| **手順** | Task View → All Projects に切り替える |
+| **期待結果** | scan_root 自身がプロジェクトとして表示される（repo 内部のディレクトリを指定した場合も同様に歩ける） |
+| **自動化済み** | `src/services/task_scan.rs` の `scan_all_projects_adopts_scan_root_itself` |

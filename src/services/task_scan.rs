@@ -8,7 +8,9 @@
 //! ## Discovery design (spec §走査)
 //!
 //! - `scan_roots` → pruned recursive walk with repo-boundary stop → project
-//!   directories where `<dir>/<subpath>` exists
+//!   directories where `<dir>/<subpath>` exists (a scan root itself is also
+//!   checked, and adopting a non-repo directory does not stop the walk —
+//!   nested projects underneath are still discovered)
 //! - `<project>/<subpath>` → `readdir` (1 level) for task folders
 //! - `<task-folder>/task.md` → read first 4 KiB for frontmatter only
 //! - Repo boundary: if `<dir>/.git` exists, treat `dir` as repo root and do
@@ -343,11 +345,15 @@ pub(crate) fn is_walk_pruned(name: &str, extra_exclude: &[String]) -> bool {
 ///
 /// ### Algorithm (per spec §走査・解析の実装方針)
 ///
-/// For each non-pruned directory entry `path` under `root`:
+/// For each non-pruned directory entry `path` under `root` (except the one
+/// named `skip_child`, if any):
 /// 1. If `<path>/<subpath>` is a directory → adopt `path` as a project root.
 /// 2. If `<path>/.git` exists → treat `path` as a repo root; **do not recurse**
 ///    (the tasks subpath was already tested in step 1).
-/// 3. If neither → recurse into `path` with `depth + 1`.
+/// 3. Otherwise recurse into `path` with `depth + 1` — even when `path` was
+///    adopted, so nested projects under a "scaffold" project are found. In
+///    that case the child matching the first subpath segment is skipped so
+///    the walk never enters the adopted project's own tasks tree.
 ///
 /// This ensures the walk never enters a repository's interior, keeping the
 /// traversal cost bounded to the shallow "scaffold" above repo roots even
@@ -360,6 +366,7 @@ pub fn discover_projects(
     depth: usize,
     found: &mut Vec<PathBuf>,
     extra_exclude: &[String],
+    skip_child: Option<&str>,
 ) {
     if depth > MAX_WALK_DEPTH {
         return;
@@ -373,7 +380,7 @@ pub fn discover_projects(
             continue;
         }
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if is_walk_pruned(name, extra_exclude) {
+        if is_walk_pruned(name, extra_exclude) || Some(name) == skip_child {
             continue;
         }
 
@@ -391,10 +398,21 @@ pub fn discover_projects(
             continue;
         }
 
-        // Step 3: no tasks dir and not a repo root → recurse.
-        if !has_tasks {
-            discover_projects(&path, subpath_segments, depth + 1, found, extra_exclude);
-        }
+        // Step 3: recurse. If path was adopted, keep going (nested projects)
+        // but never descend into its own subpath scaffold.
+        let skip = if has_tasks {
+            subpath_segments.first().copied()
+        } else {
+            None
+        };
+        discover_projects(
+            &path,
+            subpath_segments,
+            depth + 1,
+            found,
+            extra_exclude,
+            skip,
+        );
     }
 }
 
@@ -420,7 +438,21 @@ pub fn scan_all_projects_blocking(
         let subpath_segs: Vec<&str> = subpath.split('/').filter(|s| !s.is_empty()).collect();
         let mut v: Vec<PathBuf> = Vec::new();
         for root in scan_roots {
-            discover_projects(root, &subpath_segs, 0, &mut v, extra_exclude);
+            // The scan root itself may be a project (e.g. a project root
+            // passed directly instead of a parent directory).
+            let root_tasks = subpath_segs
+                .iter()
+                .fold(root.clone(), |acc, seg| acc.join(seg));
+            let root_has_tasks = root_tasks.is_dir();
+            if root_has_tasks && !v.contains(root) {
+                v.push(root.clone());
+            }
+            let skip = if root_has_tasks {
+                subpath_segs.first().copied()
+            } else {
+                None
+            };
+            discover_projects(root, &subpath_segs, 0, &mut v, extra_exclude, skip);
         }
         v
     };
@@ -660,7 +692,7 @@ outputs:
 
         let segs = ["docs", "memo", "tasks"];
         let mut found = Vec::new();
-        discover_projects(root, &segs, 0, &mut found, &[]);
+        discover_projects(root, &segs, 0, &mut found, &[], None);
 
         assert_eq!(found.len(), 1);
         assert_eq!(found[0], root.join("a/b/proj"));
@@ -682,7 +714,7 @@ outputs:
 
         let segs = ["docs", "memo", "tasks"];
         let mut found = Vec::new();
-        discover_projects(root, &segs, 0, &mut found, &[]);
+        discover_projects(root, &segs, 0, &mut found, &[], None);
 
         assert_eq!(found.len(), 1);
         assert_eq!(found[0], root.join("real-proj"));
@@ -703,7 +735,7 @@ outputs:
 
         let segs = ["docs", "memo", "tasks"];
         let mut found = Vec::new();
-        discover_projects(root, &segs, 0, &mut found, &[]);
+        discover_projects(root, &segs, 0, &mut found, &[], None);
 
         assert!(
             found.is_empty(),
@@ -723,7 +755,7 @@ outputs:
 
         let segs = ["docs", "memo", "tasks"];
         let mut found = Vec::new();
-        discover_projects(root, &segs, 0, &mut found, &[]);
+        discover_projects(root, &segs, 0, &mut found, &[], None);
 
         assert_eq!(found.len(), 3);
         for proj in &["alpha", "beta", "gamma"] {
@@ -732,6 +764,71 @@ outputs:
                 "missing {proj}"
             );
         }
+    }
+
+    #[test]
+    fn discover_projects_finds_nested_project_under_adopted_dir() {
+        // hoge/docs/memo/tasks + hoge/workspace/docs/memo/tasks — both must
+        // be found (adopting a non-repo dir does not stop the walk).
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        make_task(&root.join("hoge/docs/memo/tasks"), "260710-01-outer");
+        make_task(
+            &root.join("hoge/workspace/docs/memo/tasks"),
+            "260710-01-nested",
+        );
+
+        let segs = ["docs", "memo", "tasks"];
+        let mut found = Vec::new();
+        discover_projects(root, &segs, 0, &mut found, &[], None);
+
+        assert_eq!(found.len(), 2);
+        assert!(found.contains(&root.join("hoge")));
+        assert!(found.contains(&root.join("hoge/workspace")));
+    }
+
+    #[test]
+    fn discover_projects_nested_stops_at_repo_boundary() {
+        // hoge adopted, hoge/repo has .git → repo's own tasks found via
+        // step 1, but nothing deeper inside repo.
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+
+        make_task(&root.join("hoge/docs/memo/tasks"), "260710-01-outer");
+        fs::create_dir_all(root.join("hoge/repo/.git")).unwrap();
+        make_task(&root.join("hoge/repo/docs/memo/tasks"), "260710-01-repo");
+        make_task(
+            &root.join("hoge/repo/src/deep/docs/memo/tasks"),
+            "260710-01-buried",
+        );
+
+        let segs = ["docs", "memo", "tasks"];
+        let mut found = Vec::new();
+        discover_projects(root, &segs, 0, &mut found, &[], None);
+
+        assert_eq!(found.len(), 2);
+        assert!(found.contains(&root.join("hoge")));
+        assert!(found.contains(&root.join("hoge/repo")));
+    }
+
+    #[test]
+    fn scan_all_projects_adopts_scan_root_itself() {
+        // scan_roots pointing directly at a project root must pick it up.
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().to_path_buf();
+        make_task(&root.join("docs/memo/tasks"), "260710-01-root-task");
+
+        let items = scan_all_projects_blocking(
+            std::slice::from_ref(&root),
+            &[],
+            "docs/memo/tasks",
+            None,
+            &[],
+        );
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].project_path, root);
     }
 
     #[test]
@@ -751,7 +848,7 @@ outputs:
 
         let segs = ["docs", "memo", "tasks"];
         let mut found = Vec::new();
-        discover_projects(root, &segs, 0, &mut found, &[]);
+        discover_projects(root, &segs, 0, &mut found, &[], None);
 
         assert_eq!(found.len(), 1);
         assert_eq!(found[0], root.join("proj"));
@@ -783,7 +880,7 @@ outputs:
 
         let segs = ["docs", "memo", "tasks"];
         let mut found = Vec::new();
-        discover_projects(root, &segs, 0, &mut found, &[]);
+        discover_projects(root, &segs, 0, &mut found, &[], None);
 
         // repo itself is found (its docs/memo/tasks exists).
         assert_eq!(found.len(), 1, "expected exactly the repo root to be found");
@@ -806,7 +903,7 @@ outputs:
 
         let segs = ["docs", "memo", "tasks"];
         let mut found = Vec::new();
-        discover_projects(root, &segs, 0, &mut found, &[]);
+        discover_projects(root, &segs, 0, &mut found, &[], None);
 
         assert!(
             found.is_empty(),
