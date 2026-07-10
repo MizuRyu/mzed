@@ -518,12 +518,14 @@ pub(crate) fn TaskView(
                                                             }
                                                         }
                                                     }
-                                                    // Extra output files
+                                                    // Other files in the task folder. Markdown opens in the
+                                                    // right pane; anything else opens in the default app.
                                                     for extra in extra_files.clone() {
                                                         {
                                                             let name = extra.file_name()
                                                                 .map(|s| s.to_string_lossy().to_string())
                                                                 .unwrap_or_default();
+                                                            let extra_is_md = crate::files::is_markdown(&extra);
                                                             let is_sel = selected.read().as_ref()
                                                                 .map(|(p, _)| p == &extra).unwrap_or(false);
                                                             let row_bg = if is_sel {
@@ -548,7 +550,11 @@ pub(crate) fn TaskView(
                                                                             border-radius: 0 4px 4px 0;",
                                                                     class: "mdo-tree-row",
                                                                     onclick: move |_| {
-                                                                        selected.set(Some((c_path.clone(), c_proj.clone())));
+                                                                        if extra_is_md {
+                                                                            selected.set(Some((c_path.clone(), c_proj.clone())));
+                                                                        } else if let Err(err) = services::platform::open_target(&c_path) {
+                                                                            on_toast.call(format!("Open failed: {err}"));
+                                                                        }
                                                                     },
                                                                     oncontextmenu: move |e| {
                                                                         e.prevent_default();

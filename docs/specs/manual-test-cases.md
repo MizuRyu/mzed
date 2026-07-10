@@ -840,3 +840,12 @@ allowlist 方式で再構築する安全な生 HTML サブセット（`<img>` / 
 | **手順** | Task View → All Projects に切り替える |
 | **期待結果** | scan_root 自身がプロジェクトとして表示される（repo 内部のディレクトリを指定した場合も同様に歩ける） |
 | **自動化済み** | `src/services/task_scan.rs` の `scan_all_projects_adopts_scan_root_itself` |
+
+### TV-22 タスクフォルダ内の全ファイルが表示される
+
+| 項目 | 内容 |
+|---|---|
+| **前提** | タスクフォルダに `task.md` のほか、frontmatter の `outputs` に載っていない md・画像・テキスト等のファイルがある |
+| **手順** | Task View でタスクフォルダを展開する。(1) md ファイル行をクリック。(2) 非 md ファイル行（画像等）をクリック |
+| **期待結果** | フォルダ内の全ファイルが名前順で表示される（`.` 始まりの隠しファイルとサブディレクトリは出ない）。(1) md は右ペインに描画される。(2) 非 md は OS の既定アプリで開く |
+| **自動化済み** | `src/services/task_scan.rs` の `list_task_files_lists_all_but_task_md_and_dotfiles` |

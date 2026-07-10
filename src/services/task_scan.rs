@@ -13,6 +13,8 @@
 //!   nested projects underneath are still discovered)
 //! - `<project>/<subpath>` → `readdir` (1 level) for task folders
 //! - `<task-folder>/task.md` → read first 4 KiB for frontmatter only
+//! - `<task-folder>/*` → all other files listed as-is (1 level, dot-files
+//!   excluded, sorted by name)
 //! - Repo boundary: if `<dir>/.git` exists, treat `dir` as repo root and do
 //!   not recurse into it (tasks subpath was already checked in step 1).
 //! - Pruned dirs: `node_modules`, `target`, `dist`, `build`, `.git`,
@@ -65,8 +67,6 @@ pub struct TaskMeta {
     pub status: TaskStatus,
     /// Six-digit date string `yymmdd`, e.g. `"260706"`.
     pub created: String,
-    /// File names listed in the `outputs` YAML sequence.
-    pub outputs: Vec<String>,
 }
 
 /// One task folder entry with metadata and resolved file paths.
@@ -79,7 +79,8 @@ pub struct TaskItem {
     /// Path to `task.md` inside the folder.
     pub task_md: PathBuf,
     pub meta: TaskMeta,
-    /// Paths from `outputs` that actually exist on disk.
+    /// All other files in the task folder (one level, dot-files excluded),
+    /// sorted by name.
     pub extra_files: Vec<PathBuf>,
 }
 
@@ -87,10 +88,10 @@ pub struct TaskItem {
 // Pure functions (OS-agnostic, fully unit-testable)
 // ---------------------------------------------------------------------------
 
-/// Extract `status`, `created`, and `outputs` from raw YAML frontmatter text.
+/// Extract `status` and `created` from raw YAML frontmatter text.
 ///
 /// Handles malformed input gracefully: any parse error returns the default
-/// (`status: Unknown`, empty `created`, empty `outputs`).
+/// (`status: Unknown`, empty `created`).
 pub fn extract_task_frontmatter(content: &str) -> TaskMeta {
     let Some(rest) = content.strip_prefix("---\n") else {
         return TaskMeta::default();
@@ -113,26 +114,8 @@ pub fn extract_task_frontmatter(content: &str) -> TaskMeta {
 
     let mut status = TaskStatus::Unknown;
     let mut created = String::new();
-    let mut outputs: Vec<String> = Vec::new();
-    let mut in_outputs = false;
 
     for line in yaml.lines() {
-        if in_outputs {
-            let trimmed = line.trim();
-            if let Some(val) = trimmed.strip_prefix("- ") {
-                outputs.push(val.trim().to_string());
-                continue;
-            } else if let Some(val) = trimmed.strip_prefix('-') {
-                outputs.push(val.trim().to_string());
-                continue;
-            } else if !trimmed.is_empty() && !line.starts_with(' ') && !line.starts_with('\t') {
-                // Back to non-indented content: outputs list ended.
-                in_outputs = false;
-            } else {
-                continue;
-            }
-        }
-
         if let Some(val) = line.strip_prefix("status:") {
             status = match val.trim() {
                 "todo" => TaskStatus::Todo,
@@ -143,16 +126,10 @@ pub fn extract_task_frontmatter(content: &str) -> TaskMeta {
             };
         } else if let Some(val) = line.strip_prefix("created:") {
             created = val.trim().to_string();
-        } else if line.starts_with("outputs:") {
-            in_outputs = true;
         }
     }
 
-    TaskMeta {
-        status,
-        created,
-        outputs,
-    }
+    TaskMeta { status, created }
 }
 
 /// Gregorian Julian Day Number for (y, m, d).
@@ -243,6 +220,25 @@ fn read_task_meta(task_md: &Path) -> TaskMeta {
     extract_task_frontmatter(&String::from_utf8_lossy(&buf))
 }
 
+/// List all files in a task folder except `task.md` and dot-files
+/// (one level, no recursion), sorted by name.
+fn list_task_files(folder_path: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(folder_path) else {
+        return Vec::new();
+    };
+    let mut files: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file())
+        .filter(|p| {
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            !name.starts_with('.') && name != "task.md"
+        })
+        .collect();
+    files.sort();
+    files
+}
+
 /// Scan one project for task folders (fixed-path, no recursion).
 ///
 /// Checks `project_path/<subpath>` with `is_dir`, then reads its direct
@@ -276,13 +272,7 @@ pub fn scan_project_tasks(project_path: &Path, subpath: &str) -> Vec<TaskItem> {
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
-        // Resolve outputs to existing paths.
-        let extra_files: Vec<PathBuf> = meta
-            .outputs
-            .iter()
-            .map(|name| folder_path.join(name))
-            .filter(|p| p.is_file())
-            .collect();
+        let extra_files = list_task_files(&folder_path);
 
         items.push(TaskItem {
             project_name: project_name.clone(),
@@ -494,7 +484,7 @@ mod tests {
     // ── frontmatter extraction ───────────────────────────────────────────
 
     #[test]
-    fn frontmatter_parses_status_created_outputs() {
+    fn frontmatter_parses_status_and_created() {
         let content = "\
 ---
 status: in_progress
@@ -509,7 +499,6 @@ outputs:
         let meta = extract_task_frontmatter(content);
         assert_eq!(meta.status, TaskStatus::InProgress);
         assert_eq!(meta.created, "260706");
-        assert_eq!(meta.outputs, vec!["report.md", "notes.txt"]);
     }
 
     #[test]
@@ -535,7 +524,6 @@ outputs:
         let meta = extract_task_frontmatter("## No frontmatter here");
         assert_eq!(meta.status, TaskStatus::Unknown);
         assert!(meta.created.is_empty());
-        assert!(meta.outputs.is_empty());
     }
 
     #[test]
@@ -545,12 +533,21 @@ outputs:
     }
 
     #[test]
-    fn frontmatter_empty_outputs_list_is_empty() {
-        let content = "---\nstatus: todo\ncreated: 260101\noutputs: []\n---\n";
-        let meta = extract_task_frontmatter(content);
-        // "outputs: []" (flow syntax) is not parsed as items — acceptable for v1.
-        // The block-sequence style is what task-creator generates.
-        assert!(meta.outputs.is_empty() || !meta.outputs.is_empty()); // no crash
+    fn list_task_files_lists_all_but_task_md_and_dotfiles() {
+        let tmp = TempDir::new().unwrap();
+        let folder = tmp.path().join("260710-01-task");
+        make_task(tmp.path(), "260710-01-task");
+        for name in &["b-notes.txt", "a-report.md", "image.png", ".DS_Store"] {
+            fs::write(folder.join(name), b"x").unwrap();
+        }
+        fs::create_dir(folder.join("subdir")).unwrap();
+
+        let files: Vec<String> = list_task_files(&folder)
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        // task.md, dot-files, and directories are excluded; sorted by name.
+        assert_eq!(files, vec!["a-report.md", "b-notes.txt", "image.png"]);
     }
 
     // ── date judgment ────────────────────────────────────────────────────

@@ -13,9 +13,9 @@
 ## データモデル（task-creator 準拠 / 固定）
 
 - タスク = `<project>/docs/memo/tasks/<yymmdd-NN-タスク名>/task.md`
-- `task.md` frontmatter: `status`(todo|in_progress|review|done), `created`(yymmdd), `outputs`([ファイル名]), ほか `task_ref` / `project` / `worklog_sync` / `referenced_knowledge`
+- `task.md` frontmatter: `status`(todo|in_progress|review|done), `created`(yymmdd), ほか `outputs` /  `task_ref` / `project` / `worklog_sync` / `referenced_knowledge`
 - 本文: `## TODO`, `## 成果物（完了条件）`(任意), `## userの依頼`
-- タスクフォルダ内の追加成果物ファイル（`outputs` に列挙）も子として扱う
+- タスクフォルダ内の他のファイルは**全列挙**して子として扱う（1階層、`.` 始まりの隠しファイルとサブディレクトリは除外、名前順）。frontmatter の `outputs` は表示に使わない
 
 ## 起動と全体構成
 
@@ -49,7 +49,7 @@
 ## 右ペイン: タスク詳細
 
 - 選択したタスクフォルダ行 or `task.md` 行クリックで、その `task.md` を既存レンダリングで表示。
-- 成果物（`outputs`）はファイルリンクとして辿れる（クリックで同ペインに表示 or タブで開く。既存の `.md` リンク遷移機構を流用）。
+- タスクフォルダ内の他ファイルも行として辿れる。Markdown（`.md` / `.markdown`）はクリックで同ペインに表示、それ以外（画像・ログ等）はクリックで OS の既定アプリで開く。
 - ヘッダに status バッジ・`created`・フルパス（muted）。
 
 ## 設定（config）
@@ -81,7 +81,7 @@
 - **枝刈り（必須）**: 次の名前のディレクトリには入らない — `node_modules` / `target` / `dist` / `build` / `.git` / `Library` / 先頭が `.` の隠しディレクトリ、および **macOS の TCC 保護・クラウドフォルダ**（`Desktop` / `Documents` / `Downloads` / `Pictures` / `Movies` / `Music` / `Public` / `Applications` / `Dropbox` / `Google Drive` / `OneDrive*`）。保護フォルダに触れるとアクセス許可ダイアログが出る（ad-hoc 署名のため再ビルドごとにリセットされる）ので、走査自体が触れないことが重要。そこにリポを置いている場合は該当フォルダを scan_roots に明示追加する。深さ上限を設ける（例: 10）。加えて config の `task_view_scan_exclude` でユーザー定義の除外名を追加できる。
 - **タスク列挙**: 発見した `<subpath>` を `readdir` し、各エントリ配下の `task.md` を確認。
 - **セッションキャッシュ**: 走査結果はアプリ内にキャッシュし、Task View を開くたび・スコープ/日数を変えるたびに**丸ごと再 walk しない**。キャッシュキーは (scope, scan_roots, subpath, days)。ヘッダに手動「↻ 更新」を置き、明示時のみ再走査。初回だけコストを払う。
-- **frontmatter だけ読む**: 各 `task.md` は先頭の frontmatter（最初の `---` 〜 次の `---`）だけ読み、`status`/`created`/`outputs` を抽出。本文は読まない（詳細ペインを開いたときに初めて全体を読む）。既存 `src/markdown/frontmatter.rs` を参考に最小パーサを用意。
+- **frontmatter だけ読む**: 各 `task.md` は先頭の frontmatter（最初の `---` 〜 次の `---`）だけ読み、`status`/`created` を抽出。本文は読まない（詳細ペインを開いたときに初めて全体を読む）。既存 `src/markdown/frontmatter.rs` を参考に最小パーサを用意。
 - スキャンは非同期（`spawn` + `spawn_blocking`）でバックグラウンド実行。UI は止めない。
 - 壊れた frontmatter は status 不明扱いで一覧には出す（クラッシュしない）。
 - `created`(yymmdd) を今日のローカル日付と比較して N 日以内を判定。
@@ -123,7 +123,7 @@ Task View 固有の `TaskCtxMenu` overlay（`task_view.rs` 内）。メインの
 
 ## テスト
 
-- frontmatter 抽出（status/created/outputs、壊れ入力）の純粋関数ユニットテスト。
+- frontmatter 抽出（status/created、壊れ入力）の純粋関数ユニットテスト。
 - 「直近 N 日」判定の純粋関数ユニットテスト（境界: ちょうど N 日前、N+1 日前）。
 - 走査結果の集約（プロジェクト別グルーピング、created 降順ソート）のユニットテスト。
 - 手動 TC を `docs/specs/manual-test-cases.md` に追加（起動トグル / This⇔All / 日数フィルタ / status 色 / 詳細表示 / feature OFF 無効化 / scan_roots 空時）。
