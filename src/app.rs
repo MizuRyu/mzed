@@ -11,7 +11,7 @@ use dioxus::prelude::*;
 use instance::Msg;
 use services::file_service;
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -417,6 +417,13 @@ pub(crate) fn App() -> Element {
     // All sidebar roots (multi-root Zed workspaces aggregate here). `root` stays
     // the primary/first root for headers and relative paths.
     let mut roots = use_signal(Vec::<PathBuf>::new);
+    // Render-only roots for standalone files opened outside the project (drag &
+    // drop, IPC). They let relative images and links inside such a file resolve
+    // without pulling its directory into the sidebar tree, the watcher, or the
+    // Task View scope. Session-local; never persisted.
+    let mut loose_roots = use_signal(Vec::<PathBuf>::new);
+    // Nesting depth of the current file drag over the window (0 = not dragging).
+    let mut drag_depth = use_signal(|| 0u32);
     let mut tabs = use_signal(Tabs::default);
     // Split view: a second (right) pane with its own independent tab set. `split`
     // toggles its visibility; `active_pane` (0=left, 1=right) is the focused pane
@@ -804,23 +811,23 @@ pub(crate) fn App() -> Element {
         }
     };
 
-    // Make a file renderable before opening it: with no project yet its parent
-    // becomes the root; with a project open but the file outside every root,
-    // the parent is appended as an extra session root so relative images and
-    // links resolve (dropped or CLI-opened files outside the project).
-    let mut ensure_root_for = move |path: &Path| {
-        let Some(parent) = path.parent() else {
-            return;
-        };
-        if root().is_none() {
-            let p = parent.to_path_buf();
-            root.set(Some(p.clone()));
-            roots.set(vec![p]);
-        } else if !roots().iter().any(|r| path.starts_with(r)) {
-            let mut rs = roots();
-            rs.push(parent.to_path_buf());
-            roots.set(rs);
+    // Open a standalone file without touching the project: the file gets a tab
+    // and renders, but its directory never joins `roots`, so the sidebar tree
+    // and the Task View / watcher scope stay on the current project. Its parent
+    // is registered as a render-only root (`loose_roots`) so relative images and
+    // links inside it still resolve.
+    let mut open_loose = move |path: PathBuf| {
+        if let Some(parent) = path.parent() {
+            let parent = parent.to_path_buf();
+            let known = roots().iter().any(|r| path.starts_with(r))
+                || loose_roots().iter().any(|r| path.starts_with(r));
+            if !known {
+                let mut ls = loose_roots();
+                ls.push(parent);
+                loose_roots.set(ls);
+            }
         }
+        open_active(path);
     };
 
     // Apply one IPC/initial message to the live state: open a file in a tab, or
@@ -829,15 +836,33 @@ pub(crate) fn App() -> Element {
         Msg::NewWindow => open_main_window(),
         Msg::Open { path } => {
             if path.is_file() && files::is_markdown(&path) {
-                ensure_root_for(&path);
-                open_active(path);
+                // A file opened with no project yet establishes one (CLI
+                // `mzed file.md`); with a project open it stays standalone.
+                if root().is_none() {
+                    if let Some(parent) = path.parent() {
+                        let p = parent.to_path_buf();
+                        root.set(Some(p.clone()));
+                        roots.set(vec![p]);
+                    }
+                    open_active(path);
+                } else {
+                    open_loose(path);
+                }
             }
         }
         Msg::OpenMany { paths } => {
             for path in paths {
                 if path.is_file() && files::is_markdown(&path) {
-                    ensure_root_for(&path);
-                    open_active(path);
+                    if root().is_none() {
+                        if let Some(parent) = path.parent() {
+                            let p = parent.to_path_buf();
+                            root.set(Some(p.clone()));
+                            roots.set(vec![p]);
+                        }
+                        open_active(path);
+                    } else {
+                        open_loose(path);
+                    }
                 }
             }
         }
@@ -1002,12 +1027,25 @@ pub(crate) fn App() -> Element {
             .collect::<Vec<_>>()
     });
 
+    // Roots the renderer is allowed to resolve paths under: the project roots
+    // plus the render-only roots of standalone files. Everything else (sidebar
+    // tree, watcher, Task View, palette) keeps using `roots` alone.
+    let doc_roots = use_memo(move || {
+        let mut rs = roots();
+        for p in loose_roots() {
+            if !rs.contains(&p) {
+                rs.push(p);
+            }
+        }
+        rs
+    });
+
     // Read and render each pane off the UI thread. The snapshot derives rendered
     // HTML, raw HTML, ToC, and find counts from one source read.
     use_effect(move || {
         reload();
         let path = active();
-        let current_roots = roots();
+        let current_roots = doc_roots();
         let generation = document_generation.write().advance();
         document.set(file_service::DocumentSnapshot::loading(path.clone()));
         spawn(async move {
@@ -1030,7 +1068,7 @@ pub(crate) fn App() -> Element {
     use_effect(move || {
         reload();
         let path = if split() { active_r() } else { None };
-        let current_roots = roots();
+        let current_roots = doc_roots();
         let generation = document_generation_r.write().advance();
         document_r.set(file_service::DocumentSnapshot::loading(path.clone()));
         spawn(async move {
@@ -1824,17 +1862,35 @@ pub(crate) fn App() -> Element {
             let panel_bg = if dark { "#161b22" } else { "#f6f8fa" };
             let panel_border = if dark { "#30363d" } else { "#d0d7de" };
             let body_bg = if dark { "#0d1117" } else { "#ffffff" };
+            // Drop overlay palette.
+            let drop_bg = if dark { "rgba(13,17,23,0.72)" } else { "rgba(255,255,255,0.72)" };
+            let drop_panel = if dark { "rgba(22,27,34,0.9)" } else { "rgba(246,248,250,0.9)" };
+            let drop_border = if dark { "#58a6ff" } else { "#0969da" };
+            let drop_fg = if dark { "#c9d1d9" } else { "#1f2328" };
+            let drop_muted = if dark { "#8b949e" } else { "#57606a" };
             // Zoom is handled globally via the webview's native page zoom.
             rsx! {
                 div {
                     style: "position: fixed; inset: 0; display: flex; flex-direction: column; width: 100vw; height: 100vh; margin: 0; overflow: hidden; background: {body_bg};",
-                    // File drag & drop anywhere in the window (VSCode-style):
-                    // a dropped markdown file opens in the focused pane (its
-                    // parent joins the session roots when outside the project),
-                    // a dropped directory becomes the project root.
+                    // File drag & drop anywhere in the window. A dropped markdown
+                    // file opens standalone in the focused pane (the project is
+                    // untouched); a dropped directory switches the project root.
+                    // `drag_depth` counts enter/leave pairs so moving the cursor
+                    // between child elements doesn't flicker the overlay off.
+                    ondragenter: move |e| {
+                        e.prevent_default();
+                        drag_depth += 1;
+                    },
                     ondragover: move |e| e.prevent_default(),
+                    ondragleave: move |e| {
+                        e.prevent_default();
+                        if drag_depth() > 0 {
+                            drag_depth -= 1;
+                        }
+                    },
                     ondrop: move |e: DragEvent| {
                         e.prevent_default();
+                        drag_depth.set(0);
                         for fd in e.files() {
                             let path = fd.path();
                             if path.is_dir() {
@@ -2293,6 +2349,39 @@ pub(crate) fn App() -> Element {
                                         ctx_menu.set(None);
                                     },
                                     "ゴミ箱へ移動" }
+                            }
+                        }
+                    }
+                }
+                // Drop overlay: covers the window while a file is dragged over
+                // it. `pointer-events: none` so it never eats the drag events —
+                // the frame div below keeps receiving dragover/drop.
+                if drag_depth() > 0 {
+                    div {
+                        class: "mdo-drop-overlay",
+                        style: "position: fixed; inset: 0; z-index: 1500; pointer-events: none; \
+                                display: flex; align-items: center; justify-content: center; \
+                                background: {drop_bg}; backdrop-filter: blur(2px);",
+                        div {
+                            style: "display: flex; flex-direction: column; align-items: center; gap: 14px; \
+                                    padding: 36px 52px; border-radius: 16px; \
+                                    border: 2px dashed {drop_border}; background: {drop_panel};",
+                            svg {
+                                width: "44", height: "44", view_box: "0 0 24 24", fill: "none",
+                                stroke: "{drop_fg}", stroke_width: "1.6",
+                                stroke_linecap: "round", stroke_linejoin: "round",
+                                path { d: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" }
+                                path { d: "M14 2v6h6" }
+                                path { d: "M12 18v-6" }
+                                path { d: "M9 15l3-3 3 3" }
+                            }
+                            span {
+                                style: "font: 600 15px -apple-system, sans-serif; color: {drop_fg};",
+                                "ドロップして開く"
+                            }
+                            span {
+                                style: "font: 12px -apple-system, sans-serif; color: {drop_muted};",
+                                "Markdown ファイル、またはフォルダ"
                             }
                         }
                     }

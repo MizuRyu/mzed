@@ -69,6 +69,8 @@ pulldown-cmark に GFM の autolink 拡張は無いため、`render()` 内の後
 
 セキュリティ: roots 外へのパス解決は拒否し、生成した相対リンクは既存の `post_process` 検証（roots 包含・markdown 拡張子チェック）を通る。内部リンク扱いにする拡張子はサイドバー/オープン許可（`files::is_markdown`）と揃え、`.md` / `.markdown`（大文字小文字非依存）を対象とする。
 
+レンダラに渡す roots は「プロジェクト roots ＋ 単体ファイルの描画専用 root（`loose_roots`）」。ドラッグ & ドロップや IPC でプロジェクト外の md を開いたとき、そのファイルの親ディレクトリだけが描画専用 root として加わり、相対画像・リンクが解決できる。サイドバーツリー・ファイル監視・Task View・パレットはプロジェクト roots のみを見る（ドロップでプロジェクトが汚れない）。描画専用 root はセッション永続化の対象外。
+
 ### pulldown-cmark 設定
 
 GitHub 互換のため以下の拡張を有効化する。
