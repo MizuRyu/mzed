@@ -32,6 +32,10 @@ pub enum AppCommand {
     OpenTaskView,
     /// Re-scan the Task View task list (Cmd+R). No-op unless Task View is open.
     TaskViewRefresh,
+    /// Toggle Task View scope This Project ⇄ All Projects (Ctrl+Tab).
+    /// Falls back to NextTab behaviour when Task View is closed, since the
+    /// default binding shadows the fixed Ctrl+Tab tab-switch shortcut.
+    TaskViewToggleScope,
     Escape,
 }
 

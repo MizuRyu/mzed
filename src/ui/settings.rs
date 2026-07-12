@@ -713,6 +713,7 @@ fn action_label(action: &str) -> &'static str {
         "settings" => "設定",
         "toggle_sync_pin" => "Sync モード切替",
         "task_view_refresh" => "Task View 再スキャン",
+        "task_view_toggle_scope" => "Task View スコープ切替",
         other => Box::leak(other.to_string().into_boxed_str()),
     }
 }

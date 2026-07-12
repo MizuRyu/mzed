@@ -154,6 +154,7 @@ mzed [PATH...] [--sync <auto|self|off>]
 | `toggle_fav` | Cmd+D | お気に入り登録/解除 |
 | `open_task_view` | Cmd+Shift+D | Task View モードをトグル（`feature_task_view` が ON のとき有効） |
 | `task_view_refresh` | Cmd+R | Task View のタスク一覧を再スキャン（Task View 表示中のみ） |
+| `task_view_toggle_scope` | Ctrl+Tab | Task View の This Project ⇄ All Projects をトグル（閉じているときは従来どおり次のタブへ） |
 | `copy_path` | Cmd+Shift+C | ファイルパスをコピー |
 | `close_tab` | Cmd+W | タブを閉じる |
 | `settings` | Cmd+, | 設定画面を開く |
@@ -162,7 +163,7 @@ mzed [PATH...] [--sync <auto|self|off>]
 ### 固定ショートカット（変更不可）
 
 - `Cmd+1` / `Cmd+2`: 左/右ペインにフォーカス
-- `Ctrl+Tab` / `Ctrl+Shift+Tab`: 次/前のタブ
+- `Ctrl+Tab` / `Ctrl+Shift+Tab`: 次/前のタブ（Ctrl+Tab は Task View 表示中は `task_view_toggle_scope` が優先）
 - `Enter`（テキスト入力外）: 選択ファイルのリネーム
 - `Esc`: オーバーレイを閉じる
 - `Cmd+=` / `Cmd+-` / `Cmd+0`: ズームイン / ズームアウト / リセット

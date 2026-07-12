@@ -849,3 +849,12 @@ allowlist 方式で再構築する安全な生 HTML サブセット（`<img>` / 
 | **手順** | Task View でタスクフォルダを展開する。(1) md ファイル行をクリック。(2) 非 md ファイル行（画像等）をクリック |
 | **期待結果** | フォルダ内の全ファイルが名前順で表示される（`.` 始まりの隠しファイルとサブディレクトリは出ない）。(1) md は右ペインに描画される。(2) 非 md は OS の既定アプリで開く |
 | **自動化済み** | `src/services/task_scan.rs` の `list_task_files_lists_all_but_task_md_and_dotfiles` |
+
+### TV-23 Ctrl+Tab でスコープ切替
+
+| 項目 | 内容 |
+|---|---|
+| **前提** | Task View を開く（This Project 表示） |
+| **手順** | (1) Ctrl+Tab を押す。(2) もう一度 Ctrl+Tab を押す。(3) Task View を閉じ、タブを2つ以上開いて Ctrl+Tab を押す |
+| **期待結果** | (1) All Projects に切り替わる。(2) This Project に戻る（選択中タスクは解除）。(3) 従来どおり次のタブに切り替わる |
+| **備考** | `task_view_toggle_scope`（リバインド可、既定 Ctrl+Tab）。Task View が閉じているときは固定の次タブ切替へフォールバック |

@@ -34,6 +34,8 @@ pub(crate) fn TaskView(
     fs_tick: Signal<u32>,
     /// Bumped by the app (Cmd+R) or the ↻ header button to force a re-scan.
     mut refresh_token: Signal<u32>,
+    /// Bumped by the app (Ctrl+Tab) to toggle This Project ⇄ All Projects.
+    scope_token: Signal<u32>,
     scan_roots: Signal<Vec<PathBuf>>,
     scan_exclude: Signal<Vec<String>>,
     subpath: Signal<String>,
@@ -69,6 +71,22 @@ pub(crate) fn TaskView(
     let mut pane_width = use_signal(|| 300u32);
     // Task View local context menu (independent of the sidebar CtxMenu).
     let mut ctx_menu: Signal<Option<TaskCtxMenu>> = use_signal(|| None);
+
+    // Scope toggle via keybind (Ctrl+Tab). The token comparison skips the
+    // effect's initial run so mounting never flips the scope.
+    let mut seen_scope_token = use_signal(|| *scope_token.peek());
+    use_effect(move || {
+        let t = scope_token();
+        if t != *seen_scope_token.peek() {
+            seen_scope_token.set(t);
+            let next = match *scope.peek() {
+                Scope::ThisProject => Scope::AllProjects,
+                Scope::AllProjects => Scope::ThisProject,
+            };
+            scope.set(next);
+            selected.set(None);
+        }
+    });
 
     // ── Scan effect ────────────────────────────────────────────────────────
     // Runs every time scope/days/roots/scan_roots/subpath/refresh_token change.

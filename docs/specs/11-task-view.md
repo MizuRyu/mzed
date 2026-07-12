@@ -21,6 +21,7 @@
 
 - **キーバインド `Cmd+Shift+D`** で Task View をトグル（開く/閉じる）。`Esc` でも閉じる。既存のキーバインド機構（`src/config.rs` `default_keybindings()` / `src/js/keyboard.rs`）に `open_task_view` として追加、ユーザー変更可。
 - **`Cmd+R`（`task_view_refresh`）** でタスク一覧を再スキャン（Task View 表示中のみ有効。ヘッダの ↻ と同じトリガー）。
+- **`Ctrl+Tab`（`task_view_toggle_scope`）** で This Project ⇄ All Projects をトグル（リバインド可）。Task View が閉じているときは従来どおり**次のタブへ切替**として動く（既定バインドが固定の Ctrl+Tab タブ切替を覆うため、dispatch 側でフォールバック）。
 - 左ペインはドラッグ divider で幅 200〜600px にリサイズ可能（セッション内のみ。永続化は v1 対象外）。
 - Task View は通常のサイドバー＋本文領域を置き換える**2ペインモード**:
   - 左ペイン: タスク一覧（下記スコープ切替つきツリー）

@@ -651,6 +651,7 @@ pub(crate) fn App() -> Element {
     let mut task_view_open = use_signal(|| false);
     // Bumped to force a Task View re-scan (Cmd+R and the ↻ header button).
     let mut task_view_refresh_token = use_signal(|| 0u32);
+    let mut task_view_scope_token = use_signal(|| 0u32);
     // Transient top-right toast (e.g. "Copied!"). Auto-hides after ~1.5s; a
     // generation counter ensures only the latest toast clears itself.
     let mut toast = use_signal(|| None::<String>);
@@ -1510,6 +1511,16 @@ pub(crate) fn App() -> Element {
                             task_view_refresh_token += 1;
                         }
                     }
+                    AppCommand::TaskViewToggleScope => {
+                        // The default Ctrl+Tab binding shadows the fixed
+                        // tab-switch shortcut in the keydown bridge, so keep
+                        // that behaviour when Task View is closed.
+                        if task_view_open() && feature_task_view() {
+                            task_view_scope_token += 1;
+                        } else {
+                            act_tabs().write().activate_next();
+                        }
+                    }
                     AppCommand::ToggleSyncPin => {
                         let new_mode = match sync_mode() {
                             theme::SyncMode::Auto => theme::SyncMode::SelfPinned,
@@ -2121,6 +2132,7 @@ pub(crate) fn App() -> Element {
                         roots,
                         fs_tick: tree_refresh,
                         refresh_token: task_view_refresh_token,
+                        scope_token: task_view_scope_token,
                         scan_roots: task_view_scan_roots,
                         scan_exclude: task_view_scan_exclude,
                         subpath: task_view_tasks_subpath,
