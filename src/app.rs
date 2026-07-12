@@ -11,7 +11,7 @@ use dioxus::prelude::*;
 use instance::Msg;
 use services::file_service;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -804,32 +804,39 @@ pub(crate) fn App() -> Element {
         }
     };
 
+    // Make a file renderable before opening it: with no project yet its parent
+    // becomes the root; with a project open but the file outside every root,
+    // the parent is appended as an extra session root so relative images and
+    // links resolve (dropped or CLI-opened files outside the project).
+    let mut ensure_root_for = move |path: &Path| {
+        let Some(parent) = path.parent() else {
+            return;
+        };
+        if root().is_none() {
+            let p = parent.to_path_buf();
+            root.set(Some(p.clone()));
+            roots.set(vec![p]);
+        } else if !roots().iter().any(|r| path.starts_with(r)) {
+            let mut rs = roots();
+            rs.push(parent.to_path_buf());
+            roots.set(rs);
+        }
+    };
+
     // Apply one IPC/initial message to the live state: open a file in a tab, or
     // switch the project root (opening a representative md and expanding to it).
     let mut apply_msg = move |msg: Msg| match msg {
         Msg::NewWindow => open_main_window(),
         Msg::Open { path } => {
             if path.is_file() && files::is_markdown(&path) {
-                if root().is_none() {
-                    if let Some(parent) = path.parent() {
-                        let p = parent.to_path_buf();
-                        root.set(Some(p.clone()));
-                        roots.set(vec![p]);
-                    }
-                }
+                ensure_root_for(&path);
                 open_active(path);
             }
         }
         Msg::OpenMany { paths } => {
             for path in paths {
                 if path.is_file() && files::is_markdown(&path) {
-                    if root().is_none() {
-                        if let Some(parent) = path.parent() {
-                            let p = parent.to_path_buf();
-                            root.set(Some(p.clone()));
-                            roots.set(vec![p]);
-                        }
-                    }
+                    ensure_root_for(&path);
                     open_active(path);
                 }
             }
@@ -1821,6 +1828,24 @@ pub(crate) fn App() -> Element {
             rsx! {
                 div {
                     style: "position: fixed; inset: 0; display: flex; flex-direction: column; width: 100vw; height: 100vh; margin: 0; overflow: hidden; background: {body_bg};",
+                    // File drag & drop anywhere in the window (VSCode-style):
+                    // a dropped markdown file opens in the focused pane (its
+                    // parent joins the session roots when outside the project),
+                    // a dropped directory becomes the project root.
+                    ondragover: move |e| e.prevent_default(),
+                    ondrop: move |e: DragEvent| {
+                        e.prevent_default();
+                        for fd in e.files() {
+                            let path = fd.path();
+                            if path.is_dir() {
+                                apply_msg(Msg::OpenDir { path });
+                            } else if files::is_markdown(&path) {
+                                apply_msg(Msg::Open { path });
+                            } else {
+                                show_toast("Markdown 以外は開けません".into());
+                            }
+                        }
+                    },
                     // Top bar: a Zed-style project switcher button on the left that
                     // opens a dropdown of known/recent projects. Replaces the old
                     // "📁 proj · file" header line.
@@ -2027,21 +2052,6 @@ pub(crate) fn App() -> Element {
                                             TabBar { tabs, root: root(), dark }
                                             div {
                                                 style: "flex: 1 1 auto; width: 100%; overflow: auto; background: {body_bg};",
-                                                // File drag & drop: native absolute paths.
-                                                // Dropped `.md` opens in the focused pane; a
-                                                // dropped directory becomes the project root.
-                                                ondragover: move |e| e.prevent_default(),
-                                                ondrop: move |e: DragEvent| {
-                                                    e.prevent_default();
-                                                    for fd in e.files() {
-                                                        let path = fd.path();
-                                                        if path.is_dir() {
-                                                            apply_msg(Msg::OpenDir { path });
-                                                        } else if path.extension().map(|x| x == "md").unwrap_or(false) {
-                                                            apply_msg(Msg::Open { path });
-                                                        }
-                                                    }
-                                                },
                                                 div { class: "markdown-body", "data-mdo-pane": "0", dangerous_inner_html: "{html}" }
                                             }
                                         }
