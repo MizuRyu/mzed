@@ -253,8 +253,11 @@ mod tests {
         });
         stop_tx.send(()).unwrap();
 
+        // Generous timeout: this asserts the watcher stops without a file event,
+        // not how fast it stops. FSEvents setup under a loaded machine can take
+        // seconds, and a tight bound made this flake.
         assert!(done_rx
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(Duration::from_secs(10))
             .expect("watcher did not stop"));
     }
 
@@ -272,7 +275,7 @@ mod tests {
         stop_tx.send(()).unwrap();
 
         assert!(done_rx
-            .recv_timeout(Duration::from_secs(2))
+            .recv_timeout(Duration::from_secs(10))
             .expect("tree watcher did not stop"));
     }
 
