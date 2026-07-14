@@ -659,6 +659,7 @@ pub(crate) fn App() -> Element {
     let task_view_group_order = use_signal(|| saved_config.task_view_group_order);
     let task_view_status_order = use_signal(|| saved_config.task_view_status_order.clone());
     let task_view_date_order = use_signal(|| saved_config.task_view_date_order);
+    let project_aliases = use_signal(|| saved_config.project_aliases.clone());
     let mut task_view_open = use_signal(|| false);
     // Bumped to force a Task View re-scan (Cmd+R and the ↻ header button).
     let mut task_view_refresh_token = use_signal(|| 0u32);
@@ -1263,6 +1264,7 @@ pub(crate) fn App() -> Element {
             task_view_group_order: task_view_group_order(),
             task_view_status_order: task_view_status_order(),
             task_view_date_order: task_view_date_order(),
+            project_aliases: project_aliases(),
         };
         let generation = config_save_generation.write().advance();
         spawn(async move {
@@ -1326,6 +1328,14 @@ pub(crate) fn App() -> Element {
         if let Some(db) = zed::default_zed_db_path() {
             for r in zed::recent_workspaces(&db) {
                 push(r);
+            }
+        }
+        // Aliased projects are always listed: naming a folder is an explicit
+        // "I want to reach this", and it may not be in Zed's recents or in this
+        // session's history yet.
+        for a in project_aliases() {
+            if a.path.is_dir() {
+                push(a.path);
             }
         }
         out
@@ -2202,6 +2212,7 @@ pub(crate) fn App() -> Element {
                         task_view_group_order,
                         task_view_status_order,
                         task_view_date_order,
+                        project_aliases,
                         dark,
                     }
                 }
@@ -2245,6 +2256,7 @@ pub(crate) fn App() -> Element {
                         query: proj_menu_query,
                         candidates: proj_candidates(),
                         current: root(),
+                        aliases: project_aliases,
                         dark,
                         on_pick: move |path: PathBuf| {
                             proj_menu_open.set(false);

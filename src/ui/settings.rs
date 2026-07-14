@@ -45,6 +45,7 @@ pub(crate) fn Settings(
     mut task_view_group_order: Signal<config::GroupOrder>,
     mut task_view_status_order: Signal<Vec<String>>,
     mut task_view_date_order: Signal<config::DateOrder>,
+    mut project_aliases: Signal<Vec<config::ProjectAlias>>,
     dark: bool,
 ) -> Element {
     let win = dioxus::desktop::use_window();
@@ -276,6 +277,84 @@ pub(crate) fn Settings(
                                             }
                                         }
                                     }
+                                    // Project aliases: nicknames used by the Cmd+O switcher.
+                                    div {
+                                        style: "{row} border-top: 1px solid {row_border}; align-items: flex-start;",
+                                        div {
+                                            div { style: row_title, "プロジェクトの別名" }
+                                            div {
+                                                style: "{row_desc}",
+                                                "フォルダに好きな名前を付ける。プロジェクト切替（Cmd+O）で別名でも検索できる"
+                                            }
+                                        }
+                                        div {
+                                            style: "display: flex; flex-direction: column; gap: 6px; width: 320px;",
+                                            for (i, entry) in project_aliases().iter().cloned().enumerate() {
+                                                {
+                                                    let display = entry.path.display().to_string();
+                                                    let remove_idx = i;
+                                                    rsx! {
+                                                        div {
+                                                            key: "{display}",
+                                                            style: "display: flex; align-items: center; gap: 6px;",
+                                                            input {
+                                                                r#type: "text",
+                                                                value: "{entry.alias}",
+                                                                placeholder: "別名",
+                                                                style: "flex: 0 0 100px; padding: 5px 8px; border: 1px solid {btn_border}; \
+                                                                        border-radius: 6px; background: transparent; color: {text_color}; \
+                                                                        font: 12px -apple-system, sans-serif; outline: none;",
+                                                                oninput: move |e| {
+                                                                    let mut list = project_aliases.write();
+                                                                    if let Some(a) = list.get_mut(remove_idx) {
+                                                                        a.alias = e.value();
+                                                                    }
+                                                                },
+                                                            }
+                                                            span {
+                                                                style: "font: 11px ui-monospace, monospace; color: {muted}; \
+                                                                        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; \
+                                                                        flex: 1 1 auto; direction: rtl;",
+                                                                title: "{display}",
+                                                                "{display}"
+                                                            }
+                                                            button {
+                                                                style: "background: transparent; border: none; color: {muted}; \
+                                                                        cursor: pointer; font-size: 14px; flex: 0 0 auto; padding: 0 4px;",
+                                                                title: "削除",
+                                                                onclick: move |_| {
+                                                                    let mut list = project_aliases.write();
+                                                                    if remove_idx < list.len() {
+                                                                        list.remove(remove_idx);
+                                                                    }
+                                                                },
+                                                                "✕"
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            button {
+                                                style: "{reset_btn}",
+                                                onclick: move |_| {
+                                                    spawn(async move {
+                                                        if let Some(h) = rfd::AsyncFileDialog::new().pick_folder().await {
+                                                            let path = h.path().to_path_buf();
+                                                            let mut list = project_aliases.write();
+                                                            if !list.iter().any(|a| a.path == path) {
+                                                                // Seed with the folder name so the row is never blank.
+                                                                let alias = path.file_name()
+                                                                    .map(|s| s.to_string_lossy().to_string())
+                                                                    .unwrap_or_default();
+                                                                list.push(config::ProjectAlias { path, alias });
+                                                            }
+                                                        }
+                                                    });
+                                                },
+                                                "+ フォルダを追加"
+                                            }
+                                        }
+                                    }
                                 }
                             },
                             SettingsTab::Features => {
@@ -503,27 +582,33 @@ pub(crate) fn Settings(
                                         div {
                                             style: "{row}",
                                             div {
-                                                div { style: row_title, "階層の順序" }
-                                                div { style: "{row_desc}", "どちらを外側の見出しにするか" }
+                                                div { style: row_title, "外側の見出し" }
+                                                div { style: "{row_desc}", "選んだ方が上位、もう一方が中に入る" }
                                             }
-                                            select {
-                                                class: "mdo-select",
-                                                style: "{select_style}",
-                                                onchange: move |e| {
-                                                    task_view_group_order.set(match e.value().as_str() {
-                                                        "status_first" => config::GroupOrder::StatusFirst,
-                                                        _ => config::GroupOrder::ProjectFirst,
-                                                    });
-                                                },
-                                                option {
-                                                    value: "project_first",
-                                                    selected: task_view_group_order() == config::GroupOrder::ProjectFirst,
-                                                    "プロジェクト → ステータス"
-                                                }
-                                                option {
-                                                    value: "status_first",
-                                                    selected: task_view_group_order() == config::GroupOrder::StatusFirst,
-                                                    "ステータス → プロジェクト"
+                                            div {
+                                                style: "display: flex; gap: 6px;",
+                                                for (variant, label) in [
+                                                    (config::GroupOrder::ProjectFirst, "プロジェクト"),
+                                                    (config::GroupOrder::StatusFirst, "ステータス"),
+                                                ] {
+                                                    {
+                                                        let active = task_view_group_order() == variant;
+                                                        let (bd, bg, fg) = if active {
+                                                            ("#0969da", if dark { "#1f6feb22" } else { "#0969da14" }, text_color)
+                                                        } else {
+                                                            (btn_border, "transparent", muted)
+                                                        };
+                                                        rsx! {
+                                                            button {
+                                                                key: "{label}",
+                                                                style: "padding: 6px 14px; cursor: pointer; \
+                                                                        border: 1px solid {bd}; background: {bg}; color: {fg}; \
+                                                                        border-radius: 8px; font: 13px -apple-system, sans-serif;",
+                                                                onclick: move |_| task_view_group_order.set(variant),
+                                                                "{label}"
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }

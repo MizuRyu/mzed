@@ -80,7 +80,7 @@
 
 設定 UI（すべて **Features タブ**の Task View セクション）:
 - `feature_task_view` トグル、`task_view_tasks_subpath`（テキスト）、`task_view_scan_roots`（ディレクトリ追加/削除リスト）、`task_view_scan_exclude`（名前の追加/削除リスト）、`task_view_days`（数値、既定7）。
-- グルーピング: `task_view_group_by_status` トグル、`task_view_group_order`（セレクト）、`task_view_status_order`（↑↓ ボタンで並べ替え＋既定に戻す）、`task_view_date_order`（セレクト）。
+- グルーピング: `task_view_group_by_status` トグル、`task_view_group_order`（「外側の見出し」をプロジェクト／ステータスから選ぶ2択トグル）、`task_view_status_order`（↑↓ ボタンで並べ替え＋既定に戻す）、`task_view_date_order`（セレクト）。
 - 階層設定の直下に**ツリー形状の ASCII プレビュー**を出し、設定の効果をその場で確認できる（`group_preview()`）。
 
 ## 走査・解析の実装方針

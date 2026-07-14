@@ -175,6 +175,18 @@ pub struct Config {
     /// Sort direction for tasks within a group, by `created` (yymmdd).
     #[serde(default)]
     pub task_view_date_order: DateOrder,
+    /// Nicknames for project directories. The project switcher (Cmd+O) shows
+    /// them next to the folder name and matches them while searching, so a
+    /// project can be found by a name that isn't on disk.
+    #[serde(default)]
+    pub project_aliases: Vec<ProjectAlias>,
+}
+
+/// A user-defined nickname for one project directory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectAlias {
+    pub path: PathBuf,
+    pub alias: String,
 }
 
 /// Outer grouping level of the Task View tree.
@@ -263,8 +275,17 @@ impl Default for Config {
             task_view_group_order: GroupOrder::default(),
             task_view_status_order: default_task_view_status_order(),
             task_view_date_order: DateOrder::default(),
+            project_aliases: Vec::new(),
         }
     }
+}
+
+/// Look up the alias for `path`, if the user gave it one.
+pub fn alias_for<'a>(aliases: &'a [ProjectAlias], path: &Path) -> Option<&'a str> {
+    aliases
+        .iter()
+        .find(|a| a.path == path)
+        .map(|a| a.alias.as_str())
 }
 
 impl Config {
@@ -348,6 +369,41 @@ mod tests {
         assert_eq!(c.theme, Theme::System);
         assert_eq!(c.sync_mode, SyncMode::Auto);
         assert!((c.zoom - crate::theme::ZOOM_DEFAULT).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn alias_forは登録済みパスの別名だけ返す() {
+        let aliases = vec![
+            ProjectAlias {
+                path: PathBuf::from("/projects/folder-a"),
+                alias: "A".into(),
+            },
+            ProjectAlias {
+                path: PathBuf::from("/projects/folder-b"),
+                alias: "B".into(),
+            },
+        ];
+        assert_eq!(
+            alias_for(&aliases, Path::new("/projects/folder-a")),
+            Some("A")
+        );
+        assert_eq!(
+            alias_for(&aliases, Path::new("/projects/folder-b")),
+            Some("B")
+        );
+        assert_eq!(alias_for(&aliases, Path::new("/projects/other")), None);
+        assert_eq!(alias_for(&[], Path::new("/projects/folder-a")), None);
+    }
+
+    #[test]
+    fn task_view設定が無い古いconfigでも既定値で読める() {
+        // Fields added after 1.1 must not break an existing config.json.
+        let c = Config::from_json(r#"{"theme":"dark"}"#).expect("parse");
+        assert!(c.task_view_group_by_status);
+        assert_eq!(c.task_view_group_order, GroupOrder::ProjectFirst);
+        assert_eq!(c.task_view_date_order, DateOrder::Desc);
+        assert_eq!(c.task_view_status_order, default_task_view_status_order());
+        assert!(c.project_aliases.is_empty());
     }
 
     #[test]

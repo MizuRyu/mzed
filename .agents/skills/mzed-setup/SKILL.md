@@ -113,6 +113,7 @@ mzed [PATH...] [--sync <auto|self|off>]
 | `task_view_group_order` | `"project_first"` \| `"status_first"` | `"project_first"` | 外側の見出しをプロジェクト／ステータスのどちらにするか |
 | `task_view_status_order` | `["todo", ...]` | `["todo","in_progress","review","done"]` | ステータス見出しの並び順。配列に無いものは末尾（「その他」） |
 | `task_view_date_order` | `"desc"` \| `"asc"` | `"desc"` | グループ内タスクの `created` 並び順（新しい順／古い順） |
+| `project_aliases` | `[{"path": "/path", "alias": "名前"}]` | `[]` | プロジェクトの別名。Cmd+O の検索でパスに加えて別名でもヒットし、別名付きフォルダは Zed 履歴に無くても候補に出る。設定 General から追加/削除 |
 
 ### sync_mode の詳細（`src/theme.rs`）
 

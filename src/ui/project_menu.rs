@@ -9,6 +9,8 @@ pub(crate) fn ProjectMenu(
     mut query: Signal<String>,
     candidates: Vec<PathBuf>,
     current: Option<PathBuf>,
+    /// User-defined nicknames; matched by the search box and shown on the row.
+    aliases: Signal<Vec<config::ProjectAlias>>,
     dark: bool,
     on_pick: EventHandler<PathBuf>,
     on_open_folder: EventHandler<()>,
@@ -23,13 +25,21 @@ pub(crate) fn ProjectMenu(
 
     let q = query();
     let needle = q.trim().to_lowercase();
+    let alias_list = aliases();
+    // Match on the path or the alias, so a project can be found by a nickname
+    // that doesn't appear anywhere on disk.
     let rows: Vec<PathBuf> = candidates
         .into_iter()
         .filter(|p| {
             if needle.is_empty() {
                 return true;
             }
-            p.to_string_lossy().to_lowercase().contains(&needle)
+            if p.to_string_lossy().to_lowercase().contains(&needle) {
+                return true;
+            }
+            config::alias_for(&alias_list, p)
+                .map(|a| a.to_lowercase().contains(&needle))
+                .unwrap_or(false)
         })
         .collect();
 
@@ -119,12 +129,14 @@ pub(crate) fn ProjectMenu(
                         let name = p.file_name()
                             .map(|s| s.to_string_lossy().to_string())
                             .unwrap_or_else(|| p.display().to_string());
+                        let alias = config::alias_for(&alias_list, p).map(|a| a.to_string());
                         let sub = p.display().to_string();
                         let is_current = current.as_ref() == Some(p);
                         let highlighted = i == cur;
                         let row_bg = if highlighted { sel_bg } else { "transparent" };
                         let row_fg = if highlighted { "#ffffff" } else { text_color };
                         let sub_fg = if highlighted { "#ffffffcc" } else { muted };
+                        let badge_bg = if highlighted { "#ffffff2e" } else if dark { "#30363d" } else { "#eaeef2" };
                         let pick = p.clone();
                         rsx! {
                             div {
@@ -137,8 +149,23 @@ pub(crate) fn ProjectMenu(
                                     if is_current { "✓" } else { "" }
                                 }
                                 div {
-                                    style: "min-width: 0;",
-                                    div { style: "overflow: hidden; text-overflow: ellipsis; white-space: nowrap;", "{name}" }
+                                    style: "min-width: 0; flex: 1 1 auto;",
+                                    div {
+                                        style: "display: flex; align-items: center; gap: 6px; min-width: 0;",
+                                        span {
+                                            style: "overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                                            "{name}"
+                                        }
+                                        if let Some(a) = alias {
+                                            span {
+                                                style: "flex: 0 0 auto; padding: 1px 6px; border-radius: 999px; \
+                                                        background: {badge_bg}; font-size: 11px; \
+                                                        max-width: 120px; overflow: hidden; \
+                                                        text-overflow: ellipsis; white-space: nowrap;",
+                                                "{a}"
+                                            }
+                                        }
+                                    }
                                     div { style: "font-size: 11px; color: {sub_fg}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;", "{sub}" }
                                 }
                             }
