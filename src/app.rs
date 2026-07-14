@@ -655,6 +655,10 @@ pub(crate) fn App() -> Element {
     let task_view_scan_roots = use_signal(|| saved_config.task_view_scan_roots.clone());
     let task_view_scan_exclude = use_signal(|| saved_config.task_view_scan_exclude.clone());
     let task_view_days = use_signal(|| saved_config.task_view_days);
+    let task_view_group_by_status = use_signal(|| saved_config.task_view_group_by_status);
+    let task_view_group_order = use_signal(|| saved_config.task_view_group_order);
+    let task_view_status_order = use_signal(|| saved_config.task_view_status_order.clone());
+    let task_view_date_order = use_signal(|| saved_config.task_view_date_order);
     let mut task_view_open = use_signal(|| false);
     // Bumped to force a Task View re-scan (Cmd+R and the ↻ header button).
     let mut task_view_refresh_token = use_signal(|| 0u32);
@@ -1255,6 +1259,10 @@ pub(crate) fn App() -> Element {
             task_view_scan_roots: task_view_scan_roots(),
             task_view_scan_exclude: task_view_scan_exclude(),
             task_view_days: task_view_days(),
+            task_view_group_by_status: task_view_group_by_status(),
+            task_view_group_order: task_view_group_order(),
+            task_view_status_order: task_view_status_order(),
+            task_view_date_order: task_view_date_order(),
         };
         let generation = config_save_generation.write().advance();
         spawn(async move {
@@ -2190,6 +2198,10 @@ pub(crate) fn App() -> Element {
                         task_view_scan_roots,
                         task_view_scan_exclude,
                         task_view_days,
+                        task_view_group_by_status,
+                        task_view_group_order,
+                        task_view_status_order,
+                        task_view_date_order,
                         dark,
                     }
                 }
@@ -2203,6 +2215,10 @@ pub(crate) fn App() -> Element {
                         scan_exclude: task_view_scan_exclude,
                         subpath: task_view_tasks_subpath,
                         default_days: task_view_days,
+                        group_by_status: task_view_group_by_status,
+                        group_order: task_view_group_order,
+                        status_order: task_view_status_order,
+                        date_order: task_view_date_order,
                         proj_name: current_proj(),
                         dark,
                         favorites,

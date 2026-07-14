@@ -41,6 +41,10 @@ pub(crate) fn Settings(
     mut task_view_scan_roots: Signal<Vec<PathBuf>>,
     mut task_view_scan_exclude: Signal<Vec<String>>,
     mut task_view_days: Signal<u32>,
+    mut task_view_group_by_status: Signal<bool>,
+    mut task_view_group_order: Signal<config::GroupOrder>,
+    mut task_view_status_order: Signal<Vec<String>>,
+    mut task_view_date_order: Signal<config::DateOrder>,
     dark: bool,
 ) -> Element {
     let win = dioxus::desktop::use_window();
@@ -482,6 +486,136 @@ pub(crate) fn Settings(
                                             }
                                         }
                                     }
+                                    // ── Grouping ────────────────────────────────
+                                    div {
+                                        style: "{row} border-top: 1px solid {row_border};",
+                                        div {
+                                            div { style: row_title, "ステータスでグループ化" }
+                                            div { style: "{row_desc}", "タスクを 未着手 / 対応中 / … の見出しにまとめる" }
+                                        }
+                                        input {
+                                            r#type: "checkbox", checked: task_view_group_by_status(),
+                                            style: "width: 16px; height: 16px; cursor: pointer;",
+                                            onchange: move |e| task_view_group_by_status.set(e.value() == "true"),
+                                        }
+                                    }
+                                    if task_view_group_by_status() {
+                                        div {
+                                            style: "{row}",
+                                            div {
+                                                div { style: row_title, "階層の順序" }
+                                                div { style: "{row_desc}", "どちらを外側の見出しにするか" }
+                                            }
+                                            select {
+                                                class: "mdo-select",
+                                                style: "{select_style}",
+                                                onchange: move |e| {
+                                                    task_view_group_order.set(match e.value().as_str() {
+                                                        "status_first" => config::GroupOrder::StatusFirst,
+                                                        _ => config::GroupOrder::ProjectFirst,
+                                                    });
+                                                },
+                                                option {
+                                                    value: "project_first",
+                                                    selected: task_view_group_order() == config::GroupOrder::ProjectFirst,
+                                                    "プロジェクト → ステータス"
+                                                }
+                                                option {
+                                                    value: "status_first",
+                                                    selected: task_view_group_order() == config::GroupOrder::StatusFirst,
+                                                    "ステータス → プロジェクト"
+                                                }
+                                            }
+                                        }
+                                        // Live preview of the resulting tree shape.
+                                        div {
+                                            style: "padding: 4px 0 14px; \
+                                                    font: 12px ui-monospace, monospace; color: {muted}; \
+                                                    white-space: pre; overflow-x: auto; line-height: 1.6;",
+                                            "{group_preview(task_view_group_order(), &task_view_status_order(), task_view_date_order())}"
+                                        }
+                                        // Status order: move each heading up/down.
+                                        div {
+                                            style: "{row} align-items: flex-start;",
+                                            div {
+                                                div { style: row_title, "ステータスの並び順" }
+                                                div { style: "{row_desc}", "上から順に見出しが並ぶ" }
+                                            }
+                                            div {
+                                                style: "display: flex; flex-direction: column; gap: 4px; min-width: 190px;",
+                                                for (i, key) in task_view_status_order().iter().cloned().enumerate() {
+                                                    div {
+                                                        key: "{key}",
+                                                        style: "display: flex; align-items: center; gap: 6px; \
+                                                                padding: 4px 6px; border: 1px solid {btn_border}; \
+                                                                border-radius: 6px; font: 12px -apple-system, sans-serif;",
+                                                        span {
+                                                            style: "width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; \
+                                                                    background: {services::task_scan::TaskStatus::from_key(&key).color()};",
+                                                        }
+                                                        span {
+                                                            style: "flex: 1 1 auto;",
+                                                            "{services::task_scan::TaskStatus::from_key(&key).heading()}"
+                                                        }
+                                                        button {
+                                                            style: "{step_btn}",
+                                                            disabled: i == 0,
+                                                            title: "上へ",
+                                                            onclick: move |_| {
+                                                                let mut o = task_view_status_order.write();
+                                                                if i > 0 { o.swap(i - 1, i); }
+                                                            },
+                                                            "↑"
+                                                        }
+                                                        button {
+                                                            style: "{step_btn}",
+                                                            disabled: i + 1 == task_view_status_order().len(),
+                                                            title: "下へ",
+                                                            onclick: move |_| {
+                                                                let mut o = task_view_status_order.write();
+                                                                if i + 1 < o.len() { o.swap(i, i + 1); }
+                                                            },
+                                                            "↓"
+                                                        }
+                                                    }
+                                                }
+                                                button {
+                                                    style: "{reset_btn}",
+                                                    onclick: move |_| {
+                                                        task_view_status_order.set(config::default_task_view_status_order());
+                                                    },
+                                                    "既定の順に戻す"
+                                                }
+                                            }
+                                        }
+                                    }
+                                    div {
+                                        style: "{row}",
+                                        div {
+                                            div { style: row_title, "日付の並び順" }
+                                            div { style: "{row_desc}", "各グループ内のタスクを created で並べる" }
+                                        }
+                                        select {
+                                            class: "mdo-select",
+                                            style: "{select_style}",
+                                            onchange: move |e| {
+                                                task_view_date_order.set(match e.value().as_str() {
+                                                    "asc" => config::DateOrder::Asc,
+                                                    _ => config::DateOrder::Desc,
+                                                });
+                                            },
+                                            option {
+                                                value: "desc",
+                                                selected: task_view_date_order() == config::DateOrder::Desc,
+                                                "新しい順（降順）"
+                                            }
+                                            option {
+                                                value: "asc",
+                                                selected: task_view_date_order() == config::DateOrder::Asc,
+                                                "古い順（昇順）"
+                                            }
+                                        }
+                                    }
                                 }
                             },
                             SettingsTab::Appearance => rsx! {
@@ -692,6 +826,55 @@ pub(crate) fn Settings(
                 }
             }
         }
+    }
+}
+
+/// ASCII sketch of the Task View tree for the current grouping settings, so the
+/// effect of the options is visible without leaving the settings pane.
+fn group_preview(
+    order: config::GroupOrder,
+    status_order: &[String],
+    date_order: config::DateOrder,
+) -> String {
+    // Two sample tasks per status, dated so the sort direction is visible.
+    let (older, newer) = match date_order {
+        config::DateOrder::Desc => ("260706-02-…", "260701-01-…"),
+        config::DateOrder::Asc => ("260701-01-…", "260706-02-…"),
+    };
+    let headings: Vec<&str> = status_order
+        .iter()
+        .take(2)
+        .map(|k| services::task_scan::TaskStatus::from_key(k).heading())
+        .collect();
+    let (first, second) = match headings.as_slice() {
+        [a, b, ..] => (*a, *b),
+        [a] => (*a, "—"),
+        _ => ("—", "—"),
+    };
+
+    match order {
+        config::GroupOrder::ProjectFirst => format!(
+            "▾ project-a\n  \
+             ▾ ● {first}\n      \
+             {older}\n      \
+             {newer}\n  \
+             ▾ ● {second}\n      \
+             260704-01-…\n\
+             ▾ project-b\n  \
+             ▾ ● {first}\n      \
+             260705-01-…"
+        ),
+        config::GroupOrder::StatusFirst => format!(
+            "▾ ● {first}\n  \
+             ▾ project-a\n      \
+             {older}\n      \
+             {newer}\n  \
+             ▾ project-b\n      \
+             260705-01-…\n\
+             ▾ ● {second}\n  \
+             ▾ project-a\n      \
+             260704-01-…"
+        ),
     }
 }
 

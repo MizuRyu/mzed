@@ -42,10 +42,19 @@
 - **直近 N 日**（`created` が今日から N 日以内）で絞る。上部に日数セレクタ（既定 7 日）。
 - プロジェクトごとに variant-2 のルートノードを縦に並べ、各配下に該当タスク。
 
+### グルーピング（ステータス見出し）
+
+タスクはプロジェクトとステータスの2軸でグループ化し、見出しは chevron で個別に折り畳める（既定は展開）。
+
+- `task_view_group_by_status` = true（既定）: **プロジェクト > ステータス > タスク**（`task_view_group_order = project_first`）または **ステータス > プロジェクト > タスク**（`status_first`）。
+- false: 従来どおり **プロジェクト > タスク** のフラット表示。
+- ステータス見出しの並びは `task_view_status_order` の順。この配列に無いステータス（`unknown` = frontmatter が壊れている/欠落）は常に末尾に「その他」として出る。
+- 見出しには status 色のドットと件数を出す。
+- 各グループ内のタスクは `created`(yymmdd) 昇順/降順（`task_view_date_order`、既定は降順＝新しい順）。
+
 ### ツリー行の見た目（既存 `src/ui/sidebar.rs` 準拠）
 - インデント（深さ×14px）、chevron、フォルダ/ファイルアイコン、13px、hover `rgba(127,127,127,0.12)`、アクティブ行 `rgba(9,105,218,0.1)`＋左 `#0969da` 2px。
-- **タスクフォルダ行に status 色**（ドット or 左ボーダー、控えめ）: todo=`#8b949e`, in_progress=`#1f6feb`, review=`#d29922`, done=`#3fb950`。
-- 並び順: `created` 降順（新しいタスクが上）。
+- **タスクフォルダ行に status 色**（ドット or 左ボーダー、控えめ）: todo=`#8b949e`, in_progress=`#3fb950`, review=`#d29922`, done=`#1f6feb`。
 
 ## 右ペイン: タスク詳細
 
@@ -63,10 +72,16 @@
 | `task_view_tasks_subpath` | string | `"docs/memo/tasks"` | プロジェクト内のタスクフォルダ相対パス |
 | `task_view_scan_roots` | `[string]` | `[]` | All Projects でプロジェクトを探すルートディレクトリ群（例: `~/dev/repos`）。空なら All Projects は現プロジェクトのみ表示＋設定への誘導ヒント |
 | `task_view_days` | int | `7` | All Projects で表示する直近日数 |
+| `task_view_scan_exclude` | `[string]` | `[]` | 走査で入らないディレクトリ名（ビルトイン枝刈りに追加） |
+| `task_view_group_by_status` | bool | `true` | ステータス見出しでグループ化するか |
+| `task_view_group_order` | `"project_first"` \| `"status_first"` | `project_first` | 外側の見出しをプロジェクトとステータスのどちらにするか |
+| `task_view_status_order` | `[string]` | `["todo","in_progress","review","done"]` | ステータス見出しの並び順。未掲載のものは末尾 |
+| `task_view_date_order` | `"desc"` \| `"asc"` | `desc` | グループ内のタスクを `created` で新しい順／古い順に並べる |
 
-設定 UI:
-- **Features タブ**: `feature_task_view` トグル。
-- **General or 専用セクション**: `task_view_tasks_subpath`（テキスト）、`task_view_scan_roots`（ディレクトリ追加/削除リスト）、`task_view_days`（数値、既定7）。
+設定 UI（すべて **Features タブ**の Task View セクション）:
+- `feature_task_view` トグル、`task_view_tasks_subpath`（テキスト）、`task_view_scan_roots`（ディレクトリ追加/削除リスト）、`task_view_scan_exclude`（名前の追加/削除リスト）、`task_view_days`（数値、既定7）。
+- グルーピング: `task_view_group_by_status` トグル、`task_view_group_order`（セレクト）、`task_view_status_order`（↑↓ ボタンで並べ替え＋既定に戻す）、`task_view_date_order`（セレクト）。
+- 階層設定の直下に**ツリー形状の ASCII プレビュー**を出し、設定の効果をその場で確認できる（`group_preview()`）。
 
 ## 走査・解析の実装方針
 

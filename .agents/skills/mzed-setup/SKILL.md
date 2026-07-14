@@ -108,6 +108,11 @@ mzed [PATH...] [--sync <auto|self|off>]
 | `task_view_tasks_subpath` | string | `"docs/memo/tasks"` | プロジェクトルートからタスクフォルダまでの相対パス |
 | `task_view_scan_roots` | `["/path", ...]` | `[]` | All Projects スキャン対象の親ディレクトリ群。空なら現プロジェクトのみ表示 |
 | `task_view_days` | int | `7` | All Projects で表示する直近日数（`created` が今日から N 日以内） |
+| `task_view_scan_exclude` | `["name", ...]` | `[]` | スキャン時に入らないディレクトリ名（ビルトイン枝刈りに追加） |
+| `task_view_group_by_status` | bool | `true` | タスクをステータス見出しでグループ化する |
+| `task_view_group_order` | `"project_first"` \| `"status_first"` | `"project_first"` | 外側の見出しをプロジェクト／ステータスのどちらにするか |
+| `task_view_status_order` | `["todo", ...]` | `["todo","in_progress","review","done"]` | ステータス見出しの並び順。配列に無いものは末尾（「その他」） |
+| `task_view_date_order` | `"desc"` \| `"asc"` | `"desc"` | グループ内タスクの `created` 並び順（新しい順／古い順） |
 
 ### sync_mode の詳細（`src/theme.rs`）
 

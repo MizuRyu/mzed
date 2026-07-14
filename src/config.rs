@@ -162,6 +162,41 @@ pub struct Config {
     /// the built-in prune list). Case-sensitive.
     #[serde(default)]
     pub task_view_scan_exclude: Vec<String>,
+    /// Group tasks under status headings. When false, tasks are listed flat
+    /// under their project (the pre-1.2 layout).
+    #[serde(default = "default_true")]
+    pub task_view_group_by_status: bool,
+    /// Which grouping level comes first in the tree.
+    #[serde(default)]
+    pub task_view_group_order: GroupOrder,
+    /// Status heading order, top to bottom. Unknown statuses always sort last.
+    #[serde(default = "default_task_view_status_order")]
+    pub task_view_status_order: Vec<String>,
+    /// Sort direction for tasks within a group, by `created` (yymmdd).
+    #[serde(default)]
+    pub task_view_date_order: DateOrder,
+}
+
+/// Outer grouping level of the Task View tree.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GroupOrder {
+    /// project → status → tasks
+    #[default]
+    ProjectFirst,
+    /// status → project → tasks
+    StatusFirst,
+}
+
+/// Sort direction for the `created` date within a group.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DateOrder {
+    /// Newest first.
+    #[default]
+    Desc,
+    /// Oldest first.
+    Asc,
 }
 
 fn default_zoom() -> f32 {
@@ -187,6 +222,13 @@ fn default_task_view_tasks_subpath() -> String {
 }
 fn default_task_view_days() -> u32 {
     7
+}
+/// Status heading order shown by default: the natural task lifecycle.
+pub fn default_task_view_status_order() -> Vec<String> {
+    ["todo", "in_progress", "review", "done"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
 }
 
 impl Default for Config {
@@ -217,6 +259,10 @@ impl Default for Config {
             task_view_scan_roots: Vec::new(),
             task_view_days: default_task_view_days(),
             task_view_scan_exclude: Vec::new(),
+            task_view_group_by_status: true,
+            task_view_group_order: GroupOrder::default(),
+            task_view_status_order: default_task_view_status_order(),
+            task_view_date_order: DateOrder::default(),
         }
     }
 }

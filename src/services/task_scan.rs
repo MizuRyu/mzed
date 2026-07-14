@@ -59,10 +59,41 @@ impl TaskStatus {
             TaskStatus::Unknown => "—",
         }
     }
+
+    /// Frontmatter value / config key. Unlike [`label`], `Unknown` gets a real
+    /// key so it can be ordered and addressed like any other status.
+    pub fn key(&self) -> &'static str {
+        match self {
+            TaskStatus::Unknown => "unknown",
+            other => other.label(),
+        }
+    }
+
+    /// Heading text for the Task View status groups.
+    pub fn heading(&self) -> &'static str {
+        match self {
+            TaskStatus::Todo => "未着手",
+            TaskStatus::InProgress => "対応中",
+            TaskStatus::Review => "レビュー",
+            TaskStatus::Done => "完了",
+            TaskStatus::Unknown => "その他",
+        }
+    }
+
+    /// Parse a config/frontmatter key back into a status.
+    pub fn from_key(key: &str) -> TaskStatus {
+        match key {
+            "todo" => TaskStatus::Todo,
+            "in_progress" => TaskStatus::InProgress,
+            "review" => TaskStatus::Review,
+            "done" => TaskStatus::Done,
+            _ => TaskStatus::Unknown,
+        }
+    }
 }
 
 /// Parsed fields from a `task.md` frontmatter block.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct TaskMeta {
     pub status: TaskStatus,
     /// Six-digit date string `yymmdd`, e.g. `"260706"`.
@@ -70,7 +101,7 @@ pub struct TaskMeta {
 }
 
 /// One task folder entry with metadata and resolved file paths.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TaskItem {
     pub project_name: String,
     pub project_path: PathBuf,
@@ -117,13 +148,7 @@ pub fn extract_task_frontmatter(content: &str) -> TaskMeta {
 
     for line in yaml.lines() {
         if let Some(val) = line.strip_prefix("status:") {
-            status = match val.trim() {
-                "todo" => TaskStatus::Todo,
-                "in_progress" => TaskStatus::InProgress,
-                "review" => TaskStatus::Review,
-                "done" => TaskStatus::Done,
-                _ => TaskStatus::Unknown,
-            };
+            status = TaskStatus::from_key(val.trim());
         } else if let Some(val) = line.strip_prefix("created:") {
             created = val.trim().to_string();
         }
@@ -182,26 +207,161 @@ pub fn is_within_days(yymmdd: &str, n_days: u32) -> bool {
     is_within_days_of(yymmdd, today_jdn(), n_days)
 }
 
-/// Group items by project path and sort each group by `created` descending.
-///
-/// Returns `(project_name, project_path, tasks)` in insertion order of the
-/// first occurrence of each project.
-pub fn group_and_sort(items: Vec<TaskItem>) -> Vec<(String, PathBuf, Vec<TaskItem>)> {
+/// What a group heading in the Task View tree stands for.
+#[derive(Debug, Clone, PartialEq)]
+pub enum GroupKey {
+    Project { name: String, path: PathBuf },
+    Status(TaskStatus),
+}
+
+/// One heading in the Task View tree. Either it nests further groups
+/// (`children`) or it holds the tasks themselves (`tasks`) — never both.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TaskGroup {
+    pub key: GroupKey,
+    /// Stable identity for expand/collapse state, unique across the tree.
+    pub id: String,
+    pub children: Vec<TaskGroup>,
+    pub tasks: Vec<TaskItem>,
+}
+
+impl TaskGroup {
+    /// Tasks under this group, including those in nested groups.
+    pub fn task_count(&self) -> usize {
+        self.tasks.len() + self.children.iter().map(|c| c.task_count()).sum::<usize>()
+    }
+}
+
+/// Sort tasks in place by `created` (yymmdd is zero-padded, so lexical order
+/// is chronological). Ties keep their scan order.
+fn sort_tasks(tasks: &mut [TaskItem], date_desc: bool) {
+    if date_desc {
+        tasks.sort_by(|a, b| b.meta.created.cmp(&a.meta.created));
+    } else {
+        tasks.sort_by(|a, b| a.meta.created.cmp(&b.meta.created));
+    }
+}
+
+/// Rank of a status in the configured heading order. Statuses missing from
+/// the configured order (and `Unknown`) sort after every configured one.
+fn status_rank(status: &TaskStatus, status_order: &[String]) -> usize {
+    status_order
+        .iter()
+        .position(|s| s == status.key())
+        .unwrap_or(usize::MAX)
+}
+
+/// Group tasks by project, preserving first-seen project order.
+fn by_project(items: Vec<TaskItem>) -> Vec<(String, PathBuf, Vec<TaskItem>)> {
     let mut groups: Vec<(String, PathBuf, Vec<TaskItem>)> = Vec::new();
     for item in items {
         if let Some(g) = groups.iter_mut().find(|(_, p, _)| *p == item.project_path) {
             g.2.push(item);
         } else {
-            let name = item.project_name.clone();
-            let path = item.project_path.clone();
+            let (name, path) = (item.project_name.clone(), item.project_path.clone());
             groups.push((name, path, vec![item]));
         }
     }
-    // Newest first within each project (yymmdd is zero-padded so lex sort works).
-    for (_, _, tasks) in &mut groups {
-        tasks.sort_by(|a, b| b.meta.created.cmp(&a.meta.created));
-    }
     groups
+}
+
+/// Group tasks by status, ordered by `status_order` (unconfigured statuses last,
+/// then by the enum's own order so the result is deterministic).
+fn by_status(items: Vec<TaskItem>, status_order: &[String]) -> Vec<(TaskStatus, Vec<TaskItem>)> {
+    let mut groups: Vec<(TaskStatus, Vec<TaskItem>)> = Vec::new();
+    for item in items {
+        let status = item.meta.status.clone();
+        if let Some(g) = groups.iter_mut().find(|(s, _)| *s == status) {
+            g.1.push(item);
+        } else {
+            groups.push((status, vec![item]));
+        }
+    }
+    groups.sort_by_key(|(s, _)| (status_rank(s, status_order), s.key()));
+    groups
+}
+
+/// Build the Task View tree.
+///
+/// - `group_by_status == false` → one level: project → tasks.
+/// - `project_first` → project → status → tasks.
+/// - otherwise → status → project → tasks.
+///
+/// Projects keep their first-seen order; statuses follow `status_order`
+/// (unconfigured ones last); tasks sort by `created` per `date_desc`.
+pub fn build_groups(
+    items: Vec<TaskItem>,
+    group_by_status: bool,
+    project_first: bool,
+    status_order: &[String],
+    date_desc: bool,
+) -> Vec<TaskGroup> {
+    if !group_by_status {
+        return by_project(items)
+            .into_iter()
+            .map(|(name, path, mut tasks)| {
+                sort_tasks(&mut tasks, date_desc);
+                TaskGroup {
+                    id: path.display().to_string(),
+                    key: GroupKey::Project { name, path },
+                    children: Vec::new(),
+                    tasks,
+                }
+            })
+            .collect();
+    }
+
+    if project_first {
+        by_project(items)
+            .into_iter()
+            .map(|(name, path, tasks)| {
+                let id = path.display().to_string();
+                let children = by_status(tasks, status_order)
+                    .into_iter()
+                    .map(|(status, mut tasks)| {
+                        sort_tasks(&mut tasks, date_desc);
+                        TaskGroup {
+                            id: format!("{id}\u{1}{}", status.key()),
+                            key: GroupKey::Status(status),
+                            children: Vec::new(),
+                            tasks,
+                        }
+                    })
+                    .collect();
+                TaskGroup {
+                    id,
+                    key: GroupKey::Project { name, path },
+                    children,
+                    tasks: Vec::new(),
+                }
+            })
+            .collect()
+    } else {
+        by_status(items, status_order)
+            .into_iter()
+            .map(|(status, tasks)| {
+                let id = format!("status\u{1}{}", status.key());
+                let children = by_project(tasks)
+                    .into_iter()
+                    .map(|(name, path, mut tasks)| {
+                        sort_tasks(&mut tasks, date_desc);
+                        TaskGroup {
+                            id: format!("{id}\u{1}{}", path.display()),
+                            key: GroupKey::Project { name, path },
+                            children: Vec::new(),
+                            tasks,
+                        }
+                    })
+                    .collect();
+                TaskGroup {
+                    id,
+                    key: GroupKey::Status(status),
+                    children,
+                    tasks: Vec::new(),
+                }
+            })
+            .collect()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -589,6 +749,10 @@ outputs:
     // ── grouping and sorting ─────────────────────────────────────────────
 
     fn make_item(proj: &str, folder: &str, created: &str) -> TaskItem {
+        make_item_st(proj, folder, created, TaskStatus::Todo)
+    }
+
+    fn make_item_st(proj: &str, folder: &str, created: &str, status: TaskStatus) -> TaskItem {
         TaskItem {
             project_name: proj.to_string(),
             project_path: PathBuf::from(format!("/projects/{proj}")),
@@ -597,38 +761,144 @@ outputs:
             task_md: PathBuf::from(format!("/projects/{proj}/tasks/{folder}/task.md")),
             meta: TaskMeta {
                 created: created.to_string(),
-                ..TaskMeta::default()
+                status,
             },
             extra_files: Vec::new(),
         }
     }
 
+    fn default_order() -> Vec<String> {
+        crate::config::default_task_view_status_order()
+    }
+
+    fn project_name(g: &TaskGroup) -> &str {
+        match &g.key {
+            GroupKey::Project { name, .. } => name,
+            GroupKey::Status(_) => panic!("expected a project group"),
+        }
+    }
+
+    fn status_of(g: &TaskGroup) -> &TaskStatus {
+        match &g.key {
+            GroupKey::Status(s) => s,
+            GroupKey::Project { .. } => panic!("expected a status group"),
+        }
+    }
+
     #[test]
-    fn group_and_sort_groups_by_project_and_sorts_created_desc() {
+    fn build_groups_flat_groups_by_project_and_sorts_created_desc() {
         let items = vec![
             make_item("alpha", "260601-task", "260601"),
             make_item("beta", "260701-task", "260701"),
             make_item("alpha", "260706-task", "260706"),
         ];
-        let grouped = group_and_sort(items);
-        assert_eq!(grouped.len(), 2);
-        let alpha = grouped.iter().find(|(n, _, _)| n == "alpha").unwrap();
-        assert_eq!(alpha.2[0].meta.created, "260706");
-        assert_eq!(alpha.2[1].meta.created, "260601");
+        let groups = build_groups(items, false, true, &default_order(), true);
+        assert_eq!(groups.len(), 2);
+        let alpha = groups.iter().find(|g| project_name(g) == "alpha").unwrap();
+        assert!(alpha.children.is_empty());
+        assert_eq!(alpha.tasks[0].meta.created, "260706");
+        assert_eq!(alpha.tasks[1].meta.created, "260601");
     }
 
     #[test]
-    fn group_and_sort_single_item_returns_one_group() {
-        let items = vec![make_item("proj", "260101-t", "260101")];
-        let grouped = group_and_sort(items);
-        assert_eq!(grouped.len(), 1);
-        assert_eq!(grouped[0].2.len(), 1);
+    fn build_groups_flat_ascending_reverses_task_order() {
+        let items = vec![
+            make_item("alpha", "260706-task", "260706"),
+            make_item("alpha", "260601-task", "260601"),
+        ];
+        let groups = build_groups(items, false, true, &default_order(), false);
+        assert_eq!(groups[0].tasks[0].meta.created, "260601");
+        assert_eq!(groups[0].tasks[1].meta.created, "260706");
     }
 
     #[test]
-    fn group_and_sort_empty_returns_empty() {
-        let grouped = group_and_sort(Vec::new());
-        assert!(grouped.is_empty());
+    fn build_groups_project_first_nests_status_in_configured_order() {
+        let items = vec![
+            make_item_st("alpha", "260701-d", "260701", TaskStatus::Done),
+            make_item_st("alpha", "260702-t", "260702", TaskStatus::Todo),
+            make_item_st("alpha", "260703-p", "260703", TaskStatus::InProgress),
+        ];
+        let groups = build_groups(items, true, true, &default_order(), true);
+        assert_eq!(groups.len(), 1);
+        let statuses: Vec<&TaskStatus> = groups[0].children.iter().map(status_of).collect();
+        assert_eq!(
+            statuses,
+            vec![
+                &TaskStatus::Todo,
+                &TaskStatus::InProgress,
+                &TaskStatus::Done
+            ]
+        );
+        assert_eq!(groups[0].task_count(), 3);
+        assert!(groups[0].tasks.is_empty(), "parent holds no tasks directly");
+    }
+
+    #[test]
+    fn build_groups_honours_custom_status_order() {
+        let items = vec![
+            make_item_st("alpha", "260701-t", "260701", TaskStatus::Todo),
+            make_item_st("alpha", "260702-d", "260702", TaskStatus::Done),
+        ];
+        let order = vec!["done".to_string(), "todo".to_string()];
+        let groups = build_groups(items, true, true, &order, true);
+        let statuses: Vec<&TaskStatus> = groups[0].children.iter().map(status_of).collect();
+        assert_eq!(statuses, vec![&TaskStatus::Done, &TaskStatus::Todo]);
+    }
+
+    #[test]
+    fn build_groups_puts_unconfigured_status_last() {
+        let items = vec![
+            make_item_st("alpha", "260701-u", "260701", TaskStatus::Unknown),
+            make_item_st("alpha", "260702-t", "260702", TaskStatus::Todo),
+        ];
+        // "unknown" is absent from the default order.
+        let groups = build_groups(items, true, true, &default_order(), true);
+        let statuses: Vec<&TaskStatus> = groups[0].children.iter().map(status_of).collect();
+        assert_eq!(statuses, vec![&TaskStatus::Todo, &TaskStatus::Unknown]);
+    }
+
+    #[test]
+    fn build_groups_status_first_nests_projects() {
+        let items = vec![
+            make_item_st("alpha", "260701-t", "260701", TaskStatus::Todo),
+            make_item_st("beta", "260702-t", "260702", TaskStatus::Todo),
+            make_item_st("alpha", "260703-d", "260703", TaskStatus::Done),
+        ];
+        let groups = build_groups(items, true, false, &default_order(), true);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(status_of(&groups[0]), &TaskStatus::Todo);
+        assert_eq!(groups[0].task_count(), 2);
+        let projects: Vec<&str> = groups[0].children.iter().map(project_name).collect();
+        assert_eq!(projects, vec!["alpha", "beta"]);
+        assert_eq!(status_of(&groups[1]), &TaskStatus::Done);
+        assert_eq!(groups[1].task_count(), 1);
+    }
+
+    #[test]
+    fn build_groups_ids_are_unique_across_the_tree() {
+        let items = vec![
+            make_item_st("alpha", "260701-t", "260701", TaskStatus::Todo),
+            make_item_st("beta", "260702-t", "260702", TaskStatus::Todo),
+            make_item_st("alpha", "260703-d", "260703", TaskStatus::Done),
+        ];
+        for project_first in [true, false] {
+            let groups = build_groups(items.clone(), true, project_first, &default_order(), true);
+            let mut ids: Vec<&str> = Vec::new();
+            for g in &groups {
+                ids.push(&g.id);
+                for c in &g.children {
+                    ids.push(&c.id);
+                }
+            }
+            let unique: std::collections::HashSet<&&str> = ids.iter().collect();
+            assert_eq!(unique.len(), ids.len(), "duplicate group ids: {ids:?}");
+        }
+    }
+
+    #[test]
+    fn build_groups_empty_returns_empty() {
+        assert!(build_groups(Vec::new(), true, true, &default_order(), true).is_empty());
+        assert!(build_groups(Vec::new(), false, true, &default_order(), true).is_empty());
     }
 
     // ── pruned recursive walk ────────────────────────────────────────────

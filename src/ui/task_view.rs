@@ -1,5 +1,6 @@
 use super::*;
-use crate::services::task_scan::{self, TaskItem};
+use crate::config::{DateOrder, GroupOrder};
+use crate::services::task_scan::{self, GroupKey, TaskGroup, TaskItem};
 use std::collections::HashSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -21,11 +22,60 @@ struct TaskCtxMenu {
     show_fav: bool,
 }
 
+/// Signals and callbacks every tree row needs. Bundled so the row components
+/// don't take a dozen props each.
+#[derive(Clone, Copy, PartialEq)]
+struct RowCtx {
+    dark: bool,
+    /// Collapsed group headings, keyed by `TaskGroup::id` (absent = expanded).
+    collapsed: Signal<HashSet<String>>,
+    /// Expanded task folders, keyed by folder path (absent = collapsed).
+    expanded: Signal<HashSet<PathBuf>>,
+    /// (selected_file, project_path)
+    selected: Signal<Option<(PathBuf, PathBuf)>>,
+    favorites: Signal<Vec<PathBuf>>,
+    ctx_menu: Signal<Option<TaskCtxMenu>>,
+    on_copy_path: EventHandler<PathBuf>,
+    on_toggle_fav: EventHandler<PathBuf>,
+    on_toast: EventHandler<String>,
+}
+
+impl RowCtx {
+    fn fg(&self) -> &'static str {
+        if self.dark {
+            "#c9d1d9"
+        } else {
+            "#1f2328"
+        }
+    }
+    fn muted(&self) -> &'static str {
+        if self.dark {
+            "#8b949e"
+        } else {
+            "#57606a"
+        }
+    }
+    /// Row background for the active/selected state.
+    fn sel_bg(&self, strong: bool) -> &'static str {
+        match (self.dark, strong) {
+            (true, true) => "rgba(9,105,218,0.12)",
+            (true, false) => "rgba(9,105,218,0.08)",
+            (false, true) => "rgba(9,105,218,0.08)",
+            (false, false) => "rgba(9,105,218,0.05)",
+        }
+    }
+}
+
+/// Left indent for a row at `depth` (0 = outermost group heading).
+fn indent(depth: usize) -> usize {
+    8 + depth * 14
+}
+
 /// Full-screen Task View mode (Cmd+Shift+D).
 ///
 /// Replaces the normal sidebar + content area with a 2-pane layout:
-/// left = task tree (project-grouped, status-coloured), right = selected
-/// `task.md` rendered via the existing markdown pipeline.
+/// left = task tree (grouped by project and/or status, status-coloured),
+/// right = selected `task.md` rendered via the existing markdown pipeline.
 #[component]
 pub(crate) fn TaskView(
     roots: Signal<Vec<PathBuf>>,
@@ -40,6 +90,11 @@ pub(crate) fn TaskView(
     scan_exclude: Signal<Vec<String>>,
     subpath: Signal<String>,
     default_days: Signal<u32>,
+    /// Grouping settings (Settings → Task View).
+    group_by_status: Signal<bool>,
+    group_order: Signal<GroupOrder>,
+    status_order: Signal<Vec<String>>,
+    date_order: Signal<DateOrder>,
     /// Current project name (directory basename) shown in the header.
     proj_name: String,
     dark: bool,
@@ -52,25 +107,36 @@ pub(crate) fn TaskView(
     let panel_bg = if dark { "#161b22" } else { "#f6f8fa" };
     let panel_border = if dark { "#30363d" } else { "#d0d7de" };
     let body_bg = if dark { "#0d1117" } else { "#ffffff" };
-    let fg = if dark { "#c9d1d9" } else { "#1f2328" };
     let muted = if dark { "#8b949e" } else { "#57606a" };
     let btn_border = if dark { "#30363d" } else { "#d0d7de" };
 
     let mut scope = use_signal(|| Scope::ThisProject);
     let initial_days = default_days();
     let mut selected_days = use_signal(move || initial_days);
-    let mut groups: Signal<Vec<(String, PathBuf, Vec<TaskItem>)>> = use_signal(Vec::new);
+    let mut groups: Signal<Vec<TaskGroup>> = use_signal(Vec::new);
     let mut loading = use_signal(|| true);
-    // (selected_file, project_path)
     let mut selected: Signal<Option<(PathBuf, PathBuf)>> = use_signal(|| None);
     let mut doc_html = use_signal(String::new);
     let mut doc_gen = use_signal(|| 0u32);
-    let mut expanded: Signal<HashSet<PathBuf>> = use_signal(HashSet::new);
+    let expanded: Signal<HashSet<PathBuf>> = use_signal(HashSet::new);
+    let collapsed: Signal<HashSet<String>> = use_signal(HashSet::new);
     let mut scan_gen = use_signal(|| 0u32);
     // Left pane width (px), adjustable via the drag divider. Session-local.
     let mut pane_width = use_signal(|| 300u32);
     // Task View local context menu (independent of the sidebar CtxMenu).
     let mut ctx_menu: Signal<Option<TaskCtxMenu>> = use_signal(|| None);
+
+    let row_ctx = RowCtx {
+        dark,
+        collapsed,
+        expanded,
+        selected,
+        favorites,
+        ctx_menu,
+        on_copy_path,
+        on_toggle_fav,
+        on_toast,
+    };
 
     // Scope toggle via keybind (Ctrl+Tab). The token comparison skips the
     // effect's initial run so mounting never flips the scope.
@@ -89,9 +155,9 @@ pub(crate) fn TaskView(
     });
 
     // ── Scan effect ────────────────────────────────────────────────────────
-    // Runs every time scope/days/roots/scan_roots/subpath/refresh_token change.
-    // No cache — always re-scans. Walk is cheap (repo-boundary-pruned) and runs
-    // in spawn_blocking so the UI never blocks.
+    // Runs every time scope/days/roots/scan_roots/subpath/grouping/refresh_token
+    // change. No cache — always re-scans. The walk is cheap (repo-boundary
+    // pruned) and runs in spawn_blocking so the UI never blocks.
     use_effect(move || {
         let current_scope = scope();
         let current_roots = roots();
@@ -99,6 +165,10 @@ pub(crate) fn TaskView(
         let current_exclude = scan_exclude();
         let current_subpath = subpath();
         let n_days = selected_days();
+        let by_status = group_by_status();
+        let project_first = group_order() == GroupOrder::ProjectFirst;
+        let statuses = status_order();
+        let date_desc = date_order() == DateOrder::Desc;
         let _ = refresh_token();
         // Live rescan on file changes, This Project only: the watcher covers
         // the current roots, and dioxus tracks reads dynamically, so this
@@ -116,19 +186,20 @@ pub(crate) fn TaskView(
         loading.set(true);
 
         spawn(async move {
-            let result = tokio::task::spawn_blocking(move || match current_scope {
-                Scope::ThisProject => task_scan::group_and_sort(
-                    task_scan::scan_this_project_blocking(&current_roots, &current_subpath),
-                ),
-                Scope::AllProjects => {
-                    task_scan::group_and_sort(task_scan::scan_all_projects_blocking(
+            let result = tokio::task::spawn_blocking(move || {
+                let items = match current_scope {
+                    Scope::ThisProject => {
+                        task_scan::scan_this_project_blocking(&current_roots, &current_subpath)
+                    }
+                    Scope::AllProjects => task_scan::scan_all_projects_blocking(
                         &current_scan_roots,
                         &current_roots,
                         &current_subpath,
                         Some(n_days),
                         &current_exclude,
-                    ))
-                }
+                    ),
+                };
+                task_scan::build_groups(items, by_status, project_first, &statuses, date_desc)
             })
             .await;
 
@@ -294,344 +365,8 @@ pub(crate) fn TaskView(
                             }
                         }
                     } else {
-                        for (proj_name, proj_path, tasks) in groups() {
-                            // Project root node (variant-2: bold name + muted full path)
-                            {
-                                let proj_display = proj_path.display().to_string();
-                                let ctx_path = proj_path.clone();
-                                let copy_path = proj_path.clone();
-                                rsx! {
-                                    div {
-                                        style: "padding: 8px 12px 4px; user-select: none;",
-                                        class: "mdo-tree-row",
-                                        oncontextmenu: move |e| {
-                                            e.prevent_default();
-                                            let c = e.client_coordinates();
-                                            ctx_menu.set(Some(TaskCtxMenu {
-                                                x: c.x as i32,
-                                                y: c.y as i32,
-                                                path: ctx_path.clone(),
-                                                is_dir: true,
-                                                show_fav: false,
-                                            }));
-                                        },
-                                        // First line: project name + hover copy button
-                                        div {
-                                            style: "display: flex; align-items: center; gap: 4px;",
-                                            span {
-                                                style: "font: 600 13px -apple-system, sans-serif; \
-                                                        color: {fg}; overflow: hidden; text-overflow: ellipsis; \
-                                                        white-space: nowrap; flex: 1 1 auto;",
-                                                "{proj_name}"
-                                            }
-                                            button {
-                                                class: "mdo-copy-path",
-                                                style: "background: transparent; border: none; cursor: pointer; \
-                                                        flex: 0 0 auto; padding: 0 2px; display: flex; \
-                                                        align-items: center; color: {muted};",
-                                                title: "パスをコピー",
-                                                onclick: move |e| {
-                                                    e.stop_propagation();
-                                                    on_copy_path.call(copy_path.clone());
-                                                },
-                                                {copy_icon()}
-                                            }
-                                        }
-                                        // Second line: muted absolute path
-                                        div {
-                                            style: "font: 11px ui-monospace, monospace; color: {muted}; \
-                                                    overflow: hidden; text-overflow: ellipsis; \
-                                                    white-space: nowrap; margin-top: 1px;",
-                                            title: "{proj_display}",
-                                            "{proj_display}"
-                                        }
-                                    }
-                                    // Task folder rows
-                                    for task in tasks {
-                                        {
-                                            let folder_path = task.folder_path.clone();
-                                            let task_md = task.task_md.clone();
-                                            let project_path = task.project_path.clone();
-                                            let folder_name = task.folder_name.clone();
-                                            let extra_files = task.extra_files.clone();
-                                            let status_color = task.meta.status.color();
-                                            let status_label = task.meta.status.label();
-                                            let is_open = expanded.read().contains(&folder_path);
-                                            let is_folder_active = selected.read().as_ref().map(|(p, _)| {
-                                                p == &task.task_md || task.extra_files.contains(p)
-                                            }).unwrap_or(false);
-
-                                            let folder_bg = if is_folder_active {
-                                                if dark { "rgba(9,105,218,0.08)" } else { "rgba(9,105,218,0.05)" }
-                                            } else { "transparent" };
-                                            let folder_border = if is_folder_active { "#0969da" } else { "transparent" };
-
-                                            let toggle_path = folder_path.clone();
-                                            let open_md = task_md.clone();
-                                            let open_proj = project_path.clone();
-                                            let chevron = if is_open { "▾" } else { "▸" };
-
-                                            let ctx_folder_path = folder_path.clone();
-                                            let copy_folder_path = folder_path.clone();
-                                            let fav_folder_path = folder_path.clone();
-                                            let is_fav_folder = favorites.read().iter().any(|p| p == &folder_path);
-                                            let star_folder_color = if is_fav_folder { "#e3b341" } else { muted };
-
-                                            rsx! {
-                                                // Task folder row
-                                                div {
-                                                    key: "{folder_path.display()}",
-                                                    style: "padding: 5px 8px 5px 22px; cursor: pointer; \
-                                                            display: flex; align-items: center; gap: 6px; \
-                                                            user-select: none; \
-                                                            font: 13px -apple-system, sans-serif; line-height: 1.4; \
-                                                            color: {fg}; background: {folder_bg}; \
-                                                            border-left: 2px solid {folder_border}; \
-                                                            border-radius: 0 4px 4px 0;",
-                                                    class: "mdo-tree-row",
-                                                    onclick: move |_| {
-                                                        let mut e = expanded.write();
-                                                        if !e.remove(&toggle_path) {
-                                                            e.insert(toggle_path.clone());
-                                                        }
-                                                        selected.set(Some((open_md.clone(), open_proj.clone())));
-                                                    },
-                                                    oncontextmenu: move |e| {
-                                                        e.prevent_default();
-                                                        let c = e.client_coordinates();
-                                                        ctx_menu.set(Some(TaskCtxMenu {
-                                                            x: c.x as i32,
-                                                            y: c.y as i32,
-                                                            path: ctx_folder_path.clone(),
-                                                            is_dir: true,
-                                                            show_fav: true,
-                                                        }));
-                                                    },
-                                                    // Chevron
-                                                    span {
-                                                        style: "color: {muted}; font-size: 10px; flex: 0 0 auto; width: 10px;",
-                                                        "{chevron}"
-                                                    }
-                                                    // Status dot
-                                                    span {
-                                                        style: "width: 8px; height: 8px; border-radius: 50%; \
-                                                                background: {status_color}; flex: 0 0 auto;",
-                                                        title: "{status_label}",
-                                                    }
-                                                    // Folder name
-                                                    span {
-                                                        style: "overflow: hidden; text-overflow: ellipsis; \
-                                                                white-space: nowrap; flex: 1 1 auto;",
-                                                        "{folder_name}"
-                                                    }
-                                                    // Hover copy button
-                                                    button {
-                                                        class: "mdo-copy-path",
-                                                        style: "background: transparent; border: none; cursor: pointer; \
-                                                                flex: 0 0 auto; padding: 0 2px; display: flex; \
-                                                                align-items: center; color: {muted};",
-                                                        title: "パスをコピー",
-                                                        onclick: move |e| {
-                                                            e.stop_propagation();
-                                                            on_copy_path.call(copy_folder_path.clone());
-                                                        },
-                                                        {copy_icon()}
-                                                    }
-                                                    // Hover star button (task folders only)
-                                                    button {
-                                                        class: if is_fav_folder { "mdo-fav-star on" } else { "mdo-fav-star" },
-                                                        style: "background: transparent; border: none; cursor: pointer; \
-                                                                flex: 0 0 auto; padding: 0 2px; display: flex; \
-                                                                align-items: center; color: {star_folder_color};",
-                                                        title: if is_fav_folder { "お気に入りから外す" } else { "お気に入りに追加" },
-                                                        onclick: move |e| {
-                                                            e.stop_propagation();
-                                                            on_toggle_fav.call(fav_folder_path.clone());
-                                                        },
-                                                        svg {
-                                                            width: "13", height: "13", view_box: "0 0 24 24",
-                                                            fill: if is_fav_folder { "currentColor" } else { "none" },
-                                                            stroke: "currentColor", stroke_width: "2", stroke_linejoin: "round",
-                                                            path { d: "M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z" }
-                                                        }
-                                                    }
-                                                }
-                                                // Children (task.md + output files)
-                                                if is_open {
-                                                    // task.md
-                                                    {
-                                                        let is_sel = selected.read().as_ref()
-                                                            .map(|(p, _)| p == &task_md).unwrap_or(false);
-                                                        let row_bg = if is_sel {
-                                                            if dark { "rgba(9,105,218,0.12)" } else { "rgba(9,105,218,0.08)" }
-                                                        } else { "transparent" };
-                                                        let row_border = if is_sel { "#0969da" } else { "transparent" };
-                                                        let c_path = task_md.clone();
-                                                        let c_proj = project_path.clone();
-                                                        let ctx_md_path = task_md.clone();
-                                                        let copy_md_path = task_md.clone();
-                                                        let fav_md_path = task_md.clone();
-                                                        let is_fav_md = favorites.read().iter().any(|p| p == &task_md);
-                                                        let star_md_color = if is_fav_md { "#e3b341" } else { muted };
-                                                        rsx! {
-                                                            div {
-                                                                style: "padding: 4px 8px 4px 48px; cursor: pointer; \
-                                                                        display: flex; align-items: center; gap: 5px; \
-                                                                        font: 12px -apple-system, sans-serif; line-height: 1.4; \
-                                                                        color: {fg}; background: {row_bg}; \
-                                                                        border-left: 2px solid {row_border}; \
-                                                                        border-radius: 0 4px 4px 0;",
-                                                                class: "mdo-tree-row",
-                                                                onclick: move |_| {
-                                                                    selected.set(Some((c_path.clone(), c_proj.clone())));
-                                                                },
-                                                                oncontextmenu: move |e| {
-                                                                    e.prevent_default();
-                                                                    let c = e.client_coordinates();
-                                                                    ctx_menu.set(Some(TaskCtxMenu {
-                                                                        x: c.x as i32,
-                                                                        y: c.y as i32,
-                                                                        path: ctx_md_path.clone(),
-                                                                        is_dir: false,
-                                                                        show_fav: true,
-                                                                    }));
-                                                                },
-                                                                {task_view_file_icon(muted)}
-                                                                span {
-                                                                    style: "flex: 1 1 auto; overflow: hidden; \
-                                                                            text-overflow: ellipsis; white-space: nowrap;",
-                                                                    "task.md"
-                                                                }
-                                                                // Hover copy button
-                                                                button {
-                                                                    class: "mdo-copy-path",
-                                                                    style: "background: transparent; border: none; cursor: pointer; \
-                                                                            flex: 0 0 auto; padding: 0 2px; display: flex; \
-                                                                            align-items: center; color: {muted};",
-                                                                    title: "パスをコピー",
-                                                                    onclick: move |e| {
-                                                                        e.stop_propagation();
-                                                                        on_copy_path.call(copy_md_path.clone());
-                                                                    },
-                                                                    {copy_icon()}
-                                                                }
-                                                                // Hover star button
-                                                                button {
-                                                                    class: if is_fav_md { "mdo-fav-star on" } else { "mdo-fav-star" },
-                                                                    style: "background: transparent; border: none; cursor: pointer; \
-                                                                            flex: 0 0 auto; padding: 0 2px; display: flex; \
-                                                                            align-items: center; color: {star_md_color};",
-                                                                    title: if is_fav_md { "お気に入りから外す" } else { "お気に入りに追加" },
-                                                                    onclick: move |e| {
-                                                                        e.stop_propagation();
-                                                                        on_toggle_fav.call(fav_md_path.clone());
-                                                                    },
-                                                                    svg {
-                                                                        width: "13", height: "13", view_box: "0 0 24 24",
-                                                                        fill: if is_fav_md { "currentColor" } else { "none" },
-                                                                        stroke: "currentColor", stroke_width: "2", stroke_linejoin: "round",
-                                                                        path { d: "M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z" }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                    // Other files in the task folder. Markdown opens in the
-                                                    // right pane; anything else opens in the default app.
-                                                    for extra in extra_files.clone() {
-                                                        {
-                                                            let name = extra.file_name()
-                                                                .map(|s| s.to_string_lossy().to_string())
-                                                                .unwrap_or_default();
-                                                            let extra_is_md = crate::files::is_markdown(&extra);
-                                                            let is_sel = selected.read().as_ref()
-                                                                .map(|(p, _)| p == &extra).unwrap_or(false);
-                                                            let row_bg = if is_sel {
-                                                                if dark { "rgba(9,105,218,0.12)" } else { "rgba(9,105,218,0.08)" }
-                                                            } else { "transparent" };
-                                                            let row_border = if is_sel { "#0969da" } else { "transparent" };
-                                                            let c_path = extra.clone();
-                                                            let c_proj = project_path.clone();
-                                                            let ctx_extra_path = extra.clone();
-                                                            let copy_extra_path = extra.clone();
-                                                            let fav_extra_path = extra.clone();
-                                                            let is_fav_extra = favorites.read().iter().any(|p| p == &extra);
-                                                            let star_extra_color = if is_fav_extra { "#e3b341" } else { muted };
-                                                            rsx! {
-                                                                div {
-                                                                    key: "{extra.display()}",
-                                                                    style: "padding: 4px 8px 4px 48px; cursor: pointer; \
-                                                                            display: flex; align-items: center; gap: 5px; \
-                                                                            font: 12px -apple-system, sans-serif; line-height: 1.4; \
-                                                                            color: {muted}; background: {row_bg}; \
-                                                                            border-left: 2px solid {row_border}; \
-                                                                            border-radius: 0 4px 4px 0;",
-                                                                    class: "mdo-tree-row",
-                                                                    onclick: move |_| {
-                                                                        if extra_is_md {
-                                                                            selected.set(Some((c_path.clone(), c_proj.clone())));
-                                                                        } else if let Err(err) = services::platform::open_target(&c_path) {
-                                                                            on_toast.call(format!("Open failed: {err}"));
-                                                                        }
-                                                                    },
-                                                                    oncontextmenu: move |e| {
-                                                                        e.prevent_default();
-                                                                        let c = e.client_coordinates();
-                                                                        ctx_menu.set(Some(TaskCtxMenu {
-                                                                            x: c.x as i32,
-                                                                            y: c.y as i32,
-                                                                            path: ctx_extra_path.clone(),
-                                                                            is_dir: false,
-                                                                            show_fav: true,
-                                                                        }));
-                                                                    },
-                                                                    {task_view_file_icon(muted)}
-                                                                    span {
-                                                                        style: "flex: 1 1 auto; overflow: hidden; \
-                                                                                text-overflow: ellipsis; white-space: nowrap;",
-                                                                        "{name}"
-                                                                    }
-                                                                    // Hover copy button
-                                                                    button {
-                                                                        class: "mdo-copy-path",
-                                                                        style: "background: transparent; border: none; cursor: pointer; \
-                                                                                flex: 0 0 auto; padding: 0 2px; display: flex; \
-                                                                                align-items: center; color: {muted};",
-                                                                        title: "パスをコピー",
-                                                                        onclick: move |e| {
-                                                                            e.stop_propagation();
-                                                                            on_copy_path.call(copy_extra_path.clone());
-                                                                        },
-                                                                        {copy_icon()}
-                                                                    }
-                                                                    // Hover star button
-                                                                    button {
-                                                                        class: if is_fav_extra { "mdo-fav-star on" } else { "mdo-fav-star" },
-                                                                        style: "background: transparent; border: none; cursor: pointer; \
-                                                                                flex: 0 0 auto; padding: 0 2px; display: flex; \
-                                                                                align-items: center; color: {star_extra_color};",
-                                                                        title: if is_fav_extra { "お気に入りから外す" } else { "お気に入りに追加" },
-                                                                        onclick: move |e| {
-                                                                            e.stop_propagation();
-                                                                            on_toggle_fav.call(fav_extra_path.clone());
-                                                                        },
-                                                                        svg {
-                                                                            width: "13", height: "13", view_box: "0 0 24 24",
-                                                                            fill: if is_fav_extra { "currentColor" } else { "none" },
-                                                                            stroke: "currentColor", stroke_width: "2", stroke_linejoin: "round",
-                                                                            path { d: "M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z" }
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                        for group in groups() {
+                            GroupNode { key: "{group.id}", group, depth: 0, ctx: row_ctx }
                         }
                     }
                 }
@@ -646,10 +381,9 @@ pub(crate) fn TaskView(
                     e.prevent_default();
                     spawn(async move {
                         let mut eval = document::eval(js::sidebar_resize_js());
-                        while let Ok(msg) = eval.recv::<serde_json::Value>().await {
-                            if let Some(x) = msg.get("x").and_then(|v| v.as_f64()) {
-                                let w = (x.round() as i64).clamp(200, 600) as u32;
-                                pane_width.set(w);
+                        while let Ok(value) = eval.recv::<serde_json::Value>().await {
+                            if let Some(x) = value.get("x").and_then(|v| v.as_f64()) {
+                                pane_width.set((x as u32).clamp(200, 600));
                             }
                         }
                     });
@@ -744,6 +478,379 @@ pub(crate) fn TaskView(
                             }
                         }
                     }
+                }
+            }
+
+            // Hidden: the project menu is opened from the app's global keybind.
+            // Kept as a prop so the Task View header can trigger it later.
+            {
+                let _ = &on_open_project_menu;
+                let _ = &proj_name;
+                rsx! {}
+            }
+        }
+    }
+}
+
+/// One group heading (project or status) plus whatever it contains: nested
+/// groups when `group.children` is non-empty, otherwise the task folders.
+#[component]
+fn GroupNode(group: TaskGroup, depth: usize, ctx: RowCtx) -> Element {
+    let mut collapsed = ctx.collapsed;
+    let is_open = !collapsed.read().contains(&group.id);
+    let chevron = if is_open { "▾" } else { "▸" };
+    let toggle_id = group.id.clone();
+    let (fg, muted) = (ctx.fg(), ctx.muted());
+    let pad = indent(depth);
+    let count = group.task_count();
+
+    rsx! {
+        match &group.key {
+            GroupKey::Project { name, path } => {
+                let display = path.display().to_string();
+                let ctx_path = path.clone();
+                let copy_path = path.clone();
+                let mut ctx_menu = ctx.ctx_menu;
+                let on_copy_path = ctx.on_copy_path;
+                rsx! {
+                    div {
+                        style: "padding: 8px 12px 4px {pad}px; user-select: none; cursor: pointer;",
+                        class: "mdo-tree-row",
+                        onclick: move |_| {
+                            let mut c = collapsed.write();
+                            if !c.remove(&toggle_id) {
+                                c.insert(toggle_id.clone());
+                            }
+                        },
+                        oncontextmenu: move |e| {
+                            e.prevent_default();
+                            let c = e.client_coordinates();
+                            ctx_menu.set(Some(TaskCtxMenu {
+                                x: c.x as i32,
+                                y: c.y as i32,
+                                path: ctx_path.clone(),
+                                is_dir: true,
+                                show_fav: false,
+                            }));
+                        },
+                        // First line: chevron + project name + hover copy button
+                        div {
+                            style: "display: flex; align-items: center; gap: 4px;",
+                            span {
+                                style: "color: {muted}; font-size: 10px; flex: 0 0 auto; width: 10px;",
+                                "{chevron}"
+                            }
+                            span {
+                                style: "font: 600 13px -apple-system, sans-serif; \
+                                        color: {fg}; overflow: hidden; text-overflow: ellipsis; \
+                                        white-space: nowrap; flex: 1 1 auto;",
+                                "{name}"
+                            }
+                            button {
+                                class: "mdo-copy-path",
+                                style: "background: transparent; border: none; cursor: pointer; \
+                                        flex: 0 0 auto; padding: 0 2px; display: flex; \
+                                        align-items: center; color: {muted};",
+                                title: "パスをコピー",
+                                onclick: move |e| {
+                                    e.stop_propagation();
+                                    on_copy_path.call(copy_path.clone());
+                                },
+                                {copy_icon()}
+                            }
+                        }
+                        // Second line: muted absolute path
+                        div {
+                            style: "font: 11px ui-monospace, monospace; color: {muted}; \
+                                    overflow: hidden; text-overflow: ellipsis; \
+                                    white-space: nowrap; margin-top: 1px; padding-left: 14px;",
+                            title: "{display}",
+                            "{display}"
+                        }
+                    }
+                }
+            }
+            GroupKey::Status(status) => {
+                let color = status.color();
+                let heading = status.heading();
+                rsx! {
+                    div {
+                        style: "padding: 5px 8px 5px {pad}px; cursor: pointer; user-select: none; \
+                                display: flex; align-items: center; gap: 6px; \
+                                font: 600 12px -apple-system, sans-serif; color: {muted};",
+                        class: "mdo-tree-row",
+                        onclick: move |_| {
+                            let mut c = collapsed.write();
+                            if !c.remove(&toggle_id) {
+                                c.insert(toggle_id.clone());
+                            }
+                        },
+                        span {
+                            style: "color: {muted}; font-size: 10px; flex: 0 0 auto; width: 10px;",
+                            "{chevron}"
+                        }
+                        span {
+                            style: "width: 8px; height: 8px; border-radius: 50%; \
+                                    background: {color}; flex: 0 0 auto;",
+                        }
+                        span { style: "flex: 1 1 auto;", "{heading}" }
+                        span { style: "flex: 0 0 auto; font-weight: 400;", "{count}" }
+                    }
+                }
+            }
+        }
+
+        if is_open {
+            for child in group.children.iter().cloned() {
+                GroupNode { key: "{child.id}", group: child, depth: depth + 1, ctx }
+            }
+            for task in group.tasks.iter().cloned() {
+                TaskFolderNode {
+                    key: "{task.folder_path.display()}",
+                    task,
+                    depth: depth + 1,
+                    ctx,
+                }
+            }
+        }
+    }
+}
+
+/// A task folder row and, when expanded, its `task.md` plus every other file
+/// in the folder.
+#[component]
+fn TaskFolderNode(task: TaskItem, depth: usize, ctx: RowCtx) -> Element {
+    let mut expanded = ctx.expanded;
+    let mut selected = ctx.selected;
+    let mut ctx_menu = ctx.ctx_menu;
+    let (on_copy_path, on_toggle_fav, on_toast) =
+        (ctx.on_copy_path, ctx.on_toggle_fav, ctx.on_toast);
+    let (fg, muted) = (ctx.fg(), ctx.muted());
+
+    let folder_path = task.folder_path.clone();
+    let task_md = task.task_md.clone();
+    let project_path = task.project_path.clone();
+    let is_open = expanded.read().contains(&folder_path);
+    let chevron = if is_open { "▾" } else { "▸" };
+    let is_folder_active = selected
+        .read()
+        .as_ref()
+        .map(|(p, _)| p == &task.task_md || task.extra_files.contains(p))
+        .unwrap_or(false);
+    let folder_bg = if is_folder_active {
+        ctx.sel_bg(false)
+    } else {
+        "transparent"
+    };
+    let folder_border = if is_folder_active {
+        "#0969da"
+    } else {
+        "transparent"
+    };
+    let is_fav_folder = ctx.favorites.read().iter().any(|p| p == &folder_path);
+    let star_folder_color = if is_fav_folder { "#e3b341" } else { muted };
+    let status_color = task.meta.status.color();
+    let status_label = task.meta.status.label();
+    let folder_name = task.folder_name.clone();
+    let pad = indent(depth);
+    let child_pad = indent(depth + 1) + 12;
+
+    let toggle_path = folder_path.clone();
+    let open_md = task_md.clone();
+    let open_proj = project_path.clone();
+    let ctx_folder_path = folder_path.clone();
+    let copy_folder_path = folder_path.clone();
+    let fav_folder_path = folder_path.clone();
+
+    rsx! {
+        div {
+            style: "padding: 5px 8px 5px {pad}px; cursor: pointer; \
+                    display: flex; align-items: center; gap: 6px; user-select: none; \
+                    font: 13px -apple-system, sans-serif; line-height: 1.4; \
+                    color: {fg}; background: {folder_bg}; \
+                    border-left: 2px solid {folder_border}; border-radius: 0 4px 4px 0;",
+            class: "mdo-tree-row",
+            onclick: move |_| {
+                let mut e = expanded.write();
+                if !e.remove(&toggle_path) {
+                    e.insert(toggle_path.clone());
+                }
+                selected.set(Some((open_md.clone(), open_proj.clone())));
+            },
+            oncontextmenu: move |e| {
+                e.prevent_default();
+                let c = e.client_coordinates();
+                ctx_menu.set(Some(TaskCtxMenu {
+                    x: c.x as i32,
+                    y: c.y as i32,
+                    path: ctx_folder_path.clone(),
+                    is_dir: true,
+                    show_fav: true,
+                }));
+            },
+            span {
+                style: "color: {muted}; font-size: 10px; flex: 0 0 auto; width: 10px;",
+                "{chevron}"
+            }
+            span {
+                style: "width: 8px; height: 8px; border-radius: 50%; \
+                        background: {status_color}; flex: 0 0 auto;",
+                title: "{status_label}",
+            }
+            span {
+                style: "overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto;",
+                "{folder_name}"
+            }
+            button {
+                class: "mdo-copy-path",
+                style: "background: transparent; border: none; cursor: pointer; \
+                        flex: 0 0 auto; padding: 0 2px; display: flex; \
+                        align-items: center; color: {muted};",
+                title: "パスをコピー",
+                onclick: move |e| {
+                    e.stop_propagation();
+                    on_copy_path.call(copy_folder_path.clone());
+                },
+                {copy_icon()}
+            }
+            button {
+                class: if is_fav_folder { "mdo-fav-star on" } else { "mdo-fav-star" },
+                style: "background: transparent; border: none; cursor: pointer; \
+                        flex: 0 0 auto; padding: 0 2px; display: flex; \
+                        align-items: center; color: {star_folder_color};",
+                title: if is_fav_folder { "お気に入りから外す" } else { "お気に入りに追加" },
+                onclick: move |e| {
+                    e.stop_propagation();
+                    on_toggle_fav.call(fav_folder_path.clone());
+                },
+                svg {
+                    width: "13", height: "13", view_box: "0 0 24 24",
+                    fill: if is_fav_folder { "currentColor" } else { "none" },
+                    stroke: "currentColor", stroke_width: "2", stroke_linejoin: "round",
+                    path { d: "M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z" }
+                }
+            }
+        }
+
+        if is_open {
+            // task.md first, then every other file in the folder (name order).
+            FileRow {
+                key: "{task_md.display()}",
+                path: task_md.clone(),
+                project_path: project_path.clone(),
+                label: "task.md".to_string(),
+                pad: child_pad,
+                ctx,
+            }
+            for extra in task.extra_files.iter().cloned() {
+                FileRow {
+                    key: "{extra.display()}",
+                    label: extra.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
+                    path: extra,
+                    project_path: project_path.clone(),
+                    pad: child_pad,
+                    ctx,
+                }
+            }
+        }
+        // `on_toast` is used by the file rows; silence the unused binding here.
+        { let _ = &on_toast; rsx! {} }
+    }
+}
+
+/// A single file row under a task folder. Markdown opens in the right pane;
+/// anything else opens in the OS default app.
+#[component]
+fn FileRow(
+    path: PathBuf,
+    project_path: PathBuf,
+    label: String,
+    pad: usize,
+    ctx: RowCtx,
+) -> Element {
+    let mut selected = ctx.selected;
+    let mut ctx_menu = ctx.ctx_menu;
+    let (on_copy_path, on_toggle_fav, on_toast) =
+        (ctx.on_copy_path, ctx.on_toggle_fav, ctx.on_toast);
+    let muted = ctx.muted();
+    let is_md = crate::files::is_markdown(&path);
+    let fg = if is_md { ctx.fg() } else { muted };
+
+    let is_sel = selected
+        .read()
+        .as_ref()
+        .map(|(p, _)| p == &path)
+        .unwrap_or(false);
+    let row_bg = if is_sel {
+        ctx.sel_bg(true)
+    } else {
+        "transparent"
+    };
+    let row_border = if is_sel { "#0969da" } else { "transparent" };
+    let is_fav = ctx.favorites.read().iter().any(|p| p == &path);
+    let star_color = if is_fav { "#e3b341" } else { muted };
+
+    let (open_path, open_proj) = (path.clone(), project_path.clone());
+    let (ctx_path, copy_path, fav_path) = (path.clone(), path.clone(), path.clone());
+
+    rsx! {
+        div {
+            style: "padding: 4px 8px 4px {pad}px; cursor: pointer; \
+                    display: flex; align-items: center; gap: 5px; \
+                    font: 12px -apple-system, sans-serif; line-height: 1.4; \
+                    color: {fg}; background: {row_bg}; \
+                    border-left: 2px solid {row_border}; border-radius: 0 4px 4px 0;",
+            class: "mdo-tree-row",
+            onclick: move |_| {
+                if is_md {
+                    selected.set(Some((open_path.clone(), open_proj.clone())));
+                } else if let Err(err) = services::platform::open_target(&open_path) {
+                    on_toast.call(format!("Open failed: {err}"));
+                }
+            },
+            oncontextmenu: move |e| {
+                e.prevent_default();
+                let c = e.client_coordinates();
+                ctx_menu.set(Some(TaskCtxMenu {
+                    x: c.x as i32,
+                    y: c.y as i32,
+                    path: ctx_path.clone(),
+                    is_dir: false,
+                    show_fav: true,
+                }));
+            },
+            {task_view_file_icon(muted)}
+            span {
+                style: "flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                "{label}"
+            }
+            button {
+                class: "mdo-copy-path",
+                style: "background: transparent; border: none; cursor: pointer; \
+                        flex: 0 0 auto; padding: 0 2px; display: flex; \
+                        align-items: center; color: {muted};",
+                title: "パスをコピー",
+                onclick: move |e| {
+                    e.stop_propagation();
+                    on_copy_path.call(copy_path.clone());
+                },
+                {copy_icon()}
+            }
+            button {
+                class: if is_fav { "mdo-fav-star on" } else { "mdo-fav-star" },
+                style: "background: transparent; border: none; cursor: pointer; \
+                        flex: 0 0 auto; padding: 0 2px; display: flex; \
+                        align-items: center; color: {star_color};",
+                title: if is_fav { "お気に入りから外す" } else { "お気に入りに追加" },
+                onclick: move |e| {
+                    e.stop_propagation();
+                    on_toggle_fav.call(fav_path.clone());
+                },
+                svg {
+                    width: "13", height: "13", view_box: "0 0 24 24",
+                    fill: if is_fav { "currentColor" } else { "none" },
+                    stroke: "currentColor", stroke_width: "2", stroke_linejoin: "round",
+                    path { d: "M12 2l3 7h7l-5.5 4.5L18 21l-6-4-6 4 1.5-7.5L2 9h7z" }
                 }
             }
         }
