@@ -62,7 +62,15 @@ fn build_dir(dir: &Path, depth: usize) -> Vec<TreeNode> {
             continue;
         };
         // Use file_type() to avoid a stat() per entry (and macOS TCC prompts).
-        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        // Symlinks report neither dir nor file there, so only for them fall
+        // back to a following stat — a symlinked docs dir must still show up.
+        // Cycles are bounded by MAX_DEPTH.
+        let file_type = entry.file_type();
+        let is_dir = match &file_type {
+            Ok(t) if t.is_symlink() => path.is_dir(),
+            Ok(t) => t.is_dir(),
+            Err(_) => false,
+        };
 
         if is_dir {
             if is_ignored_dir(&name) {
@@ -119,6 +127,31 @@ fn collect_md(nodes: &[TreeNode], out: &mut Vec<PathBuf>) {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinkのディレクトリとmdもツリーに載る() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // Real content outside the tree root, reached only via symlinks.
+        fs::create_dir_all(root.join("real-docs")).unwrap();
+        fs::write(root.join("real-docs/guide.md"), "# g").unwrap();
+        fs::write(root.join("note.md"), "# n").unwrap();
+
+        let proj = root.join("proj");
+        fs::create_dir_all(&proj).unwrap();
+        std::os::unix::fs::symlink(root.join("real-docs"), proj.join("docs")).unwrap();
+        std::os::unix::fs::symlink(root.join("note.md"), proj.join("note.md")).unwrap();
+
+        let tree = build_tree(&proj);
+        let docs = tree
+            .iter()
+            .find(|n| n.name == "docs")
+            .expect("symlinked dir should appear");
+        assert!(docs.is_dir);
+        assert_eq!(docs.md_count, 1);
+        assert!(tree.iter().any(|n| n.name == "note.md" && !n.is_dir));
+    }
 
     #[test]
     fn is_git_worktreeはgitファイルのみ真() {
