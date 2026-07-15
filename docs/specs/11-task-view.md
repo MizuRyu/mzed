@@ -59,6 +59,7 @@
 ## 右ペイン: タスク詳細
 
 - 選択したタスクフォルダ行 or `task.md` 行クリックで、その `task.md` を既存レンダリングで表示。
+- 表示後はメインビューと同じ post-render パス（highlight.js / mermaid / KaTeX / 画像 lightbox）が走る。Task View がドキュメントをロードするたびに `doc_tick` を bump し、app 側の post-render effect（全 `.markdown-body` を走査）を再発火させる。
 - タスクフォルダ内の他ファイルも行として辿れる。Markdown（`.md` / `.markdown`）はクリックで同ペインに表示、それ以外（画像・ログ等）はクリックで OS の既定アプリで開く。
 - ヘッダに status バッジ・`created`・フルパス（muted）。
 

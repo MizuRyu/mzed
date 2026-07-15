@@ -896,3 +896,12 @@ allowlist 方式で再構築する安全な生 HTML サブセット（`<img>` / 
 | **期待結果** | 各グループ内のタスクが `created` 昇順に並び替わる（既定は降順＝新しい順）。グループ化 OFF のときも同様に効く |
 | **自動化済み** | `src/services/task_scan.rs` の `build_groups_flat_ascending_reverses_task_order` |
 
+### TV-26 右ペインで mermaid / ハイライト / KaTeX が描画される
+
+| 項目 | 内容 |
+|---|---|
+| **前提** | `task.md` に mermaid コードブロック・言語付きコードブロック・（KaTeX ON なら）数式を含むタスクがある |
+| **手順** | Task View でそのタスクを選択して右ペインに表示する |
+| **期待結果** | mermaid が SVG 図として描画され、コードブロックがシンタックスハイライトされ、数式が KaTeX で描画される（メインビューと同等） |
+| **備考** | Task View のドキュメントロードごとに `doc_tick` が bump され、app の post-render effect が再実行される |
+

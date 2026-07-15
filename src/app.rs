@@ -664,6 +664,9 @@ pub(crate) fn App() -> Element {
     // Bumped to force a Task View re-scan (Cmd+R and the ↻ header button).
     let mut task_view_refresh_token = use_signal(|| 0u32);
     let mut task_view_scope_token = use_signal(|| 0u32);
+    // Bumped by the Task View whenever its right pane loads a document, so the
+    // post-render pass below re-runs over it (it scans every .markdown-body).
+    let task_view_doc_tick = use_signal(|| 0u32);
     // Transient top-right toast (e.g. "Copied!"). Auto-hides after ~1.5s; a
     // generation counter ensures only the latest toast clears itself.
     let mut toast = use_signal(|| None::<String>);
@@ -1346,9 +1349,11 @@ pub(crate) fn App() -> Element {
     // clicks and external links post a message back, handled by the loop below.
     use_effect(move || {
         let _ = html();
-        // Also re-run when the right pane's HTML changes (split view) and when
-        // the appearance / KaTeX flag flips so it re-themes / re-renders live.
+        // Also re-run when the right pane's HTML changes (split view), when the
+        // Task View loads a document into its own pane, and when the appearance
+        // / KaTeX flag flips so it re-themes / re-renders live.
         let _ = html_r();
+        let _ = task_view_doc_tick();
         let dark = appearance() == theme::Appearance::Dark;
         let katex = feature_katex();
         let allowed_roots = file_service::allowed_roots_for_active_files(
@@ -2222,6 +2227,7 @@ pub(crate) fn App() -> Element {
                         fs_tick: tree_refresh,
                         refresh_token: task_view_refresh_token,
                         scope_token: task_view_scope_token,
+                        doc_tick: task_view_doc_tick,
                         scan_roots: task_view_scan_roots,
                         scan_exclude: task_view_scan_exclude,
                         subpath: task_view_tasks_subpath,

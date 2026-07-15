@@ -86,6 +86,9 @@ pub(crate) fn TaskView(
     mut refresh_token: Signal<u32>,
     /// Bumped by the app (Ctrl+Tab) to toggle This Project ⇄ All Projects.
     scope_token: Signal<u32>,
+    /// Bumped here after the right pane's HTML is set, so the app re-runs the
+    /// post-render pass (highlight / mermaid / KaTeX) over the new content.
+    mut doc_tick: Signal<u32>,
     scan_roots: Signal<Vec<PathBuf>>,
     scan_exclude: Signal<Vec<String>>,
     subpath: Signal<String>,
@@ -237,6 +240,7 @@ pub(crate) fn TaskView(
             }
             if let Ok(snap) = result {
                 doc_html.set(snap.rendered_html().to_string());
+                doc_tick += 1;
             }
         });
     });
