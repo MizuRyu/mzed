@@ -46,6 +46,8 @@ pub(crate) fn Settings(
     mut task_view_status_order: Signal<Vec<String>>,
     mut task_view_date_order: Signal<config::DateOrder>,
     mut project_aliases: Signal<Vec<config::ProjectAlias>>,
+    mut project_menu_hidden: Signal<Vec<PathBuf>>,
+    mut sync_skip_worktrees: Signal<bool>,
     dark: bool,
 ) -> Element {
     let win = dioxus::desktop::use_window();
@@ -352,6 +354,53 @@ pub(crate) fn Settings(
                                                     });
                                                 },
                                                 "+ フォルダを追加"
+                                            }
+                                        }
+                                    }
+                                    // Projects hidden from the Cmd+O switcher (✕ on a row).
+                                    if !project_menu_hidden().is_empty() {
+                                        div {
+                                            style: "{row} border-top: 1px solid {row_border}; align-items: flex-start;",
+                                            div {
+                                                div { style: row_title, "非表示のプロジェクト" }
+                                                div {
+                                                    style: "{row_desc}",
+                                                    "プロジェクト切替（Cmd+O）で ✕ を押して隠したもの。✕ で一覧に戻す"
+                                                }
+                                            }
+                                            div {
+                                                style: "display: flex; flex-direction: column; gap: 6px; width: 320px;",
+                                                for (i, hidden_path) in project_menu_hidden().iter().enumerate() {
+                                                    {
+                                                        let display = hidden_path.display().to_string();
+                                                        let remove_idx = i;
+                                                        rsx! {
+                                                            div {
+                                                                key: "{display}",
+                                                                style: "display: flex; align-items: center; gap: 6px;",
+                                                                span {
+                                                                    style: "font: 11px ui-monospace, monospace; color: {muted}; \
+                                                                            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; \
+                                                                            flex: 1 1 auto; direction: rtl;",
+                                                                    title: "{display}",
+                                                                    "{display}"
+                                                                }
+                                                                button {
+                                                                    style: "background: transparent; border: none; color: {muted}; \
+                                                                            cursor: pointer; font-size: 14px; flex: 0 0 auto; padding: 0 4px;",
+                                                                    title: "一覧に戻す",
+                                                                    onclick: move |_| {
+                                                                        let mut list = project_menu_hidden.write();
+                                                                        if remove_idx < list.len() {
+                                                                            list.remove(remove_idx);
+                                                                        }
+                                                                    },
+                                                                    "✕"
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -832,6 +881,21 @@ pub(crate) fn Settings(
                                         option { value: "auto", selected: cur_sync == theme::SyncMode::Auto, "Auto" }
                                         option { value: "self", selected: cur_sync == theme::SyncMode::SelfPinned, "Self" }
                                         option { value: "off", selected: cur_sync == theme::SyncMode::Off, "Off" }
+                                    }
+                                }
+                                div {
+                                    style: "{row} border-top: 1px solid {row_border};",
+                                    div {
+                                        div { style: row_title, "git worktree に追従しない" }
+                                        div {
+                                            style: "{row_desc}",
+                                            "Zed で worktree（.git がファイルのリポ）を開いても表示を切り替えない。docs を main 側で持つ運用向け"
+                                        }
+                                    }
+                                    input {
+                                        r#type: "checkbox", checked: sync_skip_worktrees(),
+                                        style: "width: 16px; height: 16px; cursor: pointer;",
+                                        onchange: move |e| sync_skip_worktrees.set(e.value() == "true"),
                                     }
                                 }
                             },

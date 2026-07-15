@@ -14,6 +14,9 @@ pub(crate) fn ProjectMenu(
     dark: bool,
     on_pick: EventHandler<PathBuf>,
     on_open_folder: EventHandler<()>,
+    /// ✕ on a row: hide this project from the candidate list (restorable in
+    /// Settings > General). Not shown on the current project's row.
+    on_hide: EventHandler<PathBuf>,
 ) -> Element {
     let menu_bg = if dark { "#161b22" } else { "#ffffff" };
     let border = if dark { "#30363d" } else { "#d0d7de" };
@@ -137,7 +140,9 @@ pub(crate) fn ProjectMenu(
                         let row_fg = if highlighted { "#ffffff" } else { text_color };
                         let sub_fg = if highlighted { "#ffffffcc" } else { muted };
                         let badge_bg = if highlighted { "#ffffff2e" } else if dark { "#30363d" } else { "#eaeef2" };
+                        let x_fg = if highlighted { "#ffffffcc" } else { muted };
                         let pick = p.clone();
+                        let hide = p.clone();
                         rsx! {
                             div {
                                 "data-mdo-prow": "{i}",
@@ -167,6 +172,21 @@ pub(crate) fn ProjectMenu(
                                         }
                                     }
                                     div { style: "font-size: 11px; color: {sub_fg}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;", "{sub}" }
+                                }
+                                // Hide from the list (not offered for the current project).
+                                if !is_current {
+                                    button {
+                                        class: "mdo-proj-hide",
+                                        style: "flex: 0 0 auto; background: transparent; border: none; \
+                                                color: {x_fg}; cursor: pointer; font-size: 13px; \
+                                                padding: 2px 4px; border-radius: 4px; line-height: 1;",
+                                        title: "一覧から隠す（設定 → 一般 で戻せる）",
+                                        onclick: move |e| {
+                                            e.stop_propagation();
+                                            on_hide.call(hide.clone());
+                                        },
+                                        "✕"
+                                    }
                                 }
                             }
                         }

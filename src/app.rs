@@ -660,6 +660,8 @@ pub(crate) fn App() -> Element {
     let task_view_status_order = use_signal(|| saved_config.task_view_status_order.clone());
     let task_view_date_order = use_signal(|| saved_config.task_view_date_order);
     let project_aliases = use_signal(|| saved_config.project_aliases.clone());
+    let mut project_menu_hidden = use_signal(|| saved_config.project_menu_hidden.clone());
+    let sync_skip_worktrees = use_signal(|| saved_config.sync_skip_worktrees);
     let mut task_view_open = use_signal(|| false);
     // Bumped to force a Task View re-scan (Cmd+R and the ↻ header button).
     let mut task_view_refresh_token = use_signal(|| 0u32);
@@ -968,6 +970,12 @@ pub(crate) fn App() -> Element {
                 let Some(primary) = new_roots.first().cloned() else {
                     continue;
                 };
+                // Don't follow Zed into a linked worktree: with docs kept on
+                // the main checkout, a worktree switch would swap the viewer
+                // to a tree that has nothing to show.
+                if sync_skip_worktrees() && files::is_git_worktree(&primary) {
+                    continue;
+                }
                 // Representative markdown is picked from the primary root.
                 let pick = file_service::pick_markdown(&primary);
                 let exp = pick
@@ -1268,6 +1276,8 @@ pub(crate) fn App() -> Element {
             task_view_status_order: task_view_status_order(),
             task_view_date_order: task_view_date_order(),
             project_aliases: project_aliases(),
+            project_menu_hidden: project_menu_hidden(),
+            sync_skip_worktrees: sync_skip_worktrees(),
         };
         let generation = config_save_generation.write().advance();
         spawn(async move {
@@ -1341,6 +1351,11 @@ pub(crate) fn App() -> Element {
                 push(a.path);
             }
         }
+        // Hidden entries are a local overlay (Zed's recents can't be edited
+        // from here). The current project stays visible so the ✓ row remains.
+        let hidden = project_menu_hidden();
+        let current = root();
+        out.retain(|p| current.as_ref() == Some(p) || !hidden.contains(p));
         out
     });
 
@@ -2218,6 +2233,8 @@ pub(crate) fn App() -> Element {
                         task_view_status_order,
                         task_view_date_order,
                         project_aliases,
+                        project_menu_hidden,
+                        sync_skip_worktrees,
                         dark,
                     }
                 }
@@ -2263,6 +2280,12 @@ pub(crate) fn App() -> Element {
                         candidates: proj_candidates(),
                         current: root(),
                         aliases: project_aliases,
+                        on_hide: move |p: PathBuf| {
+                            let mut h = project_menu_hidden.write();
+                            if !h.contains(&p) {
+                                h.push(p);
+                            }
+                        },
                         dark,
                         on_pick: move |path: PathBuf| {
                             proj_menu_open.set(false);

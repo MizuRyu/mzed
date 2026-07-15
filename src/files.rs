@@ -25,6 +25,13 @@ pub(crate) fn is_markdown(p: &Path) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
 }
 
+/// True when `root` is a linked git worktree (or a submodule checkout): both
+/// keep a `.git` *file* pointing at the real git dir, while a primary checkout
+/// has a `.git` directory.
+pub(crate) fn is_git_worktree(root: &Path) -> bool {
+    root.join(".git").is_file()
+}
+
 fn is_ignored_dir(name: &str) -> bool {
     name.starts_with('.') || matches!(name, "node_modules" | "target" | "dist" | "build")
 }
@@ -112,6 +119,24 @@ fn collect_md(nodes: &[TreeNode], out: &mut Vec<PathBuf>) {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn is_git_worktreeはgitファイルのみ真() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // No .git at all → not a worktree.
+        assert!(!is_git_worktree(root));
+
+        // Primary checkout: .git is a directory.
+        fs::create_dir_all(root.join("primary/.git")).unwrap();
+        assert!(!is_git_worktree(&root.join("primary")));
+
+        // Linked worktree: .git is a file pointing at the real git dir.
+        fs::create_dir_all(root.join("wt")).unwrap();
+        fs::write(root.join("wt/.git"), "gitdir: /repo/.git/worktrees/wt\n").unwrap();
+        assert!(is_git_worktree(&root.join("wt")));
+    }
 
     #[test]
     fn flatten_mdは全mdファイルを集める() {

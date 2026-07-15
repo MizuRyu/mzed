@@ -180,6 +180,16 @@ pub struct Config {
     /// project can be found by a name that isn't on disk.
     #[serde(default)]
     pub project_aliases: Vec<ProjectAlias>,
+    /// Projects hidden from the Cmd+O switcher (its ✕ button adds here;
+    /// Settings > General restores them). Zed's recents can't be edited from
+    /// mzed, so hiding is a local overlay rather than a deletion.
+    #[serde(default)]
+    pub project_menu_hidden: Vec<PathBuf>,
+    /// Ignore Zed switches into git worktrees (a repo whose `.git` is a file).
+    /// For the docs-live-on-main workflow: editing in a worktree shouldn't
+    /// steal the viewer away from the main checkout.
+    #[serde(default = "default_true")]
+    pub sync_skip_worktrees: bool,
 }
 
 /// A user-defined nickname for one project directory.
@@ -276,6 +286,8 @@ impl Default for Config {
             task_view_status_order: default_task_view_status_order(),
             task_view_date_order: DateOrder::default(),
             project_aliases: Vec::new(),
+            project_menu_hidden: Vec::new(),
+            sync_skip_worktrees: true,
         }
     }
 }
