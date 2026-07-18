@@ -639,7 +639,7 @@ fn TaskFolderNode(task: TaskItem, depth: usize, ctx: RowCtx) -> Element {
     let is_folder_active = selected
         .read()
         .as_ref()
-        .map(|(p, _)| p == &task.task_md || task.extra_files.contains(p))
+        .map(|(p, _)| p.starts_with(&task.folder_path))
         .unwrap_or(false);
     let folder_bg = if is_folder_active {
         ctx.sel_bg(false)
@@ -737,7 +737,8 @@ fn TaskFolderNode(task: TaskItem, depth: usize, ctx: RowCtx) -> Element {
         }
 
         if is_open {
-            // task.md first, then every other file in the folder (name order).
+            // task.md first, then the rest of the folder (dirs first, then
+            // files; subdirectories expand recursively).
             FileRow {
                 key: "{task_md.display()}",
                 path: task_md.clone(),
@@ -746,11 +747,10 @@ fn TaskFolderNode(task: TaskItem, depth: usize, ctx: RowCtx) -> Element {
                 pad: child_pad,
                 ctx,
             }
-            for extra in task.extra_files.iter().cloned() {
-                FileRow {
-                    key: "{extra.display()}",
-                    label: extra.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
-                    path: extra,
+            for entry in task.extra_files.iter().cloned() {
+                TaskEntryNode {
+                    key: "{entry.path.display()}",
+                    node: entry,
                     project_path: project_path.clone(),
                     pad: child_pad,
                     ctx,
@@ -759,6 +759,83 @@ fn TaskFolderNode(task: TaskItem, depth: usize, ctx: RowCtx) -> Element {
         }
         // `on_toast` is used by the file rows; silence the unused binding here.
         { let _ = &on_toast; rsx! {} }
+    }
+}
+
+/// One entry inside an expanded task folder: a file row, or a subdirectory
+/// row that expands to its children (indented one level per depth).
+#[component]
+fn TaskEntryNode(
+    node: task_scan::TaskFileNode,
+    project_path: PathBuf,
+    pad: usize,
+    ctx: RowCtx,
+) -> Element {
+    if !node.is_dir {
+        return rsx! {
+            FileRow {
+                label: node.name.clone(),
+                path: node.path.clone(),
+                project_path,
+                pad,
+                ctx,
+            }
+        };
+    }
+
+    let mut expanded = ctx.expanded;
+    let mut ctx_menu = ctx.ctx_menu;
+    let muted = ctx.muted();
+    let fg = ctx.fg();
+    let is_open = expanded.read().contains(&node.path);
+    let chevron = if is_open { "▾" } else { "▸" };
+    let toggle_path = node.path.clone();
+    let ctx_path = node.path.clone();
+    let child_pad = pad + 14;
+
+    rsx! {
+        div {
+            style: "padding: 4px 8px 4px {pad}px; cursor: pointer; user-select: none; \
+                    display: flex; align-items: center; gap: 5px; \
+                    font: 12px -apple-system, sans-serif; line-height: 1.4; color: {fg};",
+            class: "mdo-tree-row",
+            onclick: move |_| {
+                let mut e = expanded.write();
+                if !e.remove(&toggle_path) {
+                    e.insert(toggle_path.clone());
+                }
+            },
+            oncontextmenu: move |e| {
+                e.prevent_default();
+                let c = e.client_coordinates();
+                ctx_menu.set(Some(TaskCtxMenu {
+                    x: c.x as i32,
+                    y: c.y as i32,
+                    path: ctx_path.clone(),
+                    is_dir: true,
+                    show_fav: false,
+                }));
+            },
+            span {
+                style: "color: {muted}; font-size: 10px; flex: 0 0 auto; width: 10px;",
+                "{chevron}"
+            }
+            span {
+                style: "flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                "{node.name}"
+            }
+        }
+        if is_open {
+            for child in node.children.iter().cloned() {
+                TaskEntryNode {
+                    key: "{child.path.display()}",
+                    node: child,
+                    project_path: project_path.clone(),
+                    pad: child_pad,
+                    ctx,
+                }
+            }
+        }
     }
 }
 

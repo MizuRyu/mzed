@@ -110,9 +110,18 @@ pub struct TaskItem {
     /// Path to `task.md` inside the folder.
     pub task_md: PathBuf,
     pub meta: TaskMeta,
-    /// All other files in the task folder (one level, dot-files excluded),
-    /// sorted by name.
-    pub extra_files: Vec<PathBuf>,
+    /// Everything else in the task folder as a small tree (subdirectories
+    /// included, dot-entries excluded, dirs first then files by name).
+    pub extra_files: Vec<TaskFileNode>,
+}
+
+/// One entry inside a task folder: a file, or a subdirectory with children.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TaskFileNode {
+    pub name: String,
+    pub path: PathBuf,
+    pub is_dir: bool,
+    pub children: Vec<TaskFileNode>,
 }
 
 // ---------------------------------------------------------------------------
@@ -380,23 +389,55 @@ fn read_task_meta(task_md: &Path) -> TaskMeta {
     extract_task_frontmatter(&String::from_utf8_lossy(&buf))
 }
 
-/// List all files in a task folder except `task.md` and dot-files
-/// (one level, no recursion), sorted by name.
-fn list_task_files(folder_path: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(folder_path) else {
-        return Vec::new();
-    };
-    let mut files: Vec<PathBuf> = entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_file())
-        .filter(|p| {
-            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            !name.starts_with('.') && name != "task.md"
-        })
-        .collect();
-    files.sort();
-    files
+/// Recursion limit for the task-folder listing. Task folders are shallow by
+/// convention; this only guards against symlink cycles and runaway nesting.
+const TASK_FILES_MAX_DEPTH: usize = 6;
+
+/// List everything in a task folder except `task.md` (top level only) and
+/// dot-entries, as a tree: subdirectories recurse, empty ones are dropped.
+/// Dirs first, then files, each sorted by name.
+fn list_task_files(folder_path: &Path) -> Vec<TaskFileNode> {
+    fn walk(dir: &Path, depth: usize, skip_task_md: bool) -> Vec<TaskFileNode> {
+        if depth >= TASK_FILES_MAX_DEPTH {
+            return Vec::new();
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        let mut dirs: Vec<TaskFileNode> = Vec::new();
+        let mut files: Vec<TaskFileNode> = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()).map(String::from) else {
+                continue;
+            };
+            if name.starts_with('.') || (skip_task_md && name == "task.md") {
+                continue;
+            }
+            if path.is_dir() {
+                let children = walk(&path, depth + 1, false);
+                if !children.is_empty() {
+                    dirs.push(TaskFileNode {
+                        name,
+                        path,
+                        is_dir: true,
+                        children,
+                    });
+                }
+            } else if path.is_file() {
+                files.push(TaskFileNode {
+                    name,
+                    path,
+                    is_dir: false,
+                    children: Vec::new(),
+                });
+            }
+        }
+        dirs.sort_by(|a, b| a.name.cmp(&b.name));
+        files.sort_by(|a, b| a.name.cmp(&b.name));
+        dirs.into_iter().chain(files).collect()
+    }
+    walk(folder_path, 0, true)
 }
 
 /// Scan one project for task folders (fixed-path, no recursion).
@@ -700,14 +741,38 @@ outputs:
         for name in &["b-notes.txt", "a-report.md", "image.png", ".DS_Store"] {
             fs::write(folder.join(name), b"x").unwrap();
         }
-        fs::create_dir(folder.join("subdir")).unwrap();
+        fs::create_dir(folder.join("empty-subdir")).unwrap();
 
-        let files: Vec<String> = list_task_files(&folder)
+        let names: Vec<String> = list_task_files(&folder)
             .iter()
-            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .map(|n| n.name.clone())
             .collect();
-        // task.md, dot-files, and directories are excluded; sorted by name.
-        assert_eq!(files, vec!["a-report.md", "b-notes.txt", "image.png"]);
+        // task.md, dot-files, and empty directories are excluded; name order.
+        assert_eq!(names, vec!["a-report.md", "b-notes.txt", "image.png"]);
+    }
+
+    #[test]
+    fn list_task_files_recurses_into_subdirectories() {
+        let tmp = TempDir::new().unwrap();
+        let folder = tmp.path().join("260718-01-task");
+        make_task(tmp.path(), "260718-01-task");
+        fs::write(folder.join("root.md"), b"x").unwrap();
+        fs::create_dir_all(folder.join("mvp/assets")).unwrap();
+        fs::write(folder.join("mvp/DESIGN.md"), b"x").unwrap();
+        fs::write(folder.join("mvp/assets/logo.png"), b"x").unwrap();
+        // A nested task.md is NOT special below the top level.
+        fs::write(folder.join("mvp/task.md"), b"x").unwrap();
+
+        let entries = list_task_files(&folder);
+        // Dirs first, then files.
+        assert_eq!(entries[0].name, "mvp");
+        assert!(entries[0].is_dir);
+        assert_eq!(entries[1].name, "root.md");
+
+        let mvp = &entries[0];
+        let names: Vec<&str> = mvp.children.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, vec!["assets", "DESIGN.md", "task.md"]);
+        assert_eq!(mvp.children[0].children[0].name, "logo.png");
     }
 
     // ── date judgment ────────────────────────────────────────────────────

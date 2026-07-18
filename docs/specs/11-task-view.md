@@ -15,7 +15,7 @@
 - タスク = `<project>/docs/memo/tasks/<yymmdd-NN-タスク名>/task.md`
 - `task.md` frontmatter: `status`(todo|in_progress|review|done), `created`(yymmdd), ほか `outputs` /  `task_ref` / `project` / `worklog_sync` / `referenced_knowledge`
 - 本文: `## TODO`, `## 成果物（完了条件）`(任意), `## userの依頼`
-- タスクフォルダ内の他のファイルは**全列挙**して子として扱う（1階層、`.` 始まりの隠しファイルとサブディレクトリは除外、名前順）。frontmatter の `outputs` は表示に使わない
+- タスクフォルダ内の他のファイルは**全列挙**して子として扱う（`.` 始まりの隠しエントリは除外）。**サブディレクトリも再帰的にツリー表示**する（フォルダ優先・名前順、空フォルダは出さない、深さ上限 6 で symlink 循環を抑止）。frontmatter の `outputs` は表示に使わない
 
 ## 起動と全体構成
 
