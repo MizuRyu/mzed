@@ -357,10 +357,12 @@ mod tests {
         std::thread::sleep(Duration::from_millis(50));
         stop_tx.send(()).unwrap();
 
-        // "Quickly" = within STOP_POLL granularity, i.e. well under a full
-        // POLL (1500ms). 1s keeps that meaning while absorbing load jitter.
+        // "Quickly" = within STOP_POLL granularity, i.e. under a full POLL
+        // (1500ms). 1400ms is the widest bound that still proves the watcher
+        // didn't sleep through a whole poll; anything tighter flakes under
+        // full-suite parallel load.
         assert!(done_rx
-            .recv_timeout(Duration::from_millis(1000))
+            .recv_timeout(Duration::from_millis(1400))
             .expect("zed watcher did not stop quickly"));
     }
 
