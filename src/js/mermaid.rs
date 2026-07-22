@@ -5,9 +5,9 @@
 /// `open_mermaid_window` component.
 ///
 /// After rendering, a zoom/pan layer is set up:
-///   • Cmd+scroll (or trackpad pinch) → zoom
-///   • Mouse/touch drag → pan
-///   • Toolbar buttons: zoom in/out/reset/fit
+///   • Scroll wheel / trackpad pinch → zoom toward the cursor (no modifier)
+///   • Mouse/touch drag → pan; double-click → fit
+///   • Toolbar buttons: zoom in/out/reset/fit, with a live % readout
 const MERMAID_WINDOW_JS: &str = r#"
 await new Promise(r => requestAnimationFrame(r));
 if (window.mermaid) {
@@ -48,8 +48,11 @@ if (window.mermaid) {
   const MAX  = 10;
   const STEP = 0.15;
 
+  const pct = document.getElementById('mdo-zoom-pct');
+
   function apply() {
     stage.style.transform = `translate(${tx}px,${ty}px) scale(${scale})`;
+    if (pct) pct.textContent = Math.round(scale * 100) + '%';
   }
 
   function clampScale(s) { return Math.min(MAX, Math.max(MIN, s)); }
@@ -74,9 +77,10 @@ if (window.mermaid) {
   document.getElementById('mdo-btn-reset')?.addEventListener('click', () => { scale = 1; tx = 0; ty = 0; apply(); });
   document.getElementById('mdo-btn-fit')  ?.addEventListener('click', fit);
 
-  // Cmd+scroll (or pinch via WKWebView's synthetic wheel with ctrlKey) → zoom
+  // Any wheel / pinch zooms (no modifier needed): this window is a canvas,
+  // not a scrolling page, so plain scroll has nothing better to do. Pinch
+  // arrives as a synthetic wheel with ctrlKey via WKWebView.
   viewport.addEventListener('wheel', (e) => {
-    if (!e.metaKey && !e.ctrlKey) return;
     e.preventDefault();
     const delta = e.deltaY !== 0 ? -e.deltaY : e.deltaX;
     const factor = 1 + Math.max(-0.9, Math.min(2, delta * 0.005));
@@ -119,6 +123,9 @@ if (window.mermaid) {
     dragging = false;
     viewport.style.cursor = 'grab';
   });
+
+  // Double-click → fit (mirrors the toolbar button without aiming for it)
+  viewport.addEventListener('dblclick', (e) => { e.preventDefault(); fit(); });
 
   // Initial fit once DOM is painted
   requestAnimationFrame(fit);
@@ -177,6 +184,16 @@ mod tests {
         assert!(js.contains("wheel"));
         assert!(js.contains("mousedown"));
         assert!(js.contains("requestAnimationFrame(fit)"));
+    }
+
+    #[test]
+    fn ウィンドウJSは修飾キーなしホイールでズームし率を表示する() {
+        let js = mermaid_window_js(true);
+        // No modifier gate on the wheel handler.
+        assert!(!js.contains("if (!e.metaKey && !e.ctrlKey) return;"));
+        // Live % readout and dblclick-to-fit are wired.
+        assert!(js.contains("mdo-zoom-pct"));
+        assert!(js.contains("dblclick"));
     }
 
     #[test]

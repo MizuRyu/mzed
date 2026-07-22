@@ -24,7 +24,7 @@ pub(crate) fn open_mermaid_window(src: String, dark: bool) {
 ///
 /// Layout:
 ///   ┌─ toolbar (fixed, top) ──────────────────────────────┐
-///   │  [−] [+] [1:1] [fit]                                │
+///   │  [−] 100% [+] [1:1] [fit]                           │
 ///   └─────────────────────────────────────────────────────┘
 ///   ┌─ viewport (#mdo-vp, fills remaining height) ────────┐
 ///   │   ┌─ stage (#mdo-stage, transform origin) ─────┐   │
@@ -32,8 +32,8 @@ pub(crate) fn open_mermaid_window(src: String, dark: bool) {
 ///   │   └─────────────────────────────────────────────┘   │
 ///   └─────────────────────────────────────────────────────┘
 ///
-/// The JS in `mermaid.rs` attaches wheel (Cmd+scroll / pinch), mousedown drag,
-/// and the four toolbar button handlers after mermaid renders.
+/// The JS in `mermaid.rs` attaches wheel/pinch zoom, drag pan, dblclick fit,
+/// the toolbar button handlers, and the live % readout after mermaid renders.
 #[component]
 fn MermaidWindow(src: String, dark: bool) -> Element {
     let bg = if dark { "#0d1117" } else { "#ffffff" };
@@ -68,13 +68,19 @@ fn MermaidWindow(src: String, dark: bool) -> Element {
             button {
                 id: "mdo-btn-out",
                 style: "{btn_style}",
-                title: "Zoom out (Cmd+Scroll)",
+                title: "Zoom out (スクロール / ピンチ)",
                 "−"
+            }
+            span {
+                id: "mdo-zoom-pct",
+                style: "min-width: 46px; text-align: center; font-size: 12px; \
+                        color: {bar_color}; font-variant-numeric: tabular-nums;",
+                "100%"
             }
             button {
                 id: "mdo-btn-in",
                 style: "{btn_style}",
-                title: "Zoom in (Cmd+Scroll)",
+                title: "Zoom in (スクロール / ピンチ)",
                 "+"
             }
             button {
