@@ -30,6 +30,8 @@
 | [07-ipc-and-concurrency.md](specs/07-ipc-and-concurrency.md) | IPC・スレッド・状態管理・ソケット権限 | 2026-07-02 |
 | [08-export.md](specs/08-export.md) | HTML / PDF エクスポート・連番衝突回避 | 2026-07-02 |
 | [10-settings-and-context-menu.md](specs/10-settings-and-context-menu.md) | 設定画面・右クリック・キーバインド | 2026-07-02 |
+| [11-task-view.md](specs/11-task-view.md) | Task View（タスク一覧モード） | 2026-07-23 |
+| [12-web-serve.md](specs/12-web-serve.md) | `mzed serve`（ブラウザビューア） | 2026-07-23 |
 | [manual-test-cases.md](specs/manual-test-cases.md) | 恒久手動テストケース集（TC-ID 付き） | 2026-07-02 |
 
 ### docs/review/（現行ガイドライン）

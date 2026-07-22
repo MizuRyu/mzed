@@ -49,6 +49,7 @@ mzed               # Zed 連動モードで起動
 mzed file.md       # ファイルをタブで開く
 mzed ./docs        # ディレクトリをルートにして開く
 mzed --sync self   # 連動モード指定
+mzed serve ./docs  # フォルダをブラウザで表示（127.0.0.1 のみ、live-reload。画面共有向け）
 ```
 
 連動モードは3つ:

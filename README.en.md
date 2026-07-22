@@ -49,6 +49,7 @@ mzed               # start in Zed-linked mode
 mzed file.md       # open a file in a tab
 mzed ./docs        # open a directory as the root
 mzed --sync self   # choose the sync mode
+mzed serve ./docs  # serve a folder in the browser (127.0.0.1 only, live-reload)
 ```
 
 Three sync modes:

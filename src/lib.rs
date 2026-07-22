@@ -14,6 +14,7 @@ mod palette;
 mod perf;
 mod project_tabs;
 mod search;
+mod serve;
 mod services;
 mod session;
 mod tabs;

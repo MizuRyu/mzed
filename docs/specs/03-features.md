@@ -50,6 +50,7 @@
 | F-05 | セッション永続化（ルート・タブ・プロジェクト別最終ページを保存し次回復元） | ★★☆ |
 | F-06 | 右クリックメニュー (Reveal/Open/Copy Path/Rename/Delete) → [10](10-settings-and-context-menu.md) | ★★☆ |
 | F-07 | プロジェクトオープン時に最終更新ファイルを自動で開く（config トグル、デフォルト OFF） | ★★☆ |
+| F-08 | `mzed serve` — フォルダをブラウザで表示（127.0.0.1 固定、live-reload、画面共有向け） → [12](12-web-serve.md) | ★★☆ |
 
 ### UI
 

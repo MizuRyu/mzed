@@ -225,6 +225,14 @@ pub fn run() {
     // Parse CLI and absolutise any path arguments so messages sent to another
     // instance (and our own initial state) are unambiguous regardless of cwd.
     let mut parsed = cli::Cli::parse();
+    // Subcommands are headless: no window, no single-instance IPC.
+    if let Some(cli::Command::Serve { dir, port, no_open }) = parsed.command.take() {
+        if let Err(err) = crate::serve::run(dir, port, !no_open) {
+            eprintln!("mzed serve: {err}");
+            std::process::exit(1);
+        }
+        return;
+    }
     parsed.paths = parsed
         .paths
         .into_iter()

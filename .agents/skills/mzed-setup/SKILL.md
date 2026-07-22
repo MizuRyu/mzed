@@ -51,6 +51,7 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ```
 mzed [PATH...] [--sync <auto|self|off>]
+mzed serve [DIR] [-p PORT] [--no-open]
 ```
 
 | 引数 | 説明 |
@@ -59,6 +60,7 @@ mzed [PATH...] [--sync <auto|self|off>]
 | `--sync auto` | Zed の focused project を完全追従（デフォルト） |
 | `--sync self` | sidebar root は追従するがアクティブタブは奪わない |
 | `--sync off` | Zed を無視して独立動作 |
+| `serve [DIR]` | フォルダをブラウザで表示（127.0.0.1 固定・live-reload・画面共有向け）。既定ポート 6280、`--no-open` でブラウザ自動起動を抑止。フォアグラウンド実行で Ctrl+C 停止。GUI・IPC を通らない headless 経路 |
 
 **パス解決ルール**:
 - 引数なし → Zed 連動（Target::Zed）

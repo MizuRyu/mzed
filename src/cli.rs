@@ -28,6 +28,26 @@ pub struct Cli {
     /// Sync mode: how mzed follows Zed's focused project.
     #[arg(long, value_enum)]
     pub sync: Option<SyncArg>,
+
+    #[command(subcommand)]
+    pub command: Option<Command>,
+}
+
+/// Subcommands that bypass the desktop app entirely.
+#[derive(Debug, Clone, PartialEq, Eq, clap::Subcommand)]
+pub enum Command {
+    /// Serve a folder in the browser (127.0.0.1 only, live-reload).
+    Serve {
+        /// Directory to serve (default: current directory).
+        #[arg(value_name = "DIR")]
+        dir: Option<PathBuf>,
+        /// Port to bind on 127.0.0.1.
+        #[arg(short, long, default_value_t = 6280)]
+        port: u16,
+        /// Don't open the browser automatically.
+        #[arg(long)]
+        no_open: bool,
+    },
 }
 
 /// CLI surface for the sync mode (mirrors [`SyncMode`] with a `clap` enum).
@@ -119,6 +139,7 @@ mod tests {
         Cli {
             paths: paths.iter().map(PathBuf::from).collect(),
             sync,
+            command: None,
         }
     }
 
@@ -192,5 +213,29 @@ mod tests {
         let c = Cli::try_parse_from(["mzed", "a.md", "b.md", "--sync", "off"]).unwrap();
         assert_eq!(c.paths, vec![PathBuf::from("a.md"), PathBuf::from("b.md")]);
         assert_eq!(c.sync, Some(SyncArg::Off));
+        assert_eq!(c.command, None);
+    }
+
+    #[test]
+    fn clapがserveサブコマンドをパースする() {
+        let c = Cli::try_parse_from(["mzed", "serve", "docs", "-p", "7000"]).unwrap();
+        assert_eq!(
+            c.command,
+            Some(Command::Serve {
+                dir: Some(PathBuf::from("docs")),
+                port: 7000,
+                no_open: false,
+            })
+        );
+
+        let c = Cli::try_parse_from(["mzed", "serve", "--no-open"]).unwrap();
+        assert_eq!(
+            c.command,
+            Some(Command::Serve {
+                dir: None,
+                port: 6280,
+                no_open: true,
+            })
+        );
     }
 }
