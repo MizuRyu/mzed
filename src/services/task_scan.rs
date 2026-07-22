@@ -260,7 +260,9 @@ fn status_rank(status: &TaskStatus, status_order: &[String]) -> usize {
         .unwrap_or(usize::MAX)
 }
 
-/// Group tasks by project, preserving first-seen project order.
+/// Group tasks by project, most recently active project first (the newest
+/// `created` in each group, descending; yymmdd is zero-padded so lexical
+/// comparison is chronological). Ties keep scan order (stable sort).
 fn by_project(items: Vec<TaskItem>) -> Vec<(String, PathBuf, Vec<TaskItem>)> {
     let mut groups: Vec<(String, PathBuf, Vec<TaskItem>)> = Vec::new();
     for item in items {
@@ -271,6 +273,14 @@ fn by_project(items: Vec<TaskItem>) -> Vec<(String, PathBuf, Vec<TaskItem>)> {
             groups.push((name, path, vec![item]));
         }
     }
+    let newest = |tasks: &[TaskItem]| -> String {
+        tasks
+            .iter()
+            .map(|t| t.meta.created.clone())
+            .max()
+            .unwrap_or_default()
+    };
+    groups.sort_by_key(|g| std::cmp::Reverse(newest(&g.2)));
     groups
 }
 
@@ -296,7 +306,8 @@ fn by_status(items: Vec<TaskItem>, status_order: &[String]) -> Vec<(TaskStatus, 
 /// - `project_first` → project → status → tasks.
 /// - otherwise → status → project → tasks.
 ///
-/// Projects keep their first-seen order; statuses follow `status_order`
+/// Projects sort by their newest task's `created` descending (most recently
+/// active first, at every level); statuses follow `status_order`
 /// (unconfigured ones last); tasks sort by `created` per `date_desc`.
 pub fn build_groups(
     items: Vec<TaskItem>,
@@ -933,10 +944,39 @@ outputs:
         assert_eq!(groups.len(), 2);
         assert_eq!(status_of(&groups[0]), &TaskStatus::Todo);
         assert_eq!(groups[0].task_count(), 2);
+        // Within the status, projects sort by their newest task (beta: 260702
+        // beats alpha: 260701).
         let projects: Vec<&str> = groups[0].children.iter().map(project_name).collect();
-        assert_eq!(projects, vec!["alpha", "beta"]);
+        assert_eq!(projects, vec!["beta", "alpha"]);
         assert_eq!(status_of(&groups[1]), &TaskStatus::Done);
         assert_eq!(groups[1].task_count(), 1);
+    }
+
+    #[test]
+    fn build_groups_orders_projects_by_newest_task_desc() {
+        // beta has the newest task overall, so it leads even though alpha is
+        // seen first; date_order only affects tasks inside a group.
+        let items = vec![
+            make_item("alpha", "260601-a", "260601"),
+            make_item("beta", "260722-b", "260722"),
+            make_item("alpha", "260710-a", "260710"),
+            make_item("gamma", "260715-c", "260715"),
+        ];
+        for (group_by_status, date_desc) in [(false, true), (false, false), (true, true)] {
+            let groups = build_groups(
+                items.clone(),
+                group_by_status,
+                true,
+                &default_order(),
+                date_desc,
+            );
+            let order: Vec<&str> = groups.iter().map(project_name).collect();
+            assert_eq!(
+                order,
+                vec!["beta", "gamma", "alpha"],
+                "group_by_status={group_by_status} date_desc={date_desc}"
+            );
+        }
     }
 
     #[test]
