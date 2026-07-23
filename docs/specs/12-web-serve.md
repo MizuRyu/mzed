@@ -44,5 +44,9 @@ mzed serve [DIR] [-p/--port PORT] [--no-open]
 ## 実装
 
 - `src/serve.rs`（サーバ・ルーティング・検証）+ `src/serve/shell.rs`（シェル HTML 一枚）
-- 依存: `tiny_http`（同期・シングルスレッドで十分。localhost の単一閲覧者想定）、`include_dir`、`percent-encoding`
+- 依存: `tiny_http`、`include_dir`、`percent-encoding`
 - アセット埋め込みでバイナリは +約4MB（mermaid.min.js が大半）
+- **ワーカー4本**で並列処理。重いドキュメント（画像多数の base64 化・wikilink 解決の走査）が1件あっても、アセット・ツリー・live-reload ポーリングが後ろで詰まらない（head-of-line blocking 対策）
+- `/api/tree` は **2秒 TTL のキャッシュ**。ブラウザは 3s 間隔でポーリングするため、大きい root の再 walk を毎回やらない
+- 全リクエストを `mzed serve: <ms> <status> <url>` 形式で stderr にログ（遅い要求の特定用。アプリ内共有時も同じくプロセスの stderr へ）
+- 停止時の注意: tiny_http の `unblock()` は**1回につき1ワーカーしか起こさない**。`ServeHandle::stop` はワーカー数ぶん `unblock()` を積んでから join する（1回だけだと残りの join が永久待ち）

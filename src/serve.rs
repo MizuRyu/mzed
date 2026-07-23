@@ -32,24 +32,39 @@ mod shell;
 /// KaTeX incl. fonts). Served under `/assets/`.
 static ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets");
 
+/// Worker threads answering requests. More than one matters: a heavy document
+/// render (many base64 images, wikilink walks) must not freeze assets, the
+/// tree, and the live-reload polls behind it.
+const WORKERS: usize = 4;
+
+/// How long a computed tree JSON stays valid. The browser polls every 3s;
+/// re-walking a large root on each poll is wasted work.
+const TREE_CACHE: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// A running server: the shared listener (for [`ServeHandle::stop`]) and the
-/// request thread.
+/// request worker threads.
 pub(crate) struct ServeHandle {
     server: Arc<Server>,
-    thread: std::thread::JoinHandle<()>,
+    threads: Vec<std::thread::JoinHandle<()>>,
     pub(crate) url: String,
     root: PathBuf,
 }
 
 impl ServeHandle {
-    /// Unblock the request loop and wait for the thread to finish.
+    /// Unblock the request loops and wait for every worker to finish.
+    /// `unblock()` queues exactly ONE wake-up (tiny_http notifies a single
+    /// waiter), so it must be called once per worker or the join hangs.
     fn stop(self) {
-        self.server.unblock();
-        let _ = self.thread.join();
+        for _ in 0..self.threads.len() {
+            self.server.unblock();
+        }
+        for t in self.threads {
+            let _ = t.join();
+        }
     }
 }
 
-/// Bind 127.0.0.1:`port` and start serving `dir` on a background thread.
+/// Bind 127.0.0.1:`port` and start serving `dir` on background threads.
 fn start(dir: &Path, port: u16) -> anyhow::Result<ServeHandle> {
     let root = dir
         .canonicalize()
@@ -69,23 +84,54 @@ fn start(dir: &Path, port: u16) -> anyhow::Result<ServeHandle> {
             .map_err(|e| anyhow::anyhow!("server start failed: {e}"))?,
     );
 
-    let thread = {
-        let server = Arc::clone(&server);
-        let root = root.clone();
-        std::thread::spawn(move || {
-            // `incoming_requests` ends when `unblock()` is called.
-            for request in server.incoming_requests() {
-                let response = route(&root, request.url());
-                let _ = request.respond(response);
-            }
+    let tree_cache: Arc<Mutex<Option<(std::time::Instant, String)>>> = Arc::new(Mutex::new(None));
+    let threads = (0..WORKERS)
+        .map(|_| {
+            let server = Arc::clone(&server);
+            let root = root.clone();
+            let tree_cache = Arc::clone(&tree_cache);
+            std::thread::spawn(move || {
+                // `incoming_requests` ends when `unblock()` is called.
+                for request in server.incoming_requests() {
+                    let started = std::time::Instant::now();
+                    let url = request.url().to_string();
+                    let response = route_cached(&root, &url, &tree_cache);
+                    let status = response.status_code().0;
+                    let _ = request.respond(response);
+                    eprintln!(
+                        "mzed serve: {:>5}ms {} {}",
+                        started.elapsed().as_millis(),
+                        status,
+                        url
+                    );
+                }
+            })
         })
-    };
+        .collect();
     Ok(ServeHandle {
         server,
-        thread,
+        threads,
         url: format!("http://{addr}/"),
         root,
     })
+}
+
+/// `route`, with the tree endpoint served from a short-lived cache.
+fn route_cached(
+    root: &Path,
+    url: &str,
+    tree_cache: &Mutex<Option<(std::time::Instant, String)>>,
+) -> Response<std::io::Cursor<Vec<u8>>> {
+    if url.split('?').next() == Some("/api/tree") {
+        let mut cache = tree_cache.lock().expect("tree cache lock");
+        let fresh = matches!(&*cache, Some((at, _)) if at.elapsed() < TREE_CACHE);
+        if !fresh {
+            *cache = Some((std::time::Instant::now(), tree_json(root)));
+        }
+        let (_, json) = cache.as_ref().expect("cache was just filled");
+        return json_response(json);
+    }
+    route(root, url)
 }
 
 /// `mzed serve`: run in the foreground until the process is interrupted.
@@ -98,7 +144,9 @@ pub(crate) fn run(dir: Option<PathBuf>, port: u16, open_browser: bool) -> anyhow
     if open_browser {
         let _ = open::that(&handle.url);
     }
-    let _ = handle.thread.join();
+    for t in handle.threads {
+        let _ = t.join();
+    }
     Ok(())
 }
 
