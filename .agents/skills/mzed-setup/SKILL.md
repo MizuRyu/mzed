@@ -118,6 +118,7 @@ mzed serve [DIR] [-p PORT] [--no-open]
 | `project_aliases` | `[{"path": "/path", "alias": "名前"}]` | `[]` | プロジェクトの別名。Cmd+O の検索でパスに加えて別名でもヒットし、別名付きフォルダは Zed 履歴に無くても候補に出る。設定 General から追加/削除 |
 | `project_menu_hidden` | `["/path", ...]` | `[]` | Cmd+O の候補から隠すパス。候補行ホバーの ✕ で追加、設定 General「非表示のプロジェクト」で復元 |
 | `sync_skip_worktrees` | bool | `true` | Zed が git worktree（`.git` がファイル）を開いても追従しない。Zed 連動タブでトグル |
+| `serve_port` | int | `6280` | アプリ内 Web 共有（コマンドパレット「Web Share: Toggle」）のポート。CLI `mzed serve` は `--port` を使う。設定 UI は無く config.json 直編集 |
 
 ### sync_mode の詳細（`src/theme.rs`）
 

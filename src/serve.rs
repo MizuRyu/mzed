@@ -16,6 +16,7 @@
 
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
 
 use include_dir::{include_dir, Dir};
@@ -31,10 +32,25 @@ mod shell;
 /// KaTeX incl. fonts). Served under `/assets/`.
 static ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets");
 
-/// Run the server until the process is interrupted. `open_browser` launches
-/// the default browser at the served URL once the socket is bound.
-pub(crate) fn run(dir: Option<PathBuf>, port: u16, open_browser: bool) -> anyhow::Result<()> {
-    let dir = dir.unwrap_or_else(|| PathBuf::from("."));
+/// A running server: the shared listener (for [`ServeHandle::stop`]) and the
+/// request thread.
+pub(crate) struct ServeHandle {
+    server: Arc<Server>,
+    thread: std::thread::JoinHandle<()>,
+    pub(crate) url: String,
+    root: PathBuf,
+}
+
+impl ServeHandle {
+    /// Unblock the request loop and wait for the thread to finish.
+    fn stop(self) {
+        self.server.unblock();
+        let _ = self.thread.join();
+    }
+}
+
+/// Bind 127.0.0.1:`port` and start serving `dir` on a background thread.
+fn start(dir: &Path, port: u16) -> anyhow::Result<ServeHandle> {
     let root = dir
         .canonicalize()
         .map_err(|e| anyhow::anyhow!("{}: {e}", dir.display()))?;
@@ -42,25 +58,70 @@ pub(crate) fn run(dir: Option<PathBuf>, port: u16, open_browser: bool) -> anyhow
         anyhow::bail!("{} is not a directory", root.display());
     }
 
-    // Bind explicitly first for a clear "port in use" error.
+    // Bind explicitly first for a clear "port in use" error. Read the actual
+    // address back so port 0 (OS-assigned, used by tests) yields a real URL.
     let addr = format!("127.0.0.1:{port}");
     let listener = TcpListener::bind(&addr)
         .map_err(|e| anyhow::anyhow!("cannot bind {addr}: {e} (try --port)"))?;
-    let server = Server::from_listener(listener, None)
-        .map_err(|e| anyhow::anyhow!("server start failed: {e}"))?;
+    let addr = listener.local_addr().map(|a| a.to_string()).unwrap_or(addr);
+    let server = Arc::new(
+        Server::from_listener(listener, None)
+            .map_err(|e| anyhow::anyhow!("server start failed: {e}"))?,
+    );
 
-    let url = format!("http://{addr}/");
-    println!("Serving {} at {url}", root.display());
+    let thread = {
+        let server = Arc::clone(&server);
+        let root = root.clone();
+        std::thread::spawn(move || {
+            // `incoming_requests` ends when `unblock()` is called.
+            for request in server.incoming_requests() {
+                let response = route(&root, request.url());
+                let _ = request.respond(response);
+            }
+        })
+    };
+    Ok(ServeHandle {
+        server,
+        thread,
+        url: format!("http://{addr}/"),
+        root,
+    })
+}
+
+/// `mzed serve`: run in the foreground until the process is interrupted.
+/// `open_browser` launches the default browser once the socket is bound.
+pub(crate) fn run(dir: Option<PathBuf>, port: u16, open_browser: bool) -> anyhow::Result<()> {
+    let dir = dir.unwrap_or_else(|| PathBuf::from("."));
+    let handle = start(&dir, port)?;
+    println!("Serving {} at {}", handle.root.display(), handle.url);
     println!("(Ctrl+C で停止)");
     if open_browser {
-        let _ = open::that(&url);
+        let _ = open::that(&handle.url);
     }
-
-    for request in server.incoming_requests() {
-        let response = route(&root, request.url());
-        let _ = request.respond(response);
-    }
+    let _ = handle.thread.join();
     Ok(())
+}
+
+/// The desktop app's single share server (palette「Toggle Web Share」). One at
+/// a time is plenty: the use case is sharing the current project's docs.
+static APP_SHARE: OnceLock<Mutex<Option<ServeHandle>>> = OnceLock::new();
+
+fn app_share_slot() -> &'static Mutex<Option<ServeHandle>> {
+    APP_SHARE.get_or_init(|| Mutex::new(None))
+}
+
+/// Toggle the in-app share server. Starting returns `Some(url)`; stopping
+/// (when one is already running, whatever root it serves) returns `None`.
+pub(crate) fn toggle_app_share(root: &Path, port: u16) -> anyhow::Result<Option<String>> {
+    let mut slot = app_share_slot().lock().expect("share lock");
+    if let Some(handle) = slot.take() {
+        handle.stop();
+        return Ok(None);
+    }
+    let handle = start(root, port)?;
+    let url = handle.url.clone();
+    *slot = Some(handle);
+    Ok(Some(url))
 }
 
 /// Dispatch one request URL to a response. Pure with respect to the request
@@ -337,6 +398,25 @@ mod tests {
         assert!(ASSETS
             .get_file("katex/fonts/KaTeX_Main-Regular.woff2")
             .is_some());
+    }
+
+    #[test]
+    fn toggle_app_shareは起動と停止を往復する() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("a.md"), "# a").unwrap();
+
+        // Port 0 lets the OS pick a free port, keeping the test parallel-safe.
+        let started = toggle_app_share(tmp.path(), 0).expect("start");
+        let url = started.expect("first toggle starts the server");
+        assert!(url.starts_with("http://127.0.0.1:"));
+
+        // Second toggle stops it (returns None) and frees the slot.
+        assert!(toggle_app_share(tmp.path(), 0).expect("stop").is_none());
+        // And a third starts again.
+        assert!(toggle_app_share(tmp.path(), 0).expect("restart").is_some());
+        assert!(toggle_app_share(tmp.path(), 0)
+            .expect("stop again")
+            .is_none());
     }
 
     #[test]

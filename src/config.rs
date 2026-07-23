@@ -190,6 +190,10 @@ pub struct Config {
     /// steal the viewer away from the main checkout.
     #[serde(default = "default_true")]
     pub sync_skip_worktrees: bool,
+    /// Port for the in-app web share (palette「Web Share: Toggle」). The CLI
+    /// `mzed serve` takes its port from `--port` instead.
+    #[serde(default = "default_serve_port")]
+    pub serve_port: u16,
 }
 
 /// A user-defined nickname for one project directory.
@@ -245,6 +249,9 @@ fn default_task_view_tasks_subpath() -> String {
 fn default_task_view_days() -> u32 {
     7
 }
+fn default_serve_port() -> u16 {
+    6280
+}
 /// Status heading order shown by default: the natural task lifecycle.
 pub fn default_task_view_status_order() -> Vec<String> {
     ["todo", "in_progress", "review", "done"]
@@ -288,6 +295,7 @@ impl Default for Config {
             project_aliases: Vec::new(),
             project_menu_hidden: Vec::new(),
             sync_skip_worktrees: true,
+            serve_port: default_serve_port(),
         }
     }
 }

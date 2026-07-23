@@ -32,6 +32,8 @@ pub enum Action {
     ExportPdf,
     /// Copy the active file's absolute path to the clipboard.
     CopyFilePath,
+    /// Start/stop the `mzed serve` share server for the current project.
+    ToggleWebShare,
 }
 
 /// A selectable command entry: a human label plus its action.
@@ -101,6 +103,10 @@ pub fn commands() -> Vec<Command> {
             action: Action::CopyFilePath,
         },
         Command {
+            label: "Web Share: Toggle (Serve in Browser)",
+            action: Action::ToggleWebShare,
+        },
+        Command {
             label: "Export: HTML",
             action: Action::ExportHtml,
         },
@@ -155,6 +161,16 @@ mod tests {
     fn toggle_sync_pinコマンドがカタログに含まれる() {
         let all = commands();
         assert!(all.iter().any(|c| c.action == Action::ToggleSyncPin));
+    }
+
+    #[test]
+    fn web_shareコマンドがカタログに含まれshareクエリで返る() {
+        assert!(commands()
+            .iter()
+            .any(|c| c.action == Action::ToggleWebShare));
+        assert!(filter_commands("share")
+            .iter()
+            .any(|c| c.action == Action::ToggleWebShare));
     }
 
     #[test]

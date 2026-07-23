@@ -670,6 +670,7 @@ pub(crate) fn App() -> Element {
     let project_aliases = use_signal(|| saved_config.project_aliases.clone());
     let mut project_menu_hidden = use_signal(|| saved_config.project_menu_hidden.clone());
     let sync_skip_worktrees = use_signal(|| saved_config.sync_skip_worktrees);
+    let serve_port = use_signal(|| saved_config.serve_port);
     let mut task_view_open = use_signal(|| false);
     // Bumped to force a Task View re-scan (Cmd+R and the ↻ header button).
     let mut task_view_refresh_token = use_signal(|| 0u32);
@@ -1286,6 +1287,7 @@ pub(crate) fn App() -> Element {
             project_aliases: project_aliases(),
             project_menu_hidden: project_menu_hidden(),
             sync_skip_worktrees: sync_skip_worktrees(),
+            serve_port: serve_port(),
         };
         let generation = config_save_generation.write().advance();
         spawn(async move {
@@ -1797,6 +1799,28 @@ pub(crate) fn App() -> Element {
             }
             CopyFilePath => {
                 copy_focused_path();
+            }
+            ToggleWebShare => {
+                let Some(project) = root() else {
+                    show_toast("プロジェクトを開いてから実行してください".into());
+                    return;
+                };
+                let port = serve_port();
+                spawn(async move {
+                    let result = tokio::task::spawn_blocking(move || {
+                        crate::serve::toggle_app_share(&project, port)
+                    })
+                    .await;
+                    match result {
+                        Ok(Ok(Some(url))) => {
+                            let _ = open::that(&url);
+                            show_toast(format!("Web 共有を開始: {url}"));
+                        }
+                        Ok(Ok(None)) => show_toast("Web 共有を停止しました".into()),
+                        Ok(Err(err)) => show_toast(format!("Web 共有に失敗: {err}")),
+                        Err(err) => show_toast(format!("Web 共有に失敗: {err}")),
+                    }
+                });
             }
             ExportHtml => {
                 if feature_html_export() {
