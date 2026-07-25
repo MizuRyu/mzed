@@ -1814,7 +1814,9 @@ pub(crate) fn App() -> Element {
                     match result {
                         Ok(Ok(Some(url))) => {
                             let _ = open::that(&url);
-                            show_toast(format!("Web 共有を開始: {url}"));
+                            show_toast(format!(
+                                "Web 共有を開始: {url}（log: ~/Library/Logs/mzed/serve.log）"
+                            ));
                         }
                         Ok(Ok(None)) => show_toast("Web 共有を停止しました".into()),
                         Ok(Err(err)) => show_toast(format!("Web 共有に失敗: {err}")),

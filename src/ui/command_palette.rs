@@ -19,7 +19,10 @@ pub(crate) fn Palette(
     let q = query();
     // Candidate rows: either commands or matched file paths. Feature-flagged
     // export commands are hidden when disabled.
-    let cmd_rows: Vec<palette::Command> = palette::filter_commands(&q)
+    // Recomputed on every render; the palette re-opens per use, so the share
+    // label always reflects whether the server is currently running.
+    let share_url = crate::serve::app_share_url();
+    let cmd_rows: Vec<palette::Command> = palette::filter_commands(&q, share_url.as_deref())
         .into_iter()
         .filter(|c| match c.action {
             palette::Action::ExportHtml => html_export_on,

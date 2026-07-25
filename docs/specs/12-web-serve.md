@@ -9,7 +9,7 @@ mzed serve [DIR] [-p/--port PORT] [--no-open]
 ```
 
 - `DIR` 省略時はカレントディレクトリ。canonicalize してルートとする
-- **アプリ内からも起動可**: コマンドパレットの「**Web Share: Toggle (Serve in Browser)**」が表示中プロジェクトのルートを serve し、ブラウザを開いて toast で URL を出す。もう一度実行で停止（トグル。同時に1つだけ）。ポートは config の `serve_port`（既定 6280）。アプリ終了で一緒に落ちる
+- **アプリ内からも起動可**: コマンドパレットの「**Web Share: Start (Serve in Browser)**」が表示中プロジェクトのルートを serve し、ブラウザを開いて toast で URL を出す。起動中はラベルが「**Web Share: Stop (URL)**」に変わり、実行で停止（同時に1つだけ。ラベルが状態を示すので、再表示のつもりの再実行で誤って止める事故を防ぐ）。ポートは config の `serve_port`（既定 6280）。アプリ終了で一緒に落ちる
 - 既定ポート **6280**（`mo` の 6275 と衝突しない値）。使用中なら明快なエラーで終了（`--port` を案内）
 - 起動時に既定ブラウザを自動で開く（`--no-open` で抑止）
 - **フォアグラウンド実行**。Ctrl+C で停止。常駐・多重登録・状態ファイルは持たない。別フォルダは別ターミナル＋別ポートで
@@ -48,5 +48,5 @@ mzed serve [DIR] [-p/--port PORT] [--no-open]
 - アセット埋め込みでバイナリは +約4MB（mermaid.min.js が大半）
 - **ワーカー4本**で並列処理。重いドキュメント（画像多数の base64 化・wikilink 解決の走査）が1件あっても、アセット・ツリー・live-reload ポーリングが後ろで詰まらない（head-of-line blocking 対策）
 - `/api/tree` は **2秒 TTL のキャッシュ**。ブラウザは 3s 間隔でポーリングするため、大きい root の再 walk を毎回やらない
-- 全リクエストを `mzed serve: <ms> <status> <url>` 形式で stderr にログ（遅い要求の特定用。アプリ内共有時も同じくプロセスの stderr へ）
+- 全リクエストを `<UTC時刻> mzed serve: <ms> <status> <url>` 形式で **stderr と `~/Library/Logs/mzed/serve.log` の両方**にログ（遅い要求の特定用）。GUI 起動の mzed.app は stdout/stderr を破棄するため、アプリ内共有の切り分けはログファイルが唯一の手がかり。5MB 超で `serve.log.old` へ1世代ローテート。起動 toast と CLI 起動時メッセージにログパスを表示
 - 停止時の注意: tiny_http の `unblock()` は**1回につき1ワーカーしか起こさない**。`ServeHandle::stop` はワーカー数ぶん `unblock()` を積んでから join する（1回だけだと残りの join が永久待ち）
