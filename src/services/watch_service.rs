@@ -47,16 +47,26 @@ pub(crate) fn zed_projects() -> WatchSubscription<Option<zed::ActiveProject>> {
     }
 }
 
-pub(crate) fn file_changes(file: PathBuf) -> WatchSubscription<()> {
+/// Watch several files (the worktree-overlay candidates of one logical path)
+/// through a single receiver. A change to any copy triggers a reload, which
+/// re-resolves the freshest checkout.
+pub(crate) fn files_changes(files: Vec<PathBuf>) -> WatchSubscription<()> {
     let (tx, rx) = mpsc::unbounded_channel::<()>();
-    let (stop_tx, stop_rx) = std_mpsc::channel::<()>();
-    let join_handle = std::thread::spawn(move || {
-        let _ = watcher::watch_file_until(&file, &stop_rx, move || tx.send(()).is_ok());
-    });
+    let mut stop_txs = Vec::new();
+    let mut join_handles = Vec::new();
+    for file in files {
+        let tx = tx.clone();
+        let (stop_tx, stop_rx) = std_mpsc::channel::<()>();
+        stop_txs.push(stop_tx);
+        let join_handle = std::thread::spawn(move || {
+            let _ = watcher::watch_file_until(&file, &stop_rx, move || tx.send(()).is_ok());
+        });
+        join_handles.push(join_handle);
+    }
     WatchSubscription {
         rx,
-        stop_txs: vec![stop_tx],
-        join_handles: vec![join_handle],
+        stop_txs,
+        join_handles,
     }
 }
 

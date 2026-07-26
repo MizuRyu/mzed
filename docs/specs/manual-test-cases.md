@@ -312,6 +312,26 @@ allowlist 方式で再構築する安全な生 HTML サブセット（`<img>` / 
 | **期待結果** | 1. mzed の表示は変わらない（main のまま）。2. 従来どおり worktree に切り替わる |
 | **備考** | 判定は `.git` がファイルかどうか（submodule checkout も同様にスキップされる）。CLI や Cmd+O で明示的に開くのは制限しない |
 | **自動化済み** | `src/files.rs` の `is_git_worktreeはgitファイルのみ真` |
+
+### ZED-07 worktree オーバーレイ: 本文が最新の checkout を映す
+
+| 項目 | 内容 |
+|---|---|
+| **前提** | main checkout を mzed で表示中。同リポの linked worktree が存在し、両方に同じ md がある |
+| **手順** | 1. worktree 側でその md を編集・保存する。2. main 側で同じ md をさらに編集・保存する |
+| **期待結果** | 1. mzed の表示が worktree 側の内容に即切り替わる（フォルダ移動・タブ操作なし）。2. main 側の内容に戻る（常に mtime が新しい方） |
+| **備考** | 表示だけのオーバーレイ。ファイルのコピー・書き込みはしない。出所バッジは出さない仕様 |
+| **自動化済み** | `src/worktrees.rs` の `resolveはmtimeが新しい側を選ぶ` |
+
+### ZED-08 worktree オーバーレイ: worktree にしかないファイルがツリーに出る
+
+| 項目 | 内容 |
+|---|---|
+| **前提** | main checkout を表示中。worktree 側にだけ存在する md がある（新規作成） |
+| **手順** | 1. サイドバーを確認する。2. そのファイルを開く。3. Task View（worktree にだけあるタスクフォルダ）を確認する |
+| **期待結果** | 1. main のツリーの対応する位置に表示される。2. worktree 側の内容が表示される。3. main プロジェクトのタスクとして表示される。両 checkout に同名タスクがある場合は task.md が新しい側だけ残る |
+| **備考** | ツリー・タブ・セッションのパスは main 側の論理パス。worktree を削除するとツリーからも消える |
+| **自動化済み** | `src/files.rs` の `build_tree_overlayはworktree限定のmdを主パスで合成する`、`src/services/task_scan.rs` の worktree 系 3 テスト |
 ---
 
 ## マルチウィンドウ（WIN）

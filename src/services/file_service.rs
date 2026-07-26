@@ -43,6 +43,14 @@ impl DocumentSnapshot {
         self.path.as_deref()
     }
 
+    /// Relabel the snapshot with its *logical* path. The worktree overlay
+    /// reads a document from whichever checkout is freshest, but tabs and
+    /// pane comparisons key on the main-checkout path.
+    pub(crate) fn with_path(mut self, path: Option<PathBuf>) -> Self {
+        self.path = path;
+        self
+    }
+
     pub(crate) fn rendered_html(&self) -> &str {
         &self.rendered_html
     }

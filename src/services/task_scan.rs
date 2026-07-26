@@ -660,28 +660,98 @@ pub fn scan_all_projects_blocking(
     };
 
     let mut items = Vec::new();
-    for project in &candidates {
-        for item in scan_project_tasks(project, subpath) {
+    for (scan_path, attribute_to) in worktree_scan_units(&candidates) {
+        for item in scan_project_tasks(&scan_path, subpath) {
             let include = match n_days {
                 Some(d) => is_within_days_of(&item.meta.created, today, d),
                 None => true,
             };
             if include {
-                items.push(item);
+                items.push(attribute_item(item, &attribute_to));
             }
         }
     }
-    items
+    dedupe_overlaid(items)
 }
 
 /// Scan current project roots only (This Project mode, no date filter).
 /// Call from `spawn_blocking`.
 pub fn scan_this_project_blocking(roots: &[PathBuf], subpath: &str) -> Vec<TaskItem> {
     let mut items = Vec::new();
-    for root in roots {
-        items.extend(scan_project_tasks(root, subpath));
+    for (scan_path, attribute_to) in worktree_scan_units(roots) {
+        for item in scan_project_tasks(&scan_path, subpath) {
+            items.push(attribute_item(item, &attribute_to));
+        }
     }
-    items
+    dedupe_overlaid(items)
+}
+
+// ---------------------------------------------------------------------------
+// Worktree overlay: tasks living in a linked worktree belong to the main
+// project. Scanning covers main + every linked worktree; a folder present in
+// several checkouts keeps the copy with the freshest task.md.
+// ---------------------------------------------------------------------------
+
+/// Expand candidate projects into `(scan_path, attribute_to)` units: a linked
+/// worktree is attributed to its main checkout, and a main checkout also
+/// scans each of its linked worktrees. Duplicate scan paths are dropped.
+fn worktree_scan_units(candidates: &[PathBuf]) -> Vec<(PathBuf, PathBuf)> {
+    let mut units: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let push = |scan: PathBuf, attr: PathBuf, units: &mut Vec<(PathBuf, PathBuf)>| {
+        if !units.iter().any(|(s, _)| *s == scan) {
+            units.push((scan, attr));
+        }
+    };
+    for project in candidates {
+        if let Some(main) = crate::worktrees::main_root_of(project) {
+            push(project.clone(), main, &mut units);
+        } else {
+            push(project.clone(), project.clone(), &mut units);
+            for wt in crate::worktrees::linked_worktrees(project) {
+                push(wt, project.clone(), &mut units);
+            }
+        }
+    }
+    units
+}
+
+/// Re-home a scanned item under its main project (name + path); the task
+/// files themselves keep their real checkout paths.
+fn attribute_item(mut item: TaskItem, attribute_to: &Path) -> TaskItem {
+    if item.project_path != attribute_to {
+        item.project_path = attribute_to.to_path_buf();
+        item.project_name = attribute_to
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| attribute_to.display().to_string());
+    }
+    item
+}
+
+/// Keep one item per (project, folder name): the one whose task.md was
+/// modified most recently across checkouts.
+fn dedupe_overlaid(items: Vec<TaskItem>) -> Vec<TaskItem> {
+    let mut out: Vec<TaskItem> = Vec::new();
+    for item in items {
+        match out
+            .iter_mut()
+            .find(|e| e.project_path == item.project_path && e.folder_name == item.folder_name)
+        {
+            Some(existing) => {
+                if task_md_mtime(&item) > task_md_mtime(existing) {
+                    *existing = item;
+                }
+            }
+            None => out.push(item),
+        }
+    }
+    out
+}
+
+fn task_md_mtime(item: &TaskItem) -> Option<std::time::SystemTime> {
+    std::fs::metadata(&item.task_md)
+        .and_then(|m| m.modified())
+        .ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -1019,6 +1089,81 @@ outputs:
             "---\nstatus: todo\ncreated: 260706\n---\n",
         )
         .unwrap();
+    }
+
+    /// Fake main checkout + one registered linked worktree.
+    fn worktree_fixture(tmp: &Path) -> (PathBuf, PathBuf) {
+        let main = tmp.join("repo");
+        let wt = tmp.join("wt-feature");
+        fs::create_dir_all(main.join(".git/worktrees/wt-feature")).unwrap();
+        fs::create_dir_all(&wt).unwrap();
+        fs::write(
+            main.join(".git/worktrees/wt-feature/gitdir"),
+            format!("{}\n", wt.join(".git").display()),
+        )
+        .unwrap();
+        fs::write(
+            wt.join(".git"),
+            format!(
+                "gitdir: {}\n",
+                main.join(".git/worktrees/wt-feature").display()
+            ),
+        )
+        .unwrap();
+        (main, wt)
+    }
+
+    #[test]
+    fn worktreeのタスクは主プロジェクトへ合流する() {
+        let tmp = TempDir::new().unwrap();
+        let (main, wt) = worktree_fixture(tmp.path());
+        make_task(&main.join("tasks"), "260720-01-on-main");
+        make_task(&wt.join("tasks"), "260721-01-wt-only");
+
+        let items = scan_this_project_blocking(&[main.clone()], "tasks");
+        assert_eq!(items.len(), 2);
+        // Both items attribute to the main project; the worktree-only task
+        // keeps its real file path.
+        assert!(items.iter().all(|i| i.project_path == main));
+        let wt_item = items
+            .iter()
+            .find(|i| i.folder_name == "260721-01-wt-only")
+            .unwrap();
+        assert!(wt_item.task_md.starts_with(&wt));
+    }
+
+    #[test]
+    fn 両checkoutにある同名タスクはtask_mdが新しい方が残る() {
+        let tmp = TempDir::new().unwrap();
+        let (main, wt) = worktree_fixture(tmp.path());
+        make_task(&main.join("tasks"), "260720-01-shared");
+        make_task(&wt.join("tasks"), "260720-01-shared");
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        fs::File::open(main.join("tasks/260720-01-shared/task.md"))
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+
+        let items = scan_this_project_blocking(&[main.clone()], "tasks");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].project_path, main);
+        assert!(items[0].task_md.starts_with(&wt));
+    }
+
+    #[test]
+    fn all_projects走査でもworktreeは主プロジェクトに帰属する() {
+        let tmp = TempDir::new().unwrap();
+        let (main, wt) = worktree_fixture(tmp.path());
+        make_task(&main.join("tasks"), "260720-01-on-main");
+        make_task(&wt.join("tasks"), "260721-01-wt-only");
+
+        // The scan root discovers both checkouts as separate candidates; the
+        // worktree one must still fold into the main project.
+        let items =
+            scan_all_projects_blocking(&[tmp.path().to_path_buf()], &[], "tasks", None, &[]);
+        assert_eq!(items.len(), 2);
+        assert!(items.iter().all(|i| i.project_path == main));
+        assert!(items.iter().all(|i| i.project_name == "repo"));
     }
 
     #[test]

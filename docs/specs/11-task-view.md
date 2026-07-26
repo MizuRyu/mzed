@@ -42,6 +42,10 @@
 - **直近 N 日**（`created` が今日から N 日以内）で絞る。上部に日数セレクタ（既定 7 日）。
 - プロジェクトごとに variant-2 のルートノードを縦に並べ、各配下に該当タスク。
 
+### worktree オーバーレイ（両スコープ共通）
+
+linked git worktree 配下のタスクは**主 checkout のプロジェクトに帰属**して表示する（worktree が独立プロジェクトとして並ばない）。主 checkout は自分の linked worktree も走査対象に含める。同名タスクフォルダが複数 checkout にある場合は `task.md` の mtime が新しい側だけ残す。タスク内ファイルのパスは実体（worktree 側）のまま。詳細は [05 の worktree オーバーレイ](05-zed-integration.md)。
+
 ### グルーピング（ステータス見出し）
 
 タスクはプロジェクトとステータスの2軸でグループ化し、見出しは chevron で個別に折り畳める（既定は展開）。

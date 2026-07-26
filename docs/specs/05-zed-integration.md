@@ -121,6 +121,18 @@ v1 は単一ルートを主対象とし、マルチルートは「全ルート�
 
 Zed が開いたプロジェクトルートの `.git` が**ファイル**（linked worktree / submodule checkout の目印。通常の checkout はディレクトリ）の場合、切替を無視して現在の表示を維持する。docs を main の checkout 側で持つ運用では、worktree に追従しても見せるものがないため。設定（Zed 連動タブ）で OFF にすれば従来どおり追従する。CLI / D&D / Cmd+O など明示操作で worktree を開くのは制限しない（Zed 連動経路のみのガード）。
 
+### worktree オーバーレイ（常時 ON）
+
+追従スキップの補完。mzed が main の checkout を表示している間、そのリポジトリの **linked worktree 側で更新された docs を UI 上 main に重ねて見せる**。worktree で作業しつつ mzed は main を開いたままでよい。ファイルのコピー・書き込みは一切しない。
+
+- **検出**: `.git/worktrees/<name>/gitdir` を直接読む（git コマンド起動なし）。消えた worktree の残骸登録は無視。worktree の追加/削除はツリー監視経由で自動反映
+- **本文**: 表示パスは常に main 側の「論理パス」。読み込み時に main + 各 worktree の同相対パスを **mtime 比較し最新の実体**を表示（出所表示なし）。全候補をウォッチし、どの checkout の保存でも即再解決
+- **サイドバー**: worktree にしかない md / フォルダも main のツリーに合成表示（ノードは論理パス）。同名は1ノードに集約
+- **Task View**: worktree 配下のタスクは main プロジェクトに帰属。同名タスクフォルダは task.md の mtime が新しい checkout 側が残る。走査で worktree が独立プロジェクトとして発見された場合も main に合流
+- **全文検索**: 表示される側（最新の実体）を検索し、ヒットは論理パスで表示
+- **リンク/画像**: worktree 実体から読んだ文書の相対参照はその checkout 内で解決（worktree root をレンダリング許可 roots に追加）。内部リンクのクリックは論理パスに正規化して開く
+- タブ・セッション・ハイライトは常に論理パスなので、worktree を消せば自動的に main の内容へ戻る
+
 ## マルチウィンドウ時の追従制限
 
 Cmd+N で開いた **2枚目以降のウィンドウ**はベースウィンドウに対してサブウィンドウとして扱われる。

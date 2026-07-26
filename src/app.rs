@@ -11,7 +11,7 @@ use dioxus::prelude::*;
 use instance::Msg;
 use services::file_service;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -1012,11 +1012,21 @@ pub(crate) fn App() -> Element {
         });
     });
 
+    // Worktree overlay: linked worktrees of each root, re-discovered on tree
+    // changes (a `git worktree add/remove` shows up as one). Discovery is a
+    // couple of tiny file reads per root. PartialEq memoisation means
+    // downstream effects only re-run when the worktree set itself changes.
+    let overlay = use_memo(move || {
+        tree_refresh();
+        crate::worktrees::Overlay::discover(&roots())
+    });
+
     // Build file trees off the UI thread. A generation prevents an older scan
     // from replacing a newer project after rapid root changes.
     use_effect(move || {
         tree_refresh();
         let current_roots = roots();
+        let current_overlay = overlay.peek().clone();
         let generation = tree_generation.write().advance();
         if current_roots.is_empty() {
             trees.set(Vec::new());
@@ -1028,7 +1038,12 @@ pub(crate) fn App() -> Element {
                 current_roots
                     .into_iter()
                     .map(|root| {
-                        let nodes = files::build_tree(&root);
+                        let wts: Vec<&Path> = current_overlay
+                            .worktrees_of(&root)
+                            .iter()
+                            .map(PathBuf::as_path)
+                            .collect();
+                        let nodes = files::build_tree_overlay(&root, &wts);
                         (root, nodes)
                     })
                     .collect::<Vec<_>>()
@@ -1052,12 +1067,14 @@ pub(crate) fn App() -> Element {
             .collect::<Vec<_>>()
     });
 
-    // Roots the renderer is allowed to resolve paths under: the project roots
-    // plus the render-only roots of standalone files. Everything else (sidebar
-    // tree, watcher, Task View, palette) keeps using `roots` alone.
+    // Roots the renderer is allowed to resolve paths under: the project roots,
+    // the render-only roots of standalone files, and linked worktree roots
+    // (documents may be read from a worktree copy, whose relative images and
+    // links resolve inside that checkout). Everything else (sidebar tree,
+    // palette, session) keeps using `roots` alone.
     let doc_roots = use_memo(move || {
         let mut rs = roots();
-        for p in loose_roots() {
+        for p in loose_roots().into_iter().chain(overlay().worktree_roots()) {
             if !rs.contains(&p) {
                 rs.push(p);
             }
@@ -1070,12 +1087,16 @@ pub(crate) fn App() -> Element {
     use_effect(move || {
         reload();
         let path = active();
+        // Worktree overlay: read whichever checkout has the freshest copy;
+        // the snapshot is relabelled with the logical (main) path so tab /
+        // pane / highlight comparisons keep working.
+        let read_path = path.clone().map(|p| overlay().resolve(&p));
         let current_roots = doc_roots();
         let generation = document_generation.write().advance();
         document.set(file_service::DocumentSnapshot::loading(path.clone()));
         spawn(async move {
             let result = tokio::task::spawn_blocking(move || {
-                file_service::load_document(path, &current_roots)
+                file_service::load_document(read_path, &current_roots).with_path(path.clone())
             })
             .await;
             if !document_generation.read().is_current(generation) {
@@ -1093,12 +1114,13 @@ pub(crate) fn App() -> Element {
     use_effect(move || {
         reload();
         let path = if split() { active_r() } else { None };
+        let read_path = path.clone().map(|p| overlay().resolve(&p));
         let current_roots = doc_roots();
         let generation = document_generation_r.write().advance();
         document_r.set(file_service::DocumentSnapshot::loading(path.clone()));
         spawn(async move {
             let result = tokio::task::spawn_blocking(move || {
-                file_service::load_document(path, &current_roots)
+                file_service::load_document(read_path, &current_roots).with_path(path.clone())
             })
             .await;
             if !document_generation_r.read().is_current(generation) {
@@ -1198,6 +1220,8 @@ pub(crate) fn App() -> Element {
 
     // Watch both panes independently so an edit in the unfocused pane still
     // reloads. Cancelling the Dioxus task drops and joins its subscription.
+    // With a worktree overlay every copy of the logical path is watched, so a
+    // save in any checkout re-resolves which one is freshest.
     use_effect(move || {
         if let Some(task) = file_watch_task.write().take() {
             task.cancel();
@@ -1205,8 +1229,9 @@ pub(crate) fn App() -> Element {
         let Some(file) = active() else {
             return;
         };
+        let candidates = overlay().candidates(&file);
         let task = spawn(async move {
-            let mut subscription = services::watch_service::file_changes(file);
+            let mut subscription = services::watch_service::files_changes(candidates);
             while subscription.rx.recv().await.is_some() {
                 reload += 1;
             }
@@ -1223,8 +1248,9 @@ pub(crate) fn App() -> Element {
         let Some(file) = active_r() else {
             return;
         };
+        let candidates = overlay().candidates(&file);
         let task = spawn(async move {
-            let mut subscription = services::watch_service::file_changes(file);
+            let mut subscription = services::watch_service::files_changes(candidates);
             while subscription.rx.recv().await.is_some() {
                 reload += 1;
             }
@@ -1232,13 +1258,15 @@ pub(crate) fn App() -> Element {
         file_watch_task_r.set(Some(task));
     });
 
-    // Sidebar auto-update: watch every project root recursively. Restarts when
-    // the root set changes (e.g. a Zed project switch or multi-root workspace).
+    // Sidebar auto-update: watch every project root recursively, plus linked
+    // worktree roots so overlay-only files appear as they are created.
+    // Restarts when the root set changes (Zed switch, multi-root, worktrees).
     use_effect(move || {
         if let Some(task) = tree_watch_task.write().take() {
             task.cancel();
         }
-        let rs = roots();
+        let mut rs = roots();
+        rs.extend(overlay().worktree_roots());
         if rs.is_empty() {
             return;
         }
@@ -1381,8 +1409,11 @@ pub(crate) fn App() -> Element {
         let _ = task_view_doc_tick();
         let dark = appearance() == theme::Appearance::Dark;
         let katex = feature_katex();
+        // Links inside a worktree copy point at worktree paths: allow them
+        // for containment, then open their logical (main) counterpart.
+        let current_overlay = overlay();
         let allowed_roots = file_service::allowed_roots_for_active_files(
-            &roots(),
+            &doc_roots(),
             active().as_ref(),
             active_r().as_ref(),
         );
@@ -1452,7 +1483,7 @@ pub(crate) fn App() -> Element {
                             if path.is_file()
                                 && file_service::path_inside_roots(&path, &allowed_roots)
                             {
-                                open_active(path);
+                                open_active(current_overlay.to_logical(&path));
                             }
                         }
                     }
@@ -1715,7 +1746,12 @@ pub(crate) fn App() -> Element {
         }
 
         let query = search_query();
-        let paths = files::flatten_md(&tree());
+        // Tree paths are logical; search the checkout copy actually shown.
+        let search_overlay = overlay();
+        let paths: Vec<PathBuf> = files::flatten_md(&tree())
+            .into_iter()
+            .map(|p| search_overlay.resolve(&p))
+            .collect();
         let generation = search_generation.write().advance();
         if !search_open() || query.trim().is_empty() {
             search_hits.set(Vec::new());
@@ -1743,7 +1779,19 @@ pub(crate) fn App() -> Element {
                 return;
             }
             match result {
-                Ok(report) if !report.cancelled => search_hits.set(report.hits),
+                Ok(report) if !report.cancelled => {
+                    // Show logical (main) paths even for hits found in a
+                    // worktree copy.
+                    let hits = report
+                        .hits
+                        .into_iter()
+                        .map(|mut h| {
+                            h.path = search_overlay.to_logical(&h.path);
+                            h
+                        })
+                        .collect();
+                    search_hits.set(hits);
+                }
                 Ok(_) => {}
                 Err(err) => show_toast(format!("Search failed: {err}")),
             }
@@ -2229,7 +2277,9 @@ pub(crate) fn App() -> Element {
                         query: search_query,
                         sel: search_sel,
                         open: search_open,
-                        on_open: move |p| open_and_reveal(p),
+                        // Hits carry the searched checkout's path; tabs and
+                        // sidebar reveal want the logical (main) path.
+                        on_open: move |p: PathBuf| open_and_reveal(overlay().to_logical(&p)),
                         hits: search_hits(),
                         roots: roots(),
                         dark,
