@@ -22,7 +22,9 @@ fn markdown_options() -> Options {
 /// Other fenced code keeps pulldown-cmark's `<pre><code class="language-…">`,
 /// which highlight.js picks up in the WebView. Frontmatter, if any, is rendered
 /// as a collapsible table before the body.
-pub fn render(input: &str) -> String {
+/// `frontmatter_open` renders the Metadata disclosure expanded instead of
+/// collapsed (config `frontmatter_default_open`).
+pub fn render_with(input: &str, frontmatter_open: bool) -> String {
     let (front, body) = frontmatter::split_frontmatter(input);
     let options = markdown_options();
     let body = security::escape_user_html(&body, options);
@@ -88,7 +90,7 @@ pub fn render(input: &str) -> String {
 
     let mut out = String::new();
     if let Some(front) = front {
-        out.push_str(&frontmatter::frontmatter_to_html(&front));
+        out.push_str(&frontmatter::frontmatter_to_html(&front, frontmatter_open));
     }
     html::push_html(&mut out, events.into_iter());
     out
@@ -399,6 +401,11 @@ fn linkify_bare_urls(text: &str) -> Vec<Event<'static>> {
 mod tests {
     use super::*;
     use indoc::indoc;
+
+    /// Test shorthand: render with the default (collapsed) frontmatter state.
+    fn render(input: &str) -> String {
+        render_with(input, false)
+    }
 
     #[test]
     fn renders_heading_and_table() {

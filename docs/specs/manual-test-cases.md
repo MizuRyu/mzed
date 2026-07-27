@@ -442,6 +442,16 @@ allowlist 方式で再構築する安全な生 HTML サブセット（`<img>` / 
 | **期待結果** | 1. その候補が即座に消える（メニューは開いたまま。現在のプロジェクト行には ✕ が出ない）。2. リストから消える。3. 候補に戻っている |
 | **備考** | `project_menu_hidden`。Zed の履歴は変更せずローカルで隠すだけ |
 
+### SES-09 frontmatter の Metadata を既定で閉じる
+
+| 項目 | 内容 |
+|---|---|
+| **前提** | YAML frontmatter 付きの md を表示中 |
+| **手順** | 1. 表示を確認する。2. 設定 → 一般 → 「Metadata（frontmatter）を開いた状態で表示」を ON にする |
+| **期待結果** | 1. Metadata が折りたたまれた状態で表示される（クリックで展開できる）。2. 表示中のドキュメントが即座に展開状態に切り替わる |
+| **備考** | `frontmatter_default_open`（既定 false）。`mzed serve` はサーバ起動時の設定値を使う |
+| **自動化済み** | `src/markdown/frontmatter.rs` の `open指定でのみdetailsが展開状態になる` |
+
 ---
 
 ## sync 固定トグル（SYN）

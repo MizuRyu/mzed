@@ -280,7 +280,7 @@ mod tests {
         fs::write(dir.path().join("icon.png"), PNG).unwrap();
 
         let md = r#"<p align="center"><img src="icon.png" width="128"></p>"#;
-        let rendered = super::super::render::render(md);
+        let rendered = super::super::render::render_with(md, false);
         // After render the raw HTML is escaped text, not a real tag.
         assert!(rendered.contains("&lt;img"), "render leaked a raw tag");
 
@@ -302,7 +302,7 @@ mod tests {
             r#"<img src="javascript:alert(1)">"#,
             "\n\n<iframe src=x></iframe>",
         );
-        let rendered = super::super::render::render(md);
+        let rendered = super::super::render::render_with(md, false);
         let out = post_process_in_root(&rendered, dir.path());
         assert!(!out.contains("onerror"), "got: {out}");
         assert!(!out.contains("<script"), "got: {out}");

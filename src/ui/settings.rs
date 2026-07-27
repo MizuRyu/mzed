@@ -36,6 +36,7 @@ pub(crate) fn Settings(
     mut feature_html_export: Signal<bool>,
     mut feature_pdf_export: Signal<bool>,
     mut open_latest_on_project_open: Signal<bool>,
+    mut frontmatter_default_open: Signal<bool>,
     mut feature_task_view: Signal<bool>,
     mut task_view_tasks_subpath: Signal<String>,
     mut task_view_scan_roots: Signal<Vec<PathBuf>>,
@@ -236,6 +237,19 @@ pub(crate) fn Settings(
                                             r#type: "checkbox", checked: open_latest_on_project_open(),
                                             style: "width: 16px; height: 16px; cursor: pointer;",
                                             onchange: move |e| open_latest_on_project_open.set(e.value() == "true"),
+                                        }
+                                    }
+                                    // Frontmatter (Metadata) default disclosure state.
+                                    div {
+                                        style: "{row} border-bottom: 1px solid {row_border};",
+                                        div {
+                                            div { style: row_title, "Metadata（frontmatter）を開いた状態で表示" }
+                                            div { style: "{row_desc}", "OFF なら折りたたんだ状態で表示（クリックで展開）。表示中のドキュメントにも即反映" }
+                                        }
+                                        input {
+                                            r#type: "checkbox", checked: frontmatter_default_open(),
+                                            style: "width: 16px; height: 16px; cursor: pointer;",
+                                            onchange: move |e| frontmatter_default_open.set(e.value() == "true"),
                                         }
                                     }
                                     // Export folder.

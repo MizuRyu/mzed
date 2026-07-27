@@ -98,6 +98,8 @@ pub(crate) fn TaskView(
     group_order: Signal<GroupOrder>,
     status_order: Signal<Vec<String>>,
     date_order: Signal<DateOrder>,
+    /// Render the task.md Metadata disclosure expanded (Settings → General).
+    frontmatter_open: Signal<bool>,
     /// Current project name (directory basename) shown in the header.
     proj_name: String,
     dark: bool,
@@ -229,10 +231,11 @@ pub(crate) fn TaskView(
             return;
         };
         doc_html.set("<p style=\"color:#8b949e\">読み込み中…</p>".to_string());
+        let fm_open = frontmatter_open();
         spawn(async move {
             let roots_vec = vec![project_path];
             let result = tokio::task::spawn_blocking(move || {
-                services::file_service::load_document(Some(file_path), &roots_vec)
+                services::file_service::load_document(Some(file_path), &roots_vec, fm_open)
             })
             .await;
             if doc_gen() != gen_id {

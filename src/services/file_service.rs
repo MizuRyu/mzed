@@ -163,7 +163,11 @@ pub(crate) fn ancestor_dirs_multi(roots: &[PathBuf], file: &Path) -> HashSet<Pat
     HashSet::new()
 }
 
-pub(crate) fn load_document(file: Option<PathBuf>, roots: &[PathBuf]) -> DocumentSnapshot {
+pub(crate) fn load_document(
+    file: Option<PathBuf>,
+    roots: &[PathBuf],
+    frontmatter_open: bool,
+) -> DocumentSnapshot {
     let Some(path) = file else {
         return DocumentSnapshot::empty();
     };
@@ -203,7 +207,7 @@ pub(crate) fn load_document(file: Option<PathBuf>, roots: &[PathBuf]) -> Documen
     let rendered = crate::perf::measure(
         "markdown.render",
         &[("input_bytes", source_for_render.len().to_string())],
-        || markdown::render(&source_for_render),
+        || markdown::render_with(&source_for_render, frontmatter_open),
     );
     let rendered_html = crate::perf::measure(
         "markdown.post_process",
@@ -507,7 +511,7 @@ mod tests {
         let file = dir.path().join("a.md");
         fs::write(&file, "<script>alert(1)</script>").unwrap();
 
-        let snapshot = load_document(Some(file), &[dir.path().to_path_buf()]);
+        let snapshot = load_document(Some(file), &[dir.path().to_path_buf()], false);
         let html = snapshot.raw_html();
 
         assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
@@ -520,7 +524,7 @@ mod tests {
         let file = dir.path().join("a.md");
         fs::write(&file, "# Title\n\nneedle <script>x</script>").unwrap();
 
-        let snapshot = load_document(Some(file.clone()), &[dir.path().to_path_buf()]);
+        let snapshot = load_document(Some(file.clone()), &[dir.path().to_path_buf()], false);
 
         assert_eq!(snapshot.path(), Some(file.as_path()));
         assert!(snapshot.rendered_html().contains(r#"<h1 id="title">"#));
@@ -550,7 +554,7 @@ mod tests {
         assert!(empty.raw_html().contains("Select a markdown file"));
 
         let missing = PathBuf::from("/definitely/missing.md");
-        let failed = load_document(Some(missing), &[]);
+        let failed = load_document(Some(missing), &[], false);
         assert!(failed.raw_html().contains("Failed to read"));
     }
 

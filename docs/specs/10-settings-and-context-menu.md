@@ -25,6 +25,7 @@ Cmd+, で開く単一の設定画面。Obsidian 風に左ナビ + 右ペイン�
 | `sidebar.visible_default` | bool | true | 起動時のサイドバー表示 |
 | `external_links.open_in_browser` | bool | true | http/https リンクを既定ブラウザで開く |
 | `open_latest_on_project_open` | bool | false | プロジェクト切替時に最終更新 Markdown を自動で開く（復元タブが無い場合のみ） |
+| `frontmatter_default_open` | bool | false | frontmatter の「Metadata」折りたたみを開いた状態で表示。設定 General でトグル、表示中ドキュメントに即反映（`mzed serve` はサーバ起動時の値） |
 | `project_aliases` | `[{path, alias}]` | `[]` | プロジェクトフォルダに付ける論理名（別名） |
 | `project_menu_hidden` | `[string]` | `[]` | プロジェクト切替（Cmd+O）から隠すパス。候補行の ✕ で追加、設定 General の「非表示のプロジェクト」で復元。Zed の履歴自体は編集できないためローカルの重ね掛け |
 | `sync_skip_worktrees` | bool | `true` | Zed が git worktree（`.git` がファイル）を開いても追従しない（→ [05](05-zed-integration.md)）。Zed 連動タブでトグル |

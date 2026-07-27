@@ -650,6 +650,7 @@ pub(crate) fn App() -> Element {
     let code_font_size = use_signal(|| saved_config.code_font_size);
     let line_height = use_signal(|| saved_config.line_height);
     let open_latest_on_project_open = use_signal(|| saved_config.open_latest_on_project_open);
+    let frontmatter_default_open = use_signal(|| saved_config.frontmatter_default_open);
     // Rebindable shortcuts, merged with defaults (fills new actions, drops stale).
     let keymap = use_signal(|| config::merged_keybindings(&saved_config.keybindings));
     // Export destination + feature flags (extension-like toggles).
@@ -1092,11 +1093,13 @@ pub(crate) fn App() -> Element {
         // pane / highlight comparisons keep working.
         let read_path = path.clone().map(|p| overlay().resolve(&p));
         let current_roots = doc_roots();
+        let fm_open = frontmatter_default_open();
         let generation = document_generation.write().advance();
         document.set(file_service::DocumentSnapshot::loading(path.clone()));
         spawn(async move {
             let result = tokio::task::spawn_blocking(move || {
-                file_service::load_document(read_path, &current_roots).with_path(path.clone())
+                file_service::load_document(read_path, &current_roots, fm_open)
+                    .with_path(path.clone())
             })
             .await;
             if !document_generation.read().is_current(generation) {
@@ -1116,11 +1119,13 @@ pub(crate) fn App() -> Element {
         let path = if split() { active_r() } else { None };
         let read_path = path.clone().map(|p| overlay().resolve(&p));
         let current_roots = doc_roots();
+        let fm_open = frontmatter_default_open();
         let generation = document_generation_r.write().advance();
         document_r.set(file_service::DocumentSnapshot::loading(path.clone()));
         spawn(async move {
             let result = tokio::task::spawn_blocking(move || {
-                file_service::load_document(read_path, &current_roots).with_path(path.clone())
+                file_service::load_document(read_path, &current_roots, fm_open)
+                    .with_path(path.clone())
             })
             .await;
             if !document_generation_r.read().is_current(generation) {
@@ -1302,6 +1307,7 @@ pub(crate) fn App() -> Element {
             feature_html_export: feature_html_export(),
             feature_pdf_export: feature_pdf_export(),
             open_latest_on_project_open: open_latest_on_project_open(),
+            frontmatter_default_open: frontmatter_default_open(),
             line_height: line_height(),
             feature_task_view: feature_task_view(),
             task_view_tasks_subpath: task_view_tasks_subpath(),
@@ -2307,6 +2313,7 @@ pub(crate) fn App() -> Element {
                         feature_html_export,
                         feature_pdf_export,
                         open_latest_on_project_open,
+                        frontmatter_default_open,
                         feature_task_view,
                         task_view_tasks_subpath,
                         task_view_scan_roots,
@@ -2337,6 +2344,7 @@ pub(crate) fn App() -> Element {
                         group_order: task_view_group_order,
                         status_order: task_view_status_order,
                         date_order: task_view_date_order,
+                        frontmatter_open: frontmatter_default_open,
                         proj_name: current_proj(),
                         dark,
                         favorites,

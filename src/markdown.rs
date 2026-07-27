@@ -13,7 +13,7 @@ mod toc;
 mod wikilink;
 
 pub use post_process::post_process;
-pub use render::render;
+pub use render::render_with;
 pub use toc::{toc, TocEntry};
 pub use wikilink::preprocess_wikilinks;
 

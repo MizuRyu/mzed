@@ -24,11 +24,13 @@ pub fn split_frontmatter(input: &str) -> (Option<String>, String) {
 /// Render frontmatter mo-style: a collapsible "Metadata" disclosure wrapping
 /// the raw YAML in a syntax-highlighted code block (highlight.js picks up
 /// `language-yaml`). Keeps the original YAML verbatim rather than flattening it
-/// into a table, so nested/list values stay readable.
-pub(crate) fn frontmatter_to_html(yaml: &str) -> String {
+/// into a table, so nested/list values stay readable. `open` controls whether
+/// the disclosure starts expanded (config `frontmatter_default_open`).
+pub(crate) fn frontmatter_to_html(yaml: &str, open: bool) -> String {
     let body = super::escape_html(yaml.trim_end());
+    let open_attr = if open { " open" } else { "" };
     format!(
-        "<details class=\"frontmatter\" open><summary>Metadata</summary>\
+        "<details class=\"frontmatter\"{open_attr}><summary>Metadata</summary>\
 <pre><code class=\"language-yaml\">{body}</code></pre></details>\n\n"
     )
 }
@@ -57,11 +59,19 @@ mod tests {
     #[test]
     fn フロントマターは折りたたみ表としてHTML化される() {
         // details で折りたため、キーと値が表に入る
-        let html = frontmatter_to_html("title: 設計\nstatus: WIP");
+        let html = frontmatter_to_html("title: 設計\nstatus: WIP", false);
         assert!(html.contains("<details"));
         assert!(html.contains("title"));
         assert!(html.contains("設計"));
         assert!(html.contains("status"));
         assert!(html.contains("WIP"));
+    }
+
+    #[test]
+    fn open指定でのみdetailsが展開状態になる() {
+        let closed = frontmatter_to_html("title: t", false);
+        assert!(!closed.contains("<details class=\"frontmatter\" open>"));
+        let open = frontmatter_to_html("title: t", true);
+        assert!(open.contains("<details class=\"frontmatter\" open>"));
     }
 }
