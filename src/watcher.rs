@@ -29,12 +29,47 @@ fn is_ignored_component(name: &str) -> bool {
     name.starts_with('.') || matches!(name, "node_modules" | "target" | "dist" | "build")
 }
 
+/// Resolve a path the way FSEvents reports one, so the two can be compared.
+///
+/// FSEvents always reports the *fully resolved* path — symlinks followed and
+/// macOS firmlinks expanded (`/tmp` → `/private/tmp`, `/var` → `/private/var`)
+/// — in the volume's own spelling. The app, meanwhile, holds whatever spelling
+/// the CLI argument, the Zed database, or a symlinked sidebar directory gave
+/// it. Comparing those two verbatim silently drops every event, so live reload
+/// and sidebar refresh just stop working for such paths.
+///
+/// The file itself may be gone (a delete or rename-away), so canonicalise the
+/// parent — which still exists — and re-attach the file name.
+fn resolved(p: &Path) -> PathBuf {
+    if let Ok(c) = std::fs::canonicalize(p) {
+        return c;
+    }
+    match (p.parent(), p.file_name()) {
+        (Some(parent), Some(name)) => match std::fs::canonicalize(parent) {
+            Ok(dir) => dir.join(name),
+            Err(_) => p.to_path_buf(),
+        },
+        _ => p.to_path_buf(),
+    }
+}
+
+/// Case-insensitive comparison key. `realpath(3)` resolves symlinks but does
+/// *not* correct the spelling, and macOS volumes are case-insensitive by
+/// default, so a home directory written `~alice` and `~Alice` can name the
+/// same file while comparing unequal.
+fn compare_key(p: &Path) -> String {
+    p.to_string_lossy().to_lowercase()
+}
+
 /// Does a batch of changed paths warrant re-reading the active file `target`?
 ///
-/// True when any changed path equals `target` (its content changed, was
-/// re-created, or renamed into place).
+/// True when any changed path is `target` (its content changed, was re-created,
+/// or renamed into place), compared on the resolved path — see [`resolved`].
 pub fn active_file_affected(target: &Path, changed: &[PathBuf]) -> bool {
-    changed.iter().any(|p| p == target)
+    let target_key = compare_key(&resolved(target));
+    changed
+        .iter()
+        .any(|p| compare_key(&resolved(p)) == target_key)
 }
 
 /// Does a batch of changed paths warrant rebuilding the sidebar tree under
@@ -42,14 +77,17 @@ pub fn active_file_affected(target: &Path, changed: &[PathBuf]) -> bool {
 /// not within an ignored directory. (Add/remove/rename of an `.md` all surface
 /// here; edits of an existing md also match but only cost one tree rebuild.)
 pub fn tree_affected(root: &Path, changed: &[PathBuf]) -> bool {
-    changed.iter().any(|p| is_relevant_md_path(root, p))
+    let root = resolved(root);
+    changed.iter().any(|p| is_relevant_md_path(&root, p))
 }
 
+/// `root` must already be [`resolved`]; `p` is resolved here.
 fn is_relevant_md_path(root: &Path, p: &Path) -> bool {
     if !is_markdown(p) {
         return false;
     }
-    let Ok(rel) = p.strip_prefix(root) else {
+    let p = resolved(p);
+    let Some(rel) = strip_prefix_ignoring_case(&p, root) else {
         return false;
     };
     // Reject when any intermediate directory component is ignored.
@@ -59,6 +97,22 @@ fn is_relevant_md_path(root: &Path, p: &Path) -> bool {
         .collect();
     comps.pop(); // drop the file name itself
     !comps.iter().any(|c| is_ignored_component(c))
+}
+
+/// `Path::strip_prefix` that tolerates a spelling difference in the prefix
+/// (see [`compare_key`]). Components must still match one-for-one.
+fn strip_prefix_ignoring_case<'a>(path: &'a Path, prefix: &Path) -> Option<&'a Path> {
+    if let Ok(rel) = path.strip_prefix(prefix) {
+        return Some(rel);
+    }
+    let mut path_comps = path.components();
+    for want in prefix.components() {
+        let got = path_comps.next()?;
+        if compare_key(Path::new(got.as_os_str())) != compare_key(Path::new(want.as_os_str())) {
+            return None;
+        }
+    }
+    Some(path_comps.as_path())
 }
 
 fn collect_watch_dirs(root: &Path) -> Vec<PathBuf> {
@@ -237,6 +291,70 @@ mod tests {
         let root = p("/proj");
         let changed = vec![p("/proj/README.md")];
         assert!(tree_affected(&root, &changed));
+    }
+
+    // ── path spelling: FSEvents reports the fully resolved real path ─────
+    // These cover the silent-no-reload class of bug: the app holds one
+    // spelling, the watcher reports another, and every event is dropped.
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink越しのアクティブファイルも再読込対象() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("RealDir");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(real.join("a.md"), "# a").unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        // The app opened the file through the symlink; FSEvents reports the
+        // real directory (and, under /tmp, the /private prefix).
+        let target = link.join("a.md");
+        let reported = std::fs::canonicalize(real.join("a.md")).unwrap();
+        assert!(active_file_affected(&target, &[reported]));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn 大文字小文字違いのアクティブファイルも再読込対象() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("Docs");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("a.md"), "# a").unwrap();
+
+        // macOS volumes are case-insensitive: the app may hold "docs" while
+        // the watcher reports the on-disk "Docs".
+        let target = dir.path().join("docs/a.md");
+        let reported = std::fs::canonicalize(sub.join("a.md")).unwrap();
+        assert!(active_file_affected(&target, &[reported]));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink越しのrootでもツリー更新対象() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("RealProj");
+        std::fs::create_dir_all(real.join("docs")).unwrap();
+        std::fs::write(real.join("docs/new.md"), "# n").unwrap();
+        let link = dir.path().join("proj-link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let reported = std::fs::canonicalize(real.join("docs/new.md")).unwrap();
+        assert!(tree_affected(&link, &[reported.clone()]));
+        // The ignored-directory rule still applies after resolving.
+        std::fs::create_dir_all(real.join("node_modules/pkg")).unwrap();
+        std::fs::write(real.join("node_modules/pkg/x.md"), "# x").unwrap();
+        let noise = std::fs::canonicalize(real.join("node_modules/pkg/x.md")).unwrap();
+        assert!(!tree_affected(&link, &[noise]));
+    }
+
+    #[test]
+    fn 存在しないパス同士は従来どおり文字列比較する() {
+        // Deleted/never-created files can't be canonicalised; the raw
+        // comparison must still work so tests and edge cases behave.
+        let target = p("/proj/docs/a.md");
+        assert!(active_file_affected(&target, &[p("/proj/docs/a.md")]));
+        assert!(!active_file_affected(&target, &[p("/proj/docs/b.md")]));
     }
 
     #[test]
