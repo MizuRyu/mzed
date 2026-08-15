@@ -48,5 +48,5 @@ mzed serve [DIR] [-p/--port PORT] [--no-open]
 - アセット埋め込みでバイナリは +約4MB（mermaid.min.js が大半）
 - **ワーカー4本**で並列処理。重いドキュメント（画像多数の base64 化・wikilink 解決の走査）が1件あっても、アセット・ツリー・live-reload ポーリングが後ろで詰まらない（head-of-line blocking 対策）
 - `/api/tree` は **2秒 TTL のキャッシュ**。ブラウザは 3s 間隔でポーリングするため、大きい root の再 walk を毎回やらない
-- 全リクエストを `<UTC時刻> mzed serve: <ms> <status> <url>` 形式で **stderr と `~/Library/Logs/mzed/serve.log` の両方**にログ（遅い要求の特定用）。GUI 起動の mzed.app は stdout/stderr を破棄するため、アプリ内共有の切り分けはログファイルが唯一の手がかり。5MB 超で `serve.log.old` へ1世代ローテート。起動 toast と CLI 起動時メッセージにログパスを表示
+- 全リクエストを `<UTC時刻> mzed serve: <ms> <status> <url>` 形式で **stderr と `~/Library/Logs/mzed/serve.log` の両方**にログ（遅い要求の特定用）。GUI 起動の mzed.app は stdout/stderr を破棄するため、アプリ内共有の切り分けはログファイルが唯一の手がかり。5MB 超で `serve.log.old` へ1世代ローテート。起動 toast と CLI 起動時メッセージにログパスを表示。ログ出力の実体は `src/logging.rs`（アプリ全体のログと共通）
 - 停止時の注意: tiny_http の `unblock()` は**1回につき1ワーカーしか起こさない**。`ServeHandle::stop` はワーカー数ぶん `unblock()` を積んでから join する（1回だけだと残りの join が永久待ち）

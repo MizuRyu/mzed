@@ -9,6 +9,7 @@ mod files;
 mod fuzzy;
 pub mod instance;
 mod js;
+mod logging;
 mod markdown;
 mod palette;
 mod perf;

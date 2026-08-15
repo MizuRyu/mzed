@@ -1,8 +1,8 @@
 use crate::domain::action::AppCommand;
 use crate::tabs::Tabs;
 use crate::{
-    app_state, cli, config, export, files, instance, js, palette, perf, search, services, session,
-    theme, ui, zed,
+    app_state, cli, config, export, files, instance, js, logging, palette, perf, search, services,
+    session, theme, ui, zed,
 };
 use clap::Parser;
 use dioxus::dioxus_core::Task;
@@ -222,6 +222,10 @@ mod tests {
 
 pub fn run() {
     perf::mark_process_start();
+    // A bundled .app has no stdout/stderr, so route panics to a file first:
+    // without it a panic inside a UI event handler is completely silent and
+    // the action simply appears not to work.
+    logging::install_panic_hook();
     // Parse CLI and absolutise any path arguments so messages sent to another
     // instance (and our own initial state) are unambiguous regardless of cwd.
     let mut parsed = cli::Cli::parse();
@@ -1170,18 +1174,29 @@ pub(crate) fn App() -> Element {
     // WebView clipboard API which can emit a spurious error even on success.
     let copy_path_native = move |text: String, success_message: Option<String>| {
         spawn(async move {
+            // Log what was attempted: a clipboard that silently does not
+            // change is otherwise impossible to tell apart from a click that
+            // never reached the handler.
+            let attempted = text.clone();
             let result = tokio::task::spawn_blocking(move || {
                 services::platform::native_clipboard_write(&text)
             })
             .await;
             match result {
                 Ok(Ok(())) => {
+                    logging::app(format!("clipboard: copied {attempted}"));
                     if let Some(msg) = success_message {
                         show_toast(msg);
                     }
                 }
-                Ok(Err(err)) => show_toast(format!("Copy failed: {err}")),
-                Err(err) => show_toast(format!("Copy failed: {err}")),
+                Ok(Err(err)) => {
+                    logging::app(format!("clipboard: write failed for {attempted}: {err}"));
+                    show_toast(format!("Copy failed: {err}"));
+                }
+                Err(err) => {
+                    logging::app(format!("clipboard: task failed for {attempted}: {err}"));
+                    show_toast(format!("Copy failed: {err}"));
+                }
             }
         });
     };

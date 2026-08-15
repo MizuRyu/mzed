@@ -132,3 +132,15 @@ sequenceDiagram
 - ファイル不在、パース失敗、DB ロックは握りつぶさず、UI が表示できる形に変換する。
 - 監視ループ内のエラーはログに残し、可能ならループを継続する。
 - 背景タスクのキャンセルは正常系として扱い、終了待ちできる所有構造にする。
+
+## ログ出力（`src/logging.rs`）
+
+**GUI 起動の `.app` は stdout/stderr を破棄する。** `eprintln!` だけの経路は、バンドル版では何も残らない = 障害報告時に手がかりがゼロになる。
+
+| 出力先 | 内容 |
+|---|---|
+| `~/Library/Logs/mzed/mzed.log` | アプリのイベント（クリップボード書き込みの成否など）と **panic**。`logging::app()` は stderr にも同時に出す |
+| `~/Library/Logs/mzed/serve.log` | `mzed serve` のリクエストログ（→ [12](12-web-serve.md)） |
+
+- どちらも 5MB 超で `<name>.log.old` へ1世代ローテート。書き込みは best-effort（ログが原因で落ちない）
+- `logging::install_panic_hook()` を `app::run` の冒頭で設定する。UI イベントハンドラ内の panic は既定では完全に無音で、「ボタンを押しても何も起きない」としか観測できないため

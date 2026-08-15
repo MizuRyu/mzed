@@ -41,68 +41,16 @@ const WORKERS: usize = 4;
 /// re-walking a large root on each poll is wasted work.
 const TREE_CACHE: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// Rotate `serve.log` past this size (one `.old` generation is kept).
-const LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
-
-/// Persistent request log. The GUI app discards stdout/stderr, so stderr-only
-/// logging leaves nothing to diagnose in-app share failures with.
+/// Path of the persistent request log (shown in the start toast / CLI banner).
 pub(crate) fn log_file_path() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join("Library/Logs/mzed/serve.log"))
+    crate::logging::log_path("serve.log")
 }
 
-/// Open the request log for appending, rotating an oversized file to
-/// `serve.log.old` first. `None` (no home dir, IO error) degrades to
-/// stderr-only logging.
-fn open_log() -> Option<Mutex<std::fs::File>> {
-    let path = log_file_path()?;
-    std::fs::create_dir_all(path.parent()?).ok()?;
-    if std::fs::metadata(&path).is_ok_and(|m| m.len() > LOG_MAX_BYTES) {
-        let _ = std::fs::rename(&path, path.with_extension("log.old"));
-    }
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .ok()
-        .map(Mutex::new)
-}
-
-/// One request log line to stderr and (when available) the log file.
-fn log_request(file: &Option<Mutex<std::fs::File>>, ms: u128, status: u16, url: &str) {
-    let line = format!("{} mzed serve: {ms:>5}ms {status} {url}", utc_timestamp());
-    eprintln!("{line}");
-    if let Some(f) = file {
-        if let Ok(mut f) = f.lock() {
-            use std::io::Write;
-            let _ = writeln!(f, "{line}");
-        }
-    }
-}
-
-/// Seconds-precision UTC timestamp (`2026-07-25T09:30:12Z`) without a date
-/// crate: civil-from-days per Howard Hinnant's algorithm.
-fn utc_timestamp() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    format_utc(secs)
-}
-
-fn format_utc(secs: u64) -> String {
-    let (days, rem) = (secs / 86_400, secs % 86_400);
-    let (h, m, s) = (rem / 3600, rem % 3600 / 60, rem % 60);
-    let z = days as i64 + 719_468;
-    let era = z / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if mo <= 2 { y + 1 } else { y };
-    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}Z")
+/// One request log line to stderr and to the log file.
+fn log_request(log: &crate::logging::LogFile, ms: u128, status: u16, url: &str) {
+    let line = format!("mzed serve: {ms:>5}ms {status} {url}");
+    eprintln!("{} {line}", crate::logging::utc_timestamp());
+    log.line(&line);
 }
 
 /// A running server: the shared listener (for [`ServeHandle::stop`]) and the
@@ -149,7 +97,7 @@ fn start(dir: &Path, port: u16) -> anyhow::Result<ServeHandle> {
     );
 
     let tree_cache: Arc<Mutex<Option<(std::time::Instant, String)>>> = Arc::new(Mutex::new(None));
-    let log = Arc::new(open_log());
+    let log = Arc::new(crate::logging::LogFile::open("serve.log"));
     // Rendering honours the user's config (frontmatter disclosure state),
     // read once at server start.
     let fm_open = crate::config::load().frontmatter_default_open;
@@ -566,15 +514,6 @@ mod tests {
         let last = log.lines().last().unwrap();
         assert!(last.contains("mzed serve:"), "last log line: {last}");
         assert!(last.contains(" 200 /"), "last log line: {last}");
-    }
-
-    #[test]
-    fn format_utcは既知のepochを正しく整形する() {
-        assert_eq!(format_utc(0), "1970-01-01T00:00:00Z");
-        // 2026-07-25 00:00:00 UTC
-        assert_eq!(format_utc(1_784_937_600), "2026-07-25T00:00:00Z");
-        // うるう年 2 月末日
-        assert_eq!(format_utc(1_709_251_199), "2024-02-29T23:59:59Z");
     }
 
     #[test]
