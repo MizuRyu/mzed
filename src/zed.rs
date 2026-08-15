@@ -325,8 +325,12 @@ mod tests {
         });
         stop_tx.send(()).unwrap();
 
+        // Generous timeout: this asserts the watcher stops without a DB event,
+        // not how fast it stops. Watcher setup under a loaded machine can take
+        // seconds, and a tight bound made this flake (same reasoning as the
+        // file/tree watcher stop tests).
         assert!(done_rx
-            .recv_timeout(Duration::from_secs(3))
+            .recv_timeout(Duration::from_secs(10))
             .expect("zed watcher did not stop"));
     }
 
