@@ -79,6 +79,16 @@ Key bindings are editable in the settings screen.
 
 See [docs/development.md](docs/development.md) for setup, build, and tests, and [docs/README.md](docs/README.md) for design documents (Japanese).
 
+## Acknowledgements
+
+The design and UX draw on these projects.
+
+- [Zed](https://github.com/zed-industries/zed) — the editor mzed follows; also the reference for its key bindings and command palette
+- [mo](https://github.com/k1LoW/mo) — a browser-based Markdown viewer; `mzed serve` brings that use case into mzed
+- [Arto](https://github.com/arto-app/Arto) — the drop-a-file-and-see-it-immediately experience
+
 ## License
 
 [MIT](LICENSE)
+
+Full license texts for the redistributed third-party assets (github-markdown-css, highlight.js, Mermaid, KaTeX) are in [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md).

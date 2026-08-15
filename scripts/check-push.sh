@@ -32,7 +32,10 @@ if [ -n "$paths_hit" ]; then
   echo "$paths_hit" | head -10 >&2
   fail=1
 fi
-mail_hit=$(git ls-files -z | xargs -0 grep -nE '[A-Za-z0-9._%+-]+@(gmail|yahoo|outlook|icloud|hotmail)\.' 2>/dev/null || true)
+# ':!THIRD-PARTY-LICENSES.md' excludes the reproduced upstream license texts:
+# their copyright lines carry the authors' own addresses, and MIT requires the
+# notice to be included verbatim. Those are not the maintainer's personal info.
+mail_hit=$(git ls-files -z -- . ':!THIRD-PARTY-LICENSES.md' | xargs -0 grep -nE '[A-Za-z0-9._%+-]+@(gmail|yahoo|outlook|icloud|hotmail)\.' 2>/dev/null || true)
 if [ -n "$mail_hit" ]; then
   echo "error: personal email addresses in tracked files:" >&2
   echo "$mail_hit" | head -10 >&2

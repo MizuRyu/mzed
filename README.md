@@ -79,6 +79,16 @@ mzed serve ./docs  # フォルダをブラウザで表示（127.0.0.1 のみ、l
 
 セットアップ・ビルド・テストは [docs/development.md](docs/development.md)、設計ドキュメントは [docs/README.md](docs/README.md) を参照。
 
+## 謝辞
+
+設計と UX は次のプロジェクトから影響を受けている。
+
+- [Zed](https://github.com/zed-industries/zed) — 連動先のエディタ。キーバインドとコマンドパレットの操作感も参考にした
+- [mo](https://github.com/k1LoW/mo) — Markdown をブラウザで見せるビューア。`mzed serve` はこの用途を mzed 側に寄せたもの
+- [Arto](https://github.com/arto-app/Arto) — ファイルをドロップしてすぐ表示する体験
+
 ## License
 
 [MIT](LICENSE)
+
+再配布しているサードパーティのアセット（github-markdown-css、highlight.js、Mermaid、KaTeX）のライセンス原文は [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md) に収録している。
