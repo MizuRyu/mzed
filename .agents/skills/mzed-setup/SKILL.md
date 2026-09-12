@@ -116,6 +116,7 @@ mzed serve [DIR] [-p PORT] [--no-open]
 | `feature_katex` | bool | `true` | KaTeX 数式レンダリング |
 | `feature_html_export` | bool | `true` | HTML エクスポート機能 |
 | `feature_pdf_export` | bool | `true` | PDF エクスポート機能 |
+| `tab_insert` | `"start"` \| `"end"` | `"start"` | 新しく開いたタブの位置（左端／右端）。既に開いているタブを開き直したときは位置を動かさない。セッション復元は保存順のまま。設定 General の select |
 | `open_latest_on_project_open` | bool | `false` | プロジェクト切替時に最終更新 Markdown を自動で開く（復元タブが無い場合のみ） |
 | `frontmatter_default_open` | bool | `false` | frontmatter の「Metadata」折りたたみを開いた状態で表示。設定 General でトグル |
 | `line_height` | float | `1.7` | 本文行間（1.2〜2.4）。設定 Appearance の「行間」から変更可 |

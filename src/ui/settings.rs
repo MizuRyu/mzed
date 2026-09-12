@@ -27,6 +27,7 @@ pub(crate) fn Settings(
     mut win_w: Signal<i32>,
     mut win_h: Signal<i32>,
     mut startup_behavior: Signal<config::StartupBehavior>,
+    mut tab_insert: Signal<TabInsert>,
     mut sidebar_default: Signal<bool>,
     mut external_links_in_browser: Signal<bool>,
     mut code_font: Signal<String>,
@@ -201,6 +202,25 @@ pub(crate) fn Settings(
                                             option { value: "restore", selected: startup_behavior() == config::StartupBehavior::Restore, "前回のセッションを復元" }
                                             option { value: "docs", selected: startup_behavior() == config::StartupBehavior::Docs, "Zed 連動の docs を開く" }
                                             option { value: "blank", selected: startup_behavior() == config::StartupBehavior::Blank, "空で開く" }
+                                        }
+                                    }
+                                    // Where a newly opened tab lands.
+                                    div {
+                                        style: "{row} border-bottom: 1px solid {row_border};",
+                                        div {
+                                            div { style: row_title, "新しいタブの位置" }
+                                            div { style: "{row_desc}", "開いているタブを開き直したときは位置を動かさない" }
+                                        }
+                                        select {
+                                            class: "mdo-select", style: "{select_style}",
+                                            onchange: move |e| {
+                                                tab_insert.set(match e.value().as_str() {
+                                                    "end" => TabInsert::End,
+                                                    _ => TabInsert::Start,
+                                                });
+                                            },
+                                            option { value: "start", selected: tab_insert() == TabInsert::Start, "左端" }
+                                            option { value: "end", selected: tab_insert() == TabInsert::End, "右端" }
                                         }
                                     }
                                     // Sidebar default.

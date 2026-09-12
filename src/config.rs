@@ -6,6 +6,7 @@
 //! ([`load`]/[`save`]) that the unit tests skip.
 
 use crate::sync::SyncSource;
+use crate::tabs::TabInsert;
 use crate::theme::{SyncMode, Theme};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -203,6 +204,9 @@ pub struct Config {
     /// `mzed serve` takes its port from `--port` instead.
     #[serde(default = "default_serve_port")]
     pub serve_port: u16,
+    /// Which end of the tab strip a newly opened file lands on.
+    #[serde(default)]
+    pub tab_insert: TabInsert,
 }
 
 /// A user-defined nickname for one project directory.
@@ -307,6 +311,7 @@ impl Default for Config {
             project_menu_hidden: Vec::new(),
             sync_skip_worktrees: true,
             serve_port: default_serve_port(),
+            tab_insert: TabInsert::default(),
         }
     }
 }
@@ -436,6 +441,7 @@ mod tests {
         assert_eq!(c.task_view_status_order, default_task_view_status_order());
         assert!(c.project_aliases.is_empty());
         assert_eq!(c.sync_source, SyncSource::Auto);
+        assert_eq!(c.tab_insert, TabInsert::Start);
     }
 
     #[test]

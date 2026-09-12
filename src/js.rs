@@ -7,7 +7,8 @@ mod notes;
 mod render;
 
 pub(crate) use dom::{
-    overlay_row_scroll_js, reset_root_scroll_js, sidebar_active_js, OverlayRowKind,
+    overlay_row_scroll_js, reset_root_scroll_js, sidebar_active_js, tab_scroll_js, tab_wheel_js,
+    OverlayRowKind,
 };
 pub(crate) use export::{export_capture_js, webview_action_error};
 pub(crate) use find::{find_highlight_js, find_step_js};
@@ -175,6 +176,34 @@ mod tests {
 
         assert!(project_js.contains(r#"querySelector('[data-mdo-prow="4"]')"#));
         assert!(settings_js.contains(r#"querySelector('[data-mdo-srow="5"]')"#));
+    }
+
+    /// The split's other strip must not move when this pane switches tabs, so
+    /// the pane index travels with the path and picks exactly one strip.
+    #[test]
+    fn tab_scroll_js_scrolls_only_the_requested_pane() {
+        let path = "/tmp/\"quoted\"\n</script>.md";
+
+        let js = tab_scroll_js(1, path);
+        let json = serde_json::to_string(path).unwrap();
+
+        assert!(js.contains(&format!("const activePath = {json};")));
+        assert!(js.contains("const pane = 1;"));
+        assert!(js.contains(r#"querySelector('.mdo-tabbar[data-mdo-pane="' + pane + '"]')"#));
+        assert!(!js.contains("querySelectorAll('.mdo-tabbar')"));
+        assert!(!js.contains("scrollIntoView"));
+    }
+
+    /// preventDefault only lands on a non-passive listener, and installing twice
+    /// would double every scroll step.
+    #[test]
+    fn tab_wheel_js_installs_one_non_passive_listener() {
+        let js = tab_wheel_js();
+
+        assert!(js.contains("if (!window.__mdoTabWheel)"));
+        assert!(js.contains("{ passive: false }"));
+        assert!(js.contains("bar.scrollLeft += delta"));
+        assert!(js.contains("e.preventDefault()"));
     }
 
     #[test]

@@ -21,6 +21,7 @@ pub(crate) fn apply_renamed_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tabs::TabInsert;
 
     #[test]
     fn apply_renamed_path_updates_both_panes_and_favorites() {
@@ -30,8 +31,8 @@ mod tests {
         let mut right = Tabs::default();
         let mut favorites = vec![old.clone(), PathBuf::from("/project")];
 
-        left.open(old.clone());
-        right.open(old.clone());
+        left.open(old.clone(), TabInsert::End);
+        right.open(old.clone(), TabInsert::End);
 
         apply_renamed_path(&mut left, &mut right, &mut favorites, &old, new.clone());
 

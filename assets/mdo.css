@@ -35,14 +35,25 @@ body {
   overscroll-behavior: contain;
 }
 
-/* Tab bar: hide the horizontal scrollbar so it never overlaps tab names.
-   Wheel / trackpad horizontal scrolling still works. */
+/* Tab bar: a 4px scrollbar under the tabs — thin enough not to crowd the
+   names, present enough to say there are more tabs off-screen. The global
+   thumb rule below insets by 2px, which would leave nothing visible in a 4px
+   track, so the inset is dropped here. */
 .mdo-tabbar {
-  scrollbar-width: none; /* Firefox */
+  scrollbar-width: thin;
 }
 .mdo-tabbar::-webkit-scrollbar {
-  height: 0;
-  display: none;
+  height: 4px;
+}
+.mdo-tabbar::-webkit-scrollbar-thumb {
+  background: rgba(127, 127, 127, 0.35);
+  border: 0;
+  border-radius: 2px;
+  background-clip: border-box;
+}
+.mdo-tabbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(127, 127, 127, 0.6);
+  background-clip: border-box;
 }
 
 /* Slim, unobtrusive scrollbars everywhere else (WKWebView renders the default

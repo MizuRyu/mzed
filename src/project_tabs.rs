@@ -58,6 +58,7 @@ impl ProjectTabs {
 #[allow(non_snake_case)] // Japanese test names may embed ASCII.
 mod tests {
     use super::*;
+    use crate::tabs::TabInsert;
 
     fn p(s: &str) -> PathBuf {
         PathBuf::from(s)
@@ -66,7 +67,7 @@ mod tests {
     fn tabs(paths: &[&str]) -> Tabs {
         let mut t = Tabs::default();
         for p in paths {
-            t.open(PathBuf::from(p));
+            t.open(PathBuf::from(p), TabInsert::End);
         }
         t
     }

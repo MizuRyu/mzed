@@ -1,8 +1,38 @@
 use super::*;
+use std::collections::HashMap;
+use std::path::Path;
+
+/// The text a tab shows: the file name, or the whole path when it has none.
+fn tab_label(path: &Path) -> String {
+    path.file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
 /// Tab strip above the content. Each tab shows the file name with a close (×)
-/// button; clicking a tab activates it. The active tab is visually lifted.
+/// button; clicking a tab activates it. Every tab sits in the same scrollable
+/// row — nothing is drawn on top of its neighbours — so a wide set is reached
+/// by scrolling sideways (see `tab_wheel_js`) and the active tab is pulled back
+/// into view on every switch.
 #[component]
-pub(crate) fn TabBar(mut tabs: Signal<Tabs>, root: Option<PathBuf>, dark: bool) -> Element {
+pub(crate) fn TabBar(
+    mut tabs: Signal<Tabs>,
+    root: Option<PathBuf>,
+    pane: u8,
+    dark: bool,
+) -> Element {
+    // Switching to a tab parked off the right edge would otherwise leave the
+    // strip showing a different tab as the current one.
+    use_effect(move || {
+        let Some(active) = tabs.read().active().cloned() else {
+            return;
+        };
+        let script = js::tab_scroll_js(pane, &active.to_string_lossy());
+        spawn(async move {
+            let _ = document::eval(&script).await;
+        });
+    });
+
     let snapshot = tabs.read();
     let active = snapshot.active().cloned();
     let paths: Vec<PathBuf> = snapshot.paths().to_vec();
@@ -17,31 +47,63 @@ pub(crate) fn TabBar(mut tabs: Signal<Tabs>, root: Option<PathBuf>, dark: bool) 
     let active_bg = if dark { "#0d1117" } else { "#fff" };
     let active_fg = if dark { "#e6edf3" } else { "#1f2328" };
 
+    // Two tabs with the same file name are indistinguishable from the name
+    // alone, so those tabs also show their parent directory.
+    let mut label_counts: HashMap<String, usize> = HashMap::new();
+    for path in &paths {
+        *label_counts.entry(tab_label(path)).or_default() += 1;
+    }
+    let root_ref = root.as_deref();
+
     rsx! {
         div {
             class: "mdo-tabbar",
-            style: "flex: 0 0 auto; display: flex; overflow-x: auto; background: {bar_bg}; border-bottom: 1px solid {border}; font: 13px -apple-system, sans-serif;",
+            "data-mdo-pane": "{pane}",
+            style: "flex: 0 0 auto; display: flex; flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; background: {bar_bg}; border-bottom: 1px solid {border}; font: 13px -apple-system, sans-serif;",
             for path in paths {
                 {
-                    let name = path
-                        .file_name()
-                        .map(|s| s.to_string_lossy().to_string())
-                        .unwrap_or_else(|| path.display().to_string());
+                    let name = tab_label(&path);
+                    let parent = if label_counts.get(&name).copied().unwrap_or(0) > 1 {
+                        path.parent()
+                            .and_then(Path::file_name)
+                            .map(|s| s.to_string_lossy().to_string())
+                    } else {
+                        None
+                    };
+                    // Names are truncated, so the tooltip carries the whole
+                    // path (project-relative where it has one).
+                    let tooltip = root_ref
+                        .and_then(|r| path.strip_prefix(r).ok())
+                        .unwrap_or(path.as_path())
+                        .display()
+                        .to_string();
                     let is_active = active.as_deref() == Some(path.as_path());
                     let tab_style = if is_active {
                         format!("background: {active_bg}; color: {active_fg}; border-bottom: 2px solid #0969da;")
                     } else {
                         "background: transparent; color: #8b949e; border-bottom: 2px solid transparent;".to_string()
                     };
+                    let tab_path = path.to_string_lossy().to_string();
                     let act_path = path.clone();
                     let close_path = path.clone();
                     rsx! {
                         div {
-                            style: "display: flex; align-items: center; gap: 6px; padding: 6px 10px; cursor: pointer; white-space: nowrap; border-right: 1px solid {border}; {tab_style}",
+                            style: "display: flex; align-items: center; gap: 6px; box-sizing: border-box; flex: 0 0 auto; min-width: 96px; max-width: 220px; padding: 6px 10px; cursor: pointer; border-right: 1px solid {border}; {tab_style}",
+                            title: "{tooltip}",
+                            "data-mdo-tab": "{tab_path}",
                             onclick: move |_| tabs.write().activate(&act_path),
-                            span { "{name}" }
                             span {
-                                style: "color: #8c959f; padding: 0 2px; border-radius: 3px;",
+                                style: "flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                                "{name}"
+                            }
+                            if let Some(parent) = parent {
+                                span {
+                                    style: "flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: #8b949e; opacity: 0.75;",
+                                    "{parent}"
+                                }
+                            }
+                            span {
+                                style: "flex: 0 0 auto; color: #8c959f; padding: 0 2px; border-radius: 3px;",
                                 onclick: move |e| {
                                     e.stop_propagation();
                                     tabs.write().close(&close_path);

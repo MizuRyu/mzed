@@ -24,6 +24,7 @@ Cmd+, で開く単一の設定画面。Obsidian 風に左ナビ + 右ペイン�
 | `sync.default_mode` | enum | `auto` | Zed 連動の初期モード `auto` / `self` / `off` |
 | `sidebar.visible_default` | bool | true | 起動時のサイドバー表示 |
 | `external_links.open_in_browser` | bool | true | http/https リンクを既定ブラウザで開く |
+| `tab_insert` | enum | `start` | 新しく開いたタブの位置。`start`(左端) / `end`(右端)。既に開いているタブを開き直したときは位置を動かさずアクティブにするだけ。セッション復元は保存順をそのまま並べる（設定に依らない） |
 | `open_latest_on_project_open` | bool | false | プロジェクト切替時に最終更新 Markdown を自動で開く（復元タブが無い場合のみ） |
 | `frontmatter_default_open` | bool | false | frontmatter の「Metadata」折りたたみを開いた状態で表示。設定 General でトグル、表示中ドキュメントに即反映（`mzed serve` はサーバ起動時の値） |
 | `project_aliases` | `[{path, alias}]` | `[]` | プロジェクトフォルダに付ける論理名（別名） |

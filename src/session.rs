@@ -6,7 +6,7 @@
 //! still loads. FS access is split into thin [`load`]/[`save`] helpers.
 
 use crate::project_tabs::ProjectTabs;
-use crate::tabs::Tabs;
+use crate::tabs::{TabInsert, Tabs};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -105,7 +105,9 @@ impl Session {
         let mut t = Tabs::default();
         for p in &self.tabs {
             if p.exists() {
-                t.open(p.clone());
+                // Append regardless of `tab_insert`: this replays a saved order,
+                // and prepending would reverse the strip on every restart.
+                t.open(p.clone(), TabInsert::End);
             }
         }
         if let Some(a) = self.active.as_ref() {
@@ -167,7 +169,8 @@ impl Session {
             let mut t = Tabs::default();
             for p in &entry.tabs {
                 if p.exists() {
-                    t.open(p.clone());
+                    // Saved order, same as `restore_tabs`.
+                    t.open(p.clone(), TabInsert::End);
                 }
             }
             if let Some(a) = &entry.active {
@@ -288,8 +291,8 @@ mod tests {
     #[test]
     fn captureは現在のタブ状態を取り込む() {
         let mut t = Tabs::default();
-        t.open(p("/a.md"));
-        t.open(p("/b.md"));
+        t.open(p("/a.md"), TabInsert::End);
+        t.open(p("/b.md"), TabInsert::End);
         let s = Session::capture(vec![p("/root")], &t, 300);
         assert_eq!(s.roots, vec![p("/root")]);
         assert_eq!(s.tabs, vec![p("/a.md"), p("/b.md")]);
@@ -308,6 +311,45 @@ mod tests {
         let t = s.restore_tabs();
         assert!(t.paths().is_empty());
         assert_eq!(t.active(), None);
+    }
+
+    /// 先頭挿入（`tab_insert: start`）が既定でも、復元は保存順をそのまま並べる。
+    /// `open` で組み立てているので、ここが崩れると毎回タブが反転する。
+    #[test]
+    fn 復元は通常もプロジェクト別も保存順とアクティブを保つ() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        // 復元は実在チェックを通るので、実ファイルで固定する。
+        let files: Vec<PathBuf> = ["d.md", "c.md", "b.md", "a.md"]
+            .iter()
+            .map(|name| {
+                let path = root.join(name);
+                std::fs::write(&path, b"# x").unwrap();
+                path
+            })
+            .collect();
+        let sess = Session {
+            roots: vec![root.clone()],
+            tabs: files.clone(),
+            active: Some(files[2].clone()),
+            project_tabs: HashMap::from([(
+                root.clone(),
+                PerProjectTabs {
+                    tabs: files.clone(),
+                    active: Some(files[3].clone()),
+                },
+            )]),
+            ..Session::default()
+        };
+
+        let restored = sess.restore_tabs();
+        assert_eq!(restored.paths(), files.as_slice());
+        assert_eq!(restored.active(), Some(&files[2]));
+
+        let parked = sess.restore_project_tabs();
+        let entry = parked.get(&root).expect("parked tabs for the root");
+        assert_eq!(entry.paths(), files.as_slice());
+        assert_eq!(entry.active(), Some(&files[3]));
     }
 
     #[test]
@@ -340,13 +382,13 @@ mod tests {
         // /b はパーク済み。
         let b_tabs = {
             let mut t = Tabs::default();
-            t.open(p("/b/doc.md"));
+            t.open(p("/b/doc.md"), TabInsert::End);
             t
         };
         pt.park(p("/b"), b_tabs.clone());
 
         let mut live = Tabs::default();
-        live.open(p("/a/readme.md"));
+        live.open(p("/a/readme.md"), TabInsert::End);
 
         let sess = Session::capture_full(vec![p("/a")], &live, 300, &pt, HashMap::new());
 
@@ -413,7 +455,7 @@ mod tests {
         use crate::project_tabs::ProjectTabs;
         let pt = ProjectTabs::default();
         let mut live = Tabs::default();
-        live.open(p("/proj/x.md"));
+        live.open(p("/proj/x.md"), TabInsert::End);
         let sess = Session::capture_full(vec![p("/proj")], &live, 280, &pt, HashMap::new());
         let json = sess.to_json();
         let restored = Session::from_json(&json).unwrap();

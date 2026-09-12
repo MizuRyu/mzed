@@ -5,7 +5,7 @@ use std::time::Duration;
 use dioxus::prelude::*;
 
 use crate::app::{build_menu, export_dir, App, CtxMenu, MDO_CSS, MERMAID_JS};
-use crate::tabs::Tabs;
+use crate::tabs::{TabInsert, Tabs};
 use crate::{config, files, fuzzy, js, markdown, palette, search, services, sync, theme};
 
 mod command_palette;

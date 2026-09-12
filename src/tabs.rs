@@ -4,7 +4,19 @@
 //! Opening an already-open file just activates it (no duplicates); closing
 //! removes it and picks a sensible neighbour as the new active tab.
 
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+
+/// Which end of the strip a newly opened tab lands on.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TabInsert {
+    /// Left edge, so the most recently opened file is always leftmost.
+    #[default]
+    Start,
+    /// Right edge (append).
+    End,
+}
 
 /// The set of open markdown tabs and which one is active.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -14,11 +26,15 @@ pub struct Tabs {
 }
 
 impl Tabs {
-    /// Open `path`, activating it. If already open, no duplicate is added; the
-    /// existing tab simply becomes active.
-    pub fn open(&mut self, path: PathBuf) {
+    /// Open `path` at the `insert` end, activating it. If already open, no
+    /// duplicate is added and the tab keeps its position: reordering on every
+    /// re-open would move tabs out from under the pointer.
+    pub fn open(&mut self, path: PathBuf, insert: TabInsert) {
         if !self.paths.contains(&path) {
-            self.paths.push(path.clone());
+            match insert {
+                TabInsert::Start => self.paths.insert(0, path.clone()),
+                TabInsert::End => self.paths.push(path.clone()),
+            }
         }
         self.active = Some(path);
     }
@@ -127,31 +143,55 @@ mod tests {
         PathBuf::from(s)
     }
 
+    /// Tabs in the given left-to-right order (the close / next / prev cases are
+    /// written against a known order, so they append rather than prepend).
+    fn appended(paths: &[&str]) -> Tabs {
+        let mut t = Tabs::default();
+        for path in paths {
+            t.open(p(path), TabInsert::End);
+        }
+        t
+    }
+
     #[test]
     fn openはタブを追加しアクティブにする() {
-        let mut t = Tabs::default();
-        t.open(p("/a.md"));
-        t.open(p("/b.md"));
+        let t = appended(&["/a.md", "/b.md"]);
         assert_eq!(t.paths(), &[p("/a.md"), p("/b.md")]);
         assert_eq!(t.active(), Some(&p("/b.md")));
     }
 
     #[test]
-    fn open済みファイルは重複せずアクティブ化される() {
+    fn startなら新規タブが先頭に入る() {
         let mut t = Tabs::default();
-        t.open(p("/a.md"));
-        t.open(p("/b.md"));
-        t.open(p("/a.md"));
+        t.open(p("/a.md"), TabInsert::Start);
+        t.open(p("/b.md"), TabInsert::Start);
+        t.open(p("/c.md"), TabInsert::Start);
+        assert_eq!(t.paths(), &[p("/c.md"), p("/b.md"), p("/a.md")]);
+        assert_eq!(t.active(), Some(&p("/c.md")));
+    }
+
+    #[test]
+    fn open済みファイルは重複せずアクティブ化される() {
+        let mut t = appended(&["/a.md", "/b.md"]);
+        t.open(p("/a.md"), TabInsert::End);
         assert_eq!(t.paths(), &[p("/a.md"), p("/b.md")]);
+        assert_eq!(t.active(), Some(&p("/a.md")));
+    }
+
+    /// 既存タブの再 open で順序が動くと、タブの位置記憶が壊れる。
+    #[test]
+    fn start設定でも既存タブの再openは順序を変えない() {
+        let mut t = Tabs::default();
+        t.open(p("/a.md"), TabInsert::Start);
+        t.open(p("/b.md"), TabInsert::Start);
+        t.open(p("/a.md"), TabInsert::Start);
+        assert_eq!(t.paths(), &[p("/b.md"), p("/a.md")]);
         assert_eq!(t.active(), Some(&p("/a.md")));
     }
 
     #[test]
     fn アクティブタブを閉じると隣がアクティブになる() {
-        let mut t = Tabs::default();
-        t.open(p("/a.md"));
-        t.open(p("/b.md"));
-        t.open(p("/c.md"));
+        let mut t = appended(&["/a.md", "/b.md", "/c.md"]);
         t.activate(&p("/b.md"));
         t.close(&p("/b.md"));
         // b の位置(index 1)に来た c がアクティブ。
@@ -161,18 +201,25 @@ mod tests {
 
     #[test]
     fn 末尾のアクティブタブを閉じると新末尾がアクティブ() {
-        let mut t = Tabs::default();
-        t.open(p("/a.md"));
-        t.open(p("/b.md"));
+        let mut t = appended(&["/a.md", "/b.md"]);
         t.close(&p("/b.md"));
+        assert_eq!(t.active(), Some(&p("/a.md")));
+    }
+
+    /// 先頭挿入では新しいタブが左端にあるので、それを閉じたら右隣が残る。
+    #[test]
+    fn start設定で先頭のアクティブタブを閉じると右隣がアクティブ() {
+        let mut t = Tabs::default();
+        t.open(p("/a.md"), TabInsert::Start);
+        t.open(p("/b.md"), TabInsert::Start);
+        t.close_active();
+        assert_eq!(t.paths(), &[p("/a.md")]);
         assert_eq!(t.active(), Some(&p("/a.md")));
     }
 
     #[test]
     fn 非アクティブタブを閉じてもアクティブは変わらない() {
-        let mut t = Tabs::default();
-        t.open(p("/a.md"));
-        t.open(p("/b.md"));
+        let mut t = appended(&["/a.md", "/b.md"]);
         t.activate(&p("/b.md"));
         t.close(&p("/a.md"));
         assert_eq!(t.paths(), &[p("/b.md")]);
@@ -181,8 +228,7 @@ mod tests {
 
     #[test]
     fn 最後のタブを閉じるとアクティブは無くなる() {
-        let mut t = Tabs::default();
-        t.open(p("/a.md"));
+        let mut t = appended(&["/a.md"]);
         t.close(&p("/a.md"));
         assert!(t.paths().is_empty());
         assert_eq!(t.active(), None);
@@ -190,10 +236,7 @@ mod tests {
 
     #[test]
     fn close_activeはアクティブを閉じ隣をアクティブにする() {
-        let mut t = Tabs::default();
-        t.open(p("/a.md"));
-        t.open(p("/b.md"));
-        t.open(p("/c.md"));
+        let mut t = appended(&["/a.md", "/b.md", "/c.md"]);
         t.activate(&p("/b.md"));
         t.close_active();
         assert_eq!(t.paths(), &[p("/a.md"), p("/c.md")]);
@@ -210,10 +253,7 @@ mod tests {
 
     #[test]
     fn activate_nextは次のタブへ移り末尾で循環する() {
-        let mut t = Tabs::default();
-        t.open(p("/a.md"));
-        t.open(p("/b.md"));
-        t.open(p("/c.md"));
+        let mut t = appended(&["/a.md", "/b.md", "/c.md"]);
         t.activate(&p("/a.md"));
         t.activate_next();
         assert_eq!(t.active(), Some(&p("/b.md")));
@@ -226,10 +266,7 @@ mod tests {
 
     #[test]
     fn activate_prevは前のタブへ移り先頭で循環する() {
-        let mut t = Tabs::default();
-        t.open(p("/a.md"));
-        t.open(p("/b.md"));
-        t.open(p("/c.md"));
+        let mut t = appended(&["/a.md", "/b.md", "/c.md"]);
         t.activate(&p("/a.md"));
         // 先頭から末尾へ循環。
         t.activate_prev();
@@ -238,23 +275,48 @@ mod tests {
         assert_eq!(t.active(), Some(&p("/b.md")));
     }
 
+    /// 先頭挿入では表示順が open 順の逆になる。巡回はその表示順に従う。
+    #[test]
+    fn start設定の巡回は左から右の表示順に従う() {
+        let mut t = Tabs::default();
+        t.open(p("/a.md"), TabInsert::Start);
+        t.open(p("/b.md"), TabInsert::Start);
+        t.open(p("/c.md"), TabInsert::Start);
+        // 表示は c, b, a。アクティブは c(index 0)。
+        t.activate_next();
+        assert_eq!(t.active(), Some(&p("/b.md")));
+        t.activate_next();
+        assert_eq!(t.active(), Some(&p("/a.md")));
+        t.activate_next();
+        assert_eq!(t.active(), Some(&p("/c.md")));
+        t.activate_prev();
+        assert_eq!(t.active(), Some(&p("/a.md")));
+    }
+
     #[test]
     fn activate_indexは指定indexをアクティブにする() {
-        let mut t = Tabs::default();
-        t.open(p("/a.md"));
-        t.open(p("/b.md"));
-        t.open(p("/c.md"));
+        let mut t = appended(&["/a.md", "/b.md", "/c.md"]);
         t.activate_index(0);
         assert_eq!(t.active(), Some(&p("/a.md")));
         t.activate_index(2);
         assert_eq!(t.active(), Some(&p("/c.md")));
     }
 
+    /// 先頭挿入でも index は表示順（左から）で数える。
+    #[test]
+    fn start設定のactivate_indexは左端を0とする() {
+        let mut t = Tabs::default();
+        t.open(p("/a.md"), TabInsert::Start);
+        t.open(p("/b.md"), TabInsert::Start);
+        t.activate_index(0);
+        assert_eq!(t.active(), Some(&p("/b.md")));
+        t.activate_index(1);
+        assert_eq!(t.active(), Some(&p("/a.md")));
+    }
+
     #[test]
     fn 範囲外indexは無視される() {
-        let mut t = Tabs::default();
-        t.open(p("/a.md"));
-        t.open(p("/b.md"));
+        let mut t = appended(&["/a.md", "/b.md"]);
         t.activate_index(0);
         t.activate_index(5);
         // 範囲外なのでアクティブは変わらない。
@@ -272,9 +334,7 @@ mod tests {
 
     #[test]
     fn replace_pathはアクティブタブと順序を維持してパスを更新する() {
-        let mut t = Tabs::default();
-        t.open(p("/a.md"));
-        t.open(p("/old.md"));
+        let mut t = appended(&["/a.md", "/old.md"]);
 
         t.replace_path(&p("/old.md"), p("/new.md"));
 
@@ -284,13 +344,34 @@ mod tests {
 
     #[test]
     fn replace_pathは非アクティブタブを更新してアクティブは変えない() {
-        let mut t = Tabs::default();
-        t.open(p("/old.md"));
-        t.open(p("/active.md"));
+        let mut t = appended(&["/old.md", "/active.md"]);
 
         t.replace_path(&p("/old.md"), p("/new.md"));
 
         assert_eq!(t.paths(), &[p("/new.md"), p("/active.md")]);
         assert_eq!(t.active(), Some(&p("/active.md")));
+    }
+
+    /// リネームは先頭挿入でも位置を動かさない（open ではなく置換）。
+    #[test]
+    fn start設定でもreplace_pathは位置を動かさない() {
+        let mut t = Tabs::default();
+        t.open(p("/old.md"), TabInsert::Start);
+        t.open(p("/b.md"), TabInsert::Start);
+
+        t.replace_path(&p("/old.md"), p("/new.md"));
+
+        assert_eq!(t.paths(), &[p("/b.md"), p("/new.md")]);
+        assert_eq!(t.active(), Some(&p("/b.md")));
+    }
+
+    #[test]
+    fn tab_insertはsnake_caseでシリアライズされる() {
+        assert_eq!(
+            serde_json::to_string(&TabInsert::Start).unwrap(),
+            "\"start\""
+        );
+        assert_eq!(serde_json::to_string(&TabInsert::End).unwrap(), "\"end\"");
+        assert_eq!(TabInsert::default(), TabInsert::Start);
     }
 }

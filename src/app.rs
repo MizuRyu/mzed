@@ -510,6 +510,8 @@ pub(crate) fn App() -> Element {
     // Nesting depth of the current file drag over the window (0 = not dragging).
     let mut drag_depth = use_signal(|| 0u32);
     let mut tabs = use_signal(Tabs::default);
+    // Which end of the strip a newly opened tab lands on (Settings > General).
+    let tab_insert = use_signal(|| saved_config.tab_insert);
     // Split view: a second (right) pane with its own independent tab set. `split`
     // toggles its visibility; `active_pane` (0=left, 1=right) is the focused pane
     // that new files open into.
@@ -527,7 +529,7 @@ pub(crate) fn App() -> Element {
     };
     // Route an open into the focused pane.
     let open_active = move |path: PathBuf| {
-        act_tabs().write().open(path);
+        act_tabs().write().open(path, tab_insert());
     };
     // Per-project parked tab sets (keyed by primary root). `tabs` holds the
     // current project's live set; switching projects parks/restores via this map.
@@ -559,7 +561,7 @@ pub(crate) fn App() -> Element {
         if !exp.is_empty() {
             expanded.write().extend(exp);
         }
-        act_tabs().write().open(path);
+        act_tabs().write().open(path, tab_insert());
     };
     // Sidebar right-click menu + inline-ish rename (a small centered prompt).
     let mut ctx_menu = use_signal(|| None::<CtxMenu>);
@@ -882,7 +884,7 @@ pub(crate) fn App() -> Element {
             // spurious reactive updates (tree rebuild, document reload, sidebar
             // flicker). Only honour an explicit additional file pick.
             if let Some(f) = open_pick {
-                tabs.write().open(f);
+                tabs.write().open(f, tab_insert());
             }
             return;
         }
@@ -892,7 +894,7 @@ pub(crate) fn App() -> Element {
             // not a project switch: keep the tabs and the user's expansion.
             roots.set(new_roots);
             if let Some(f) = open_pick {
-                tabs.write().open(f);
+                tabs.write().open(f, tab_insert());
             }
             return;
         }
@@ -933,7 +935,7 @@ pub(crate) fn App() -> Element {
             None
         };
         if let Some(f) = effective_pick {
-            restored.open(f);
+            restored.open(f, tab_insert());
         }
         // Reveal whatever tab ends up active (restored session tab, the pick,
         // or the latest-file) in the tree. The caller-provided expansion is
@@ -1670,6 +1672,7 @@ pub(crate) fn App() -> Element {
             project_menu_hidden: project_menu_hidden(),
             sync_skip_worktrees: sync_skip_worktrees(),
             serve_port: serve_port(),
+            tab_insert: tab_insert(),
         };
         let generation = config_save_generation.write().advance();
         spawn(async move {
@@ -1995,7 +1998,7 @@ pub(crate) fn App() -> Element {
                             // current file (VSCode-style duplicate), focus it.
                             let mut t = Tabs::default();
                             if let Some(f) = active() {
-                                t.open(f);
+                                t.open(f, tab_insert());
                             }
                             tabs_r.set(t);
                             split.set(true);
@@ -2008,7 +2011,7 @@ pub(crate) fn App() -> Element {
                                 // Cmd+2 with no split yet: create it first.
                                 let mut t = Tabs::default();
                                 if let Some(f) = active() {
-                                    t.open(f);
+                                    t.open(f, tab_insert());
                                 }
                                 tabs_r.set(t);
                                 split.set(true);
@@ -2090,6 +2093,15 @@ pub(crate) fn App() -> Element {
                     }
                 }
             }
+        });
+    });
+
+    // Tab strip wheel bridge: the strip scrolls sideways only, so a plain
+    // vertical wheel has to move it. Installed once and delegated from the
+    // document, so it survives every tab-bar re-render.
+    use_effect(move || {
+        spawn(async move {
+            let _ = document::eval(js::tab_wheel_js()).await;
         });
     });
 
@@ -2704,7 +2716,7 @@ pub(crate) fn App() -> Element {
                                         div {
                                             style: "flex: 1 1 0; display: flex; flex-direction: column; min-width: 0; min-height: 0; border-top: 2px solid {bd0};",
                                             onmousedown: move |_| active_pane.set(0),
-                                            TabBar { tabs, root: root(), dark }
+                                            TabBar { tabs, root: root(), pane: 0, dark }
                                             div {
                                                 // `relative`: the note overlay is
                                                 // absolutely positioned in here so
@@ -2724,7 +2736,7 @@ pub(crate) fn App() -> Element {
                                             div {
                                                 style: "flex: 1 1 0; display: flex; flex-direction: column; min-width: 0; min-height: 0; border-top: 2px solid {bd1};",
                                                 onmousedown: move |_| active_pane.set(1),
-                                                TabBar { tabs: tabs_r, root: root(), dark }
+                                                TabBar { tabs: tabs_r, root: root(), pane: 1, dark }
                                                 div {
                                                     // `relative`: the note overlay is
                                                     // absolutely positioned in here so
@@ -2783,6 +2795,7 @@ pub(crate) fn App() -> Element {
                         win_w,
                         win_h,
                         startup_behavior,
+                        tab_insert,
                         sidebar_default,
                         external_links_in_browser,
                         code_font,
