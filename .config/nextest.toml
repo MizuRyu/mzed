@@ -1,0 +1,27 @@
+# cargo nextest configuration. See https://nexte.st/docs/configuration/
+
+[test-groups]
+# 実ファイルシステムを監視する notify (FSEvents) ウォッチャを起動するテスト専用の
+# 直列グループ。多数のウォッチャを同時に立ち上げると起動そのものが数秒詰まり、
+# 各テストの「停止できる」を確認するタイムアウト（10s）を超えて flake する。
+# 閾値をこれ以上広げず、このグループだけ直列実行することで解消する。
+fs-watchers = { max-threads = 1 }
+
+[[profile.default.overrides]]
+# 対象は「notify の debouncer/watcher を実際に起動する」テストのみ:
+#   - orca::tests:: watch_until (watch_path 経由で new_debouncer を起動) /
+#     stop送信側をdropしても終了する / watch_active_project 経由のテスト
+#   - zed::tests:: watch_until (new_debouncer を起動)。src/bin/zed_watch.rs が
+#     #[path] で zed.rs を再取り込みするため、同名テストが mzed 本体と
+#     zed_watch バイナリの両方に存在し、両方が対象になる
+#   - watcher::tests:: watch_file_until / watch_tree_until (new_debouncer /
+#     new_debouncer_opt を起動)
+# 関数名の正規表現だけでは orca::tests::後から現れた状態ファイルを拾う
+# （watch_active_project を実際に起動するが、名前に watch/stop/停止/監視を
+# 含まない）を取りこぼすため、当該テストは exact match で明示的に追加する。
+# watcher::tests::再帰監視でも既存ディレクトリのノイズは判定側で捨てる は
+# tree_affected の純粋関数テストで実ウォッチャは起動しないが、正規表現に
+# 意図せず一致する。直列グループに混ざっても実行は一瞬で終わり実害がないため
+# 除外の複雑さを避けてそのままにする。
+filter = 'test(/^(orca|zed|watcher)::tests::.*(watch|stop|停止|監視)/) | test(=orca::tests::後から現れた状態ファイルを拾う)'
+test-group = 'fs-watchers'

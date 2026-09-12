@@ -74,6 +74,8 @@ Apple 署名 / notarization はしない（配布規模が小さいため意図�
 - ユニット + 統合テスト: `cargo test`（単一インスタンス IPC は `tests/instance_integration.rs`）
 - 手動回帰テスト: [specs/manual-test-cases.md](specs/manual-test-cases.md)（TC-ID 付き、リリース前に流す）
 - レンダリング確認用フィクスチャ: `tests/fixtures/showcase.md`
+- `.config/nextest.toml`: notify (FSEvents) ウォッチャを実際に起動するテストは
+  `fs-watchers` グループで直列実行する。並列に多数起動すると起動そのものが詰まり停止確認のタイムアウトで flake するため。
 
 ## 技術スタック
 
