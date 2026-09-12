@@ -11,6 +11,7 @@ use crate::{config, files, fuzzy, js, markdown, palette, search, services, sync,
 mod command_palette;
 mod find_bar;
 mod navigation;
+mod note_bar;
 mod project_menu;
 mod search_panel;
 mod settings;
@@ -22,6 +23,7 @@ mod window;
 pub(crate) use command_palette::Palette;
 pub(crate) use find_bar::FindBar;
 pub(crate) use navigation::{TabBar, TocPanel};
+pub(crate) use note_bar::NoteBar;
 pub(crate) use project_menu::ProjectMenu;
 pub(crate) use search_panel::SearchPanel;
 pub(crate) use settings::{Settings, SettingsTab};

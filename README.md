@@ -7,17 +7,18 @@
 [![release](https://img.shields.io/github/v/release/MizuRyu/mzed)](https://github.com/MizuRyu/mzed/releases)
 [![license](https://img.shields.io/github/license/MizuRyu/mzed)](LICENSE)
 
-Zed 連動の Markdown ビューア。Zed でフォーカスしているプロジェクトを検知し、その docs を自動で表示する。
+Zed（エディタ）と Orca（worktree 管理ツール）に連動する Markdown ビューア。フォーカス中のプロジェクトを検知し、その docs を自動で表示する。
 
 English version: [README.en.md](README.en.md)
 
 ## 特徴
 
-- **Zed 連動** — Zed のプロジェクト切替に追従して表示中の docs を丸ごと入れ替える。`Cmd+Shift+L` で追従の固定/解除
+- **Zed / Orca 連動** — Zed / Orca のプロジェクト切替に追従して表示中の docs を丸ごと入れ替える。追従元は `sync_source`（auto / zed / orca、既定 auto）または `--sync-source` で選べる。`Cmd+Shift+L` で追従の固定/解除
 - **リッチなレンダリング** — GitHub スタイル、シンタックスハイライト、Mermaid、KaTeX、GitHub Alerts、frontmatter、画像 lightbox
 - **ライブリロード** — ファイル保存を検知して即再描画
 - **快適なナビゲーション** — サイドバー、マルチタブ、左右分割、目次、コマンドパレット、ファジー検索、全文検索
 - **Task View（`Cmd+Shift+D`）** — `docs/memo/tasks/` のタスクフォルダを status 別に一覧し、task.md を即読みする専用ビュー。複数プロジェクト横断にも対応
+- **メモ（`Cmd+Shift+M`）** — 読みながら本文を選択して「ここを直して」を残す。`~/.config/mzed/notes/` に 1 メモ 1 JSON で溜まり、AI エージェントがスキル `mzed-notes` で読んで直す
 - **エクスポート** — self-contained な HTML / PDF
 - **CLI** — `mzed file.md` で単一インスタンスに転送。ドラッグ&ドロップ、セッション復元も対応
 
@@ -45,31 +46,32 @@ ln -sf /Applications/mzed.app/Contents/MacOS/mzed ~/.local/bin/mzed  # CLI を�
 ## 使い方
 
 ```sh
-mzed               # Zed 連動モードで起動
+mzed               # Zed / Orca 連動モードで起動
 mzed file.md       # ファイルをタブで開く
 mzed ./docs        # ディレクトリをルートにして開く
 mzed --sync self   # 連動モード指定
 mzed serve ./docs  # フォルダをブラウザで表示（127.0.0.1 のみ、live-reload。画面共有向け）
 ```
 
-連動モードは3つ:
+連動モードは3つ。どこまで追うか（`sync_mode`）を決める:
 
 | モード | 動作 |
 | --- | --- |
-| `auto` | Zed のフォーカス中プロジェクトに追従（デフォルト） |
-| `self` | 今のプロジェクトに固定 |
-| `off` | 連動なし |
+| `auto` | プロジェクト + docs を自動で切り替える（デフォルト） |
+| `self` | プロジェクトだけ切り替え、docs は自動で開かない |
+| `off` | 連動なし（手動操作のみ） |
 
 ### 主なキーバインド
 
 | キー | 動作 |
 | --- | --- |
 | `Cmd+Shift+P` | コマンドパレット |
-| `Cmd+Shift+L` | Zed 追従の固定/解除（auto⇄self） |
+| `Cmd+Shift+L` | 追従の固定/解除（auto⇄self） |
 | `Cmd+P` | ファイルのファジー検索 |
 | `Cmd+F` | ドキュメント内検索 |
 | `Cmd+O` | プロジェクト切替 |
 | `Cmd+Shift+D` | Task View（タスク一覧）のトグル |
+| `Cmd+Shift+M` | 選択した本文にメモを追加 |
 | `Cmd+\` | 左右分割 |
 | `Cmd+= / Cmd+-` / `Cmd+0` | ズームイン / アウト / リセット |
 

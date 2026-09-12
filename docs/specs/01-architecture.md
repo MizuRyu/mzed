@@ -2,8 +2,8 @@
 
 ## 概要
 
-mzed は Zed エディタ連動の Markdown ビューア。
-Zed のプロジェクト切り替えを検知し、対応する docs を瞬時に表示する。
+mzed は Zed（エディタ）/ Orca（worktree 管理ツール）連動の Markdown ビューア。
+どちらかのプロジェクト切り替えを検知し、対応する docs を瞬時に表示する。
 
 ## システム構成
 
@@ -14,6 +14,7 @@ graph TB
             CLI[CLI Handler<br/>clap]
             IM[Instance service<br/>IPC 単一制御]
             ZM[Zed service<br/>SQLite 監視]
+            OM[Orca service<br/>状態ファイル監視]
             FW[Watch service<br/>notify-rs]
             MD[Markdown pipeline<br/>pulldown-cmark]
             OS[Platform service<br/>Finder / clipboard / Trash]
@@ -31,12 +32,15 @@ graph TB
         UIJS --> MR
     end
     ZedDB[(Zed SQLite DB)] --> ZM
+    OrcaFile[(Orca 状態ファイル)] --> OM
     FS[(ファイルシステム)] --> FW
 ```
 
-## Zed 連動
+## プロジェクト連動（Zed / Orca）
 
-### 検知フロー
+どちらに追従するかは `sync_source`（auto / zed / orca、既定 auto）で決める。詳細は [05](05-zed-integration.md) を参照。
+
+### 検知フロー（Zed）
 
 ```mermaid
 sequenceDiagram
@@ -52,13 +56,33 @@ sequenceDiagram
     Mon->>App: state 更新 → サイドバー完全入れ替え
 ```
 
+### 検知フロー（Orca）
+
+```mermaid
+sequenceDiagram
+    participant Orca
+    participant File as orca-data.json
+    participant Mon as mzed Orca Monitor
+    participant App as Dioxus App
+
+    Orca->>File: worktree 切り替え (ファイル書き換え)
+    Mon->>File: mtime 監視 (notify + 1500ms ポーリング)
+    Mon->>File: mtime 変化時のみ JSON パース
+    Mon->>Mon: activeWorktreeId 解決
+    Mon->>App: state 更新 → サイドバー完全入れ替え
+```
+
+未文書化の内部形式のため全フィールドを optional として扱い、パース失敗・キー欠落・ファイル不在は「変化なし」に倒す。詳細は [05](05-zed-integration.md) の「Orca 連動」節を参照。
+
 ### 連動モード
+
+`sync_mode`（下表）は Zed / Orca どちらの切替にも同じように適用される。
 
 | モード | 挙動 |
 |---|---|
 | `auto` | プロジェクト切り替え検知 → プロジェクト + md を自動切替 |
 | `self` | プロジェクト切り替え検知 → コンテキストのみ切替、md は開かない |
-| `off` | Zed 監視停止、手動操作のみ |
+| `off` | 連動を停止、手動操作のみ |
 
 ### 高速化
 
@@ -74,7 +98,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    Input["CLI / D&D / Zed 連動"] --> Rust
+    Input["CLI / D&D / Zed / Orca 連動"] --> Rust
     subgraph Rust["Rust Backend"]
         R1[パス解決] --> R2[md 読み込み] --> R3[監視登録]
     end

@@ -7,17 +7,18 @@
 [![release](https://img.shields.io/github/v/release/MizuRyu/mzed)](https://github.com/MizuRyu/mzed/releases)
 [![license](https://img.shields.io/github/license/MizuRyu/mzed)](LICENSE)
 
-A Markdown viewer that follows Zed. It detects the project currently focused in Zed and automatically displays its docs.
+A Markdown viewer that follows Zed (the editor) and Orca (a worktree manager). It detects the currently focused project and automatically displays its docs.
 
 日本語版: [README.md](README.md)
 
 ## Features
 
-- **Zed integration** — swaps the displayed docs as you switch projects in Zed; pin/unpin with `Cmd+Shift+L`
+- **Zed / Orca integration** — swaps the displayed docs as you switch projects in Zed / Orca. Which app to follow is `sync_source` (auto / zed / orca, default auto) or `--sync-source`; pin/unpin with `Cmd+Shift+L`
 - **Rich rendering** — GitHub styling, syntax highlighting, Mermaid, KaTeX, GitHub Alerts, frontmatter, image lightbox
 - **Live reload** — re-renders on file save
 - **Comfortable navigation** — sidebar, multi-tab, split pane, table of contents, command palette, fuzzy finder, full-text search
 - **Task View (`Cmd+Shift+D`)** — a dedicated view that lists `docs/memo/tasks/` task folders by status and opens each task.md instantly, across multiple projects
+- **Notes (`Cmd+Shift+M`)** — select a passage while reading and leave a "fix this" note. Each note lands as its own JSON file under `~/.config/mzed/notes/` for an AI agent to read (skill `mzed-notes`) and act on
 - **Export** — self-contained HTML / PDF
 - **CLI** — `mzed file.md` forwards to the single running instance; drag & drop and session restore included
 
@@ -45,31 +46,32 @@ To build from source, see [docs/development.md](docs/development.md).
 ## Usage
 
 ```sh
-mzed               # start in Zed-linked mode
+mzed               # start in Zed / Orca-linked mode
 mzed file.md       # open a file in a tab
 mzed ./docs        # open a directory as the root
 mzed --sync self   # choose the sync mode
 mzed serve ./docs  # serve a folder in the browser (127.0.0.1 only, live-reload)
 ```
 
-Three sync modes:
+Three sync modes. `sync_mode` decides how far to follow:
 
 | Mode | Behavior |
 | --- | --- |
-| `auto` | Follow the project focused in Zed (default) |
-| `self` | Pin to the current project |
-| `off` | No integration |
+| `auto` | Switch both the project and docs automatically (default) |
+| `self` | Switch the project only; docs are not opened automatically |
+| `off` | No integration (manual only) |
 
 ### Key bindings
 
 | Key | Action |
 | --- | --- |
 | `Cmd+Shift+P` | Command palette |
-| `Cmd+Shift+L` | Pin/unpin Zed tracking (auto⇄self) |
+| `Cmd+Shift+L` | Pin/unpin tracking (auto⇄self) |
 | `Cmd+P` | Fuzzy file finder |
 | `Cmd+F` | In-document search |
 | `Cmd+O` | Switch project |
 | `Cmd+Shift+D` | Toggle Task View |
+| `Cmd+Shift+M` | Add a note on the selected text |
 | `Cmd+\` | Split pane |
 | `Cmd+= / Cmd+-` / `Cmd+0` | Zoom in / out / reset |
 

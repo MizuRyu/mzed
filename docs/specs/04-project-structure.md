@@ -82,7 +82,7 @@ graph TD
 
 ## 設定ファイル
 
-パス: `~/.config/mzed/`
+パス: `~/.config/mzed/`（メモは同じ場所の `notes/` に 1 メモ 1 JSON → [10](10-settings-and-context-menu.md)）
 
 ```jsonc
 // config.json — ユーザー設定

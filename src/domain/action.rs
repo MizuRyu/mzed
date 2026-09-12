@@ -17,6 +17,8 @@ pub enum AppCommand {
     QuickOpen,
     FullTextSearch,
     CopyPath,
+    /// Leave a note on the selected text (Cmd+Shift+M).
+    AddNote,
     ToggleFav,
     ToggleSplit,
     FocusPane {

@@ -1,7 +1,7 @@
 ---
 name: mzed-setup
 description: >
-  mzed（Zed連動Markdownビューア）のインストール・設定変更・キーバインド変更・
+  mzed（プロジェクト連動（Zed / Orca）Markdownビューア）のインストール・設定変更・キーバインド変更・
   トラブルシュートを頼まれたときに使う。ビルド・デプロイ手順、config.json の
   全フィールド、キーバインドの形式、セッションリセット方法を網羅している。
 ---
@@ -43,6 +43,14 @@ export PATH="$HOME/.local/bin:$PATH"
 
 `just uninstall` で .app とシンボリックリンクの両方が削除される。
 
+### メモ読み取りスキルの配布
+
+メモ機能（Cmd+Shift+M）で書かれた注釈は、どのプロジェクトで作業していても `~/.config/mzed/notes/` に集まる。読み取り側のスキルをグローバル skills へコピーしておく:
+
+```bash
+cp -R .agents/skills/mzed-notes ~/.claude/skills/mzed-notes
+```
+
 ---
 
 ## CLI 引数仕様
@@ -56,7 +64,7 @@ mzed serve [DIR] [-p PORT] [--no-open]
 
 | 引数 | 説明 |
 |------|------|
-| `PATH`（複数可） | 開くファイルまたはディレクトリ。省略時は Zed 連動モードで起動 |
+| `PATH`（複数可） | 開くファイルまたはディレクトリ。省略時はプロジェクト連動（Zed / Orca）モードで起動 |
 | `--sync auto` | Zed の focused project を完全追従（デフォルト） |
 | `--sync self` | sidebar root は追従するがアクティブタブは奪わない |
 | `--sync off` | Zed / Orca を無視して独立動作 |
@@ -66,7 +74,7 @@ mzed serve [DIR] [-p PORT] [--no-open]
 | `serve [DIR]` | フォルダをブラウザで表示（127.0.0.1 固定・live-reload・画面共有向け）。既定ポート 6280、`--no-open` でブラウザ自動起動を抑止。フォアグラウンド実行で Ctrl+C 停止。GUI・IPC を通らない headless 経路 |
 
 **パス解決ルール**:
-- 引数なし → Zed 連動（Target::Zed）
+- 引数なし → プロジェクト連動（Zed / Orca）（Target::Zed）
 - ディレクトリ 1 つ → そのディレクトリをプロジェクトルートに（Target::Dir）
 - ファイル複数（ディレクトリ混在時はファイルのみ抽出）→ タブで開く（Target::Files）
 
@@ -91,7 +99,7 @@ mzed serve [DIR] [-p PORT] [--no-open]
 |-----------|-----|-----------|------|
 | `theme` | `"light"` \| `"dark"` \| `"system"` | `"system"` | 表示テーマ |
 | `sync_mode` | `"auto"` \| `"self"` \| `"off"` | `"auto"` | プロジェクト連動ポリシー |
-| `sync_source` | `"auto"` \| `"zed"` \| `"orca"` | `"auto"` | 追従元。`auto` は Zed と Orca の両方を購読し、最後に切り替えた方に追従（ソースによる優先は無い）。起動時の着地だけは Zed 優先。プロジェクト連動タブで選択 |
+| `sync_source` | `"auto"` \| `"zed"` \| `"orca"` | `"auto"` | 追従元。`auto` は Zed と Orca の両方を購読し、最後に切り替えた方に追従（ソースによる優先は無い）。起動時の着地だけは Zed 優先。プロジェクト連動タブで選択。Orca が無い環境では Zed のみに追従する（設定不要） |
 | `zoom` | float | `1.0` | Markdown 本文の表示倍率（0.5 〜 2.0、0.1 刻み） |
 | `startup` | `"restore"` \| `"docs"` \| `"blank"` | `"restore"` | 起動時の動作（前回セッション復元 / Zed の docs 表示 / 空） |
 | `favorites` | `["/path", ...]` | `[]` | Quick Access ブックマーク（ファイル・ディレクトリ） |
@@ -192,6 +200,7 @@ Orca の状態ファイル `~/Library/Application Support/orca/profiles/<profile
 | `task_view_refresh` | Cmd+R | Task View のタスク一覧を再スキャン（Task View 表示中のみ） |
 | `task_view_toggle_scope` | Ctrl+Tab | Task View の This Project ⇄ All Projects をトグル（閉じているときは従来どおり次のタブへ） |
 | `copy_path` | Cmd+Shift+C | ファイルパスをコピー |
+| `add_note` | Cmd+Shift+M | 選択した本文にメモを追加（`~/.config/mzed/notes/` に保存。スキル `mzed-notes` 参照） |
 | `close_tab` | Cmd+W | タブを閉じる |
 | `settings` | Cmd+, | 設定画面を開く |
 | `toggle_sync_pin` | Cmd+Shift+L | 連動モードを auto ⇄ self でトグル（トーストに追従元を表示） |
@@ -269,6 +278,12 @@ xattr -dr com.apple.quarantine /Applications/mzed.app
 3. `sync_source` が追従したいアプリ以外に固定されていないか確認（`"auto"` なら両方）
 3. `just watch`（`cargo run --bin zed_watch`）で Zed watch プロセスが動いているか確認
 4. 詳細は `src/zed.rs` と `src/watcher.rs` を参照
+
+### Orca の切替に追従しない
+
+1. `~/.config/mzed/config.json` の `sync_mode` が `"off"` になっていないか、`sync_source` が `"zed"` に固定されていないか確認
+2. `~/Library/Application Support/orca/profiles/*/orca-data.json` が存在するか確認（無ければ Orca 未インストール / 未起動）
+3. `~/Library/Logs/mzed/mzed.log` に `orca:` で始まる行があるか確認（状態が変わったときだけ記録される）
 
 ### 設定を書き換えたのに反映されない
 

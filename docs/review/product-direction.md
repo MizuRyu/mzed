@@ -16,7 +16,7 @@
 
 ## v1 の範囲
 
-- Zed のアクティブプロジェクト追従
+- Zed / Orca のアクティブプロジェクト追従
 - CLI、single instance、drag and drop
 - 複数プロジェクト、タブ、split pane
 - Markdown、frontmatter、alerts、Mermaid、KaTeX、syntax highlight
@@ -34,6 +34,7 @@ Markdown 編集機能は含めない。
 - UI component は filesystem、DB、watcher、外部プロセスを直接扱わない。
 - watcher と background thread は停止条件を持つ service が所有する。
 - JS 文字列と注入値は `js` モジュールに閉じ込め、値は JSON encode する。
+- 追従元（Zed / Orca）の選択は pure function にしてテストする。
 - 性能変更は [performance-guide.md](performance-guide.md) の指標で前後比較する。
 
 ## 配布方針

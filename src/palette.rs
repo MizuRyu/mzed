@@ -32,6 +32,10 @@ pub enum Action {
     ExportPdf,
     /// Copy the active file's absolute path to the clipboard.
     CopyFilePath,
+    /// Leave a note on the selected text.
+    AddNote,
+    /// Open the notes directory in Finder.
+    OpenNotesFolder,
     /// Start/stop the `mzed serve` share server for the current project.
     ToggleWebShare,
 }
@@ -76,6 +80,8 @@ pub fn commands(share_url: Option<&str>) -> Vec<Command> {
         Command::new("Search Files…", Action::FileSearch),
         Command::new("Search in Project…", Action::FullTextSearch),
         Command::new("Copy File Path", Action::CopyFilePath),
+        Command::new("Add Note", Action::AddNote),
+        Command::new("Open Notes Folder", Action::OpenNotesFolder),
         Command::new(share_label, Action::ToggleWebShare),
         Command::new("Export: HTML", Action::ExportHtml),
         Command::new("Export: PDF", Action::ExportPdf),
@@ -150,6 +156,16 @@ mod tests {
         };
         assert_eq!(label(&stopped), "Web Share: Start (Serve in Browser)");
         assert_eq!(label(&started), "Web Share: Stop (http://127.0.0.1:6280/)");
+    }
+
+    #[test]
+    fn メモ系コマンドがカタログに含まれる() {
+        let all = commands(None);
+        assert!(all.iter().any(|c| c.action == Action::AddNote));
+        assert!(all.iter().any(|c| c.action == Action::OpenNotesFolder));
+        assert!(filter_commands("note", None)
+            .iter()
+            .any(|c| c.action == Action::AddNote));
     }
 
     #[test]

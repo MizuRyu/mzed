@@ -1081,6 +1081,7 @@ fn action_label(action: &str) -> &'static str {
         "toggle_fav" => "お気に入り切替",
         "open_task_view" => "Task View",
         "copy_path" => "パスをコピー",
+        "add_note" => "メモを追加",
         "close_tab" => "タブを閉じる",
         "settings" => "設定",
         "toggle_sync_pin" => "Sync モード切替",

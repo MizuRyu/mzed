@@ -3,6 +3,7 @@ mod export;
 mod find;
 mod keyboard;
 mod mermaid;
+mod notes;
 mod render;
 
 pub(crate) use dom::{
@@ -12,6 +13,7 @@ pub(crate) use export::{export_capture_js, webview_action_error};
 pub(crate) use find::{find_highlight_js, find_step_js};
 pub(crate) use keyboard::{keydown_bridge_js, sidebar_resize_js};
 pub(crate) use mermaid::{helper_js as mermaid_helper_js, mermaid_window_js};
+pub(crate) use notes::{note_bridge_js, note_selection_js};
 pub(crate) use render::post_render_js;
 
 #[cfg(test)]
@@ -191,6 +193,61 @@ mod tests {
         assert!(js.contains("kind: 'sidebar_width'"));
         assert!(js.contains("document.addEventListener('mousemove', onMove)"));
         assert!(js.contains("document.removeEventListener('mouseup', onUp)"));
+    }
+
+    /// A selection outside a rendered pane (the Task View preview, the sidebar)
+    /// has no pane index, so it must not be quotable.
+    #[test]
+    fn note_bridge_only_captures_selections_inside_a_pane_body() {
+        let js = note_bridge_js();
+
+        assert!(js.contains(".markdown-body[data-mdo-pane]"));
+        assert!(js.contains("window.__mdoNoteBound"));
+        assert!(js.contains("DOCUMENT_POSITION_FOLLOWING"));
+    }
+
+    /// A selection dragged across the split belongs to no single file.
+    #[test]
+    fn note_bridge_rejects_a_selection_spanning_two_panes() {
+        let js = note_bridge_js();
+
+        assert!(js.contains("if (!body || body !== paneBody(range.endContainer)) return null;"));
+    }
+
+    /// A remembered selection must die with the nodes it quoted, so a re-render
+    /// (live reload, tab switch, theme switch) cannot attach it to new content.
+    #[test]
+    fn note_bridge_drops_a_remembered_selection_once_its_text_is_gone() {
+        let js = note_bridge_js();
+
+        assert!(js.contains("if (!cap || !document.contains(cap.node)) return null;"));
+    }
+
+    /// Right-click outside the quoted pane must fall through to the WebView's
+    /// own menu, so `preventDefault` may only run once both checks passed.
+    #[test]
+    fn note_bridge_leaves_the_native_menu_alone_outside_the_quoted_pane() {
+        let js = note_bridge_js();
+        let handler = js
+            .split_once("addEventListener('contextmenu'")
+            .expect("contextmenu handler")
+            .1;
+        let guard = handler
+            .find("if (!cap || paneBody(e.target) !== cap.body) return;")
+            .expect("contextmenu guard");
+
+        assert!(guard < handler.find("preventDefault").unwrap());
+        assert!(handler.contains("kind: 'note_menu'"));
+    }
+
+    /// The probe answers even with nothing selected: Rust waits on one message.
+    #[test]
+    fn note_selection_js_always_sends_a_payload() {
+        let js = note_selection_js();
+
+        assert!(js.contains("kind: 'note_selection'"));
+        assert!(js.contains("quote: cap ? cap.quote : ''"));
+        assert!(js.contains("window.__mdoNoteRemembered"));
     }
 
     #[test]

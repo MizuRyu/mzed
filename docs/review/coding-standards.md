@@ -16,7 +16,7 @@ Rust 一般の書き方、mzed 固有の設計方針、性能方針を混ぜな�
 | 文書 | 扱うこと | 扱わないこと |
 |---|---|---|
 | Rust coding guide | 所有権、借用、命名、エラー、テスト、モジュール、lint | mzed の機能仕様 |
-| mzed engineering guide | Markdown viewer としての責務、UI、Zed 連動、security | Rust 一般作法の細目 |
+| mzed engineering guide | Markdown viewer としての責務、UI、プロジェクト連動（Zed / Orca）、security | Rust 一般作法の細目 |
 | Performance guide | 軽量・高速を守るための設計、測定、禁止事項 | 機能要求の優先順位 |
 
 ## 共通原則

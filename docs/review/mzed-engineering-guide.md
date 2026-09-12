@@ -7,10 +7,10 @@ Rust 一般の作法は [rust-coding-guide.md](rust-coding-guide.md) に置く�
 
 ## プロダクト方針
 
-mzed は Zed 連動の軽量 Markdown viewer。
+mzed は Zed（エディタ）/ Orca（worktree 管理ツール）連動の軽量 Markdown viewer。
 中心価値は次の順に置く。
 
-1. Zed のプロジェクト切替に素早く追従する。
+1. Zed / Orca のプロジェクト切替に素早く追従する。
 2. Markdown を GitHub に近い見た目で正しく読める。
 3. UI が軽く、入力と切替を邪魔しない。
 4. CLI からすぐ開ける。
@@ -81,6 +81,7 @@ mzed は Zed 連動の軽量 Markdown viewer。
 
 - filesystem
 - Zed DB
+- Orca 状態ファイル
 - watcher
 - export
 - clipboard / Finder / trash
@@ -118,13 +119,15 @@ mzed は Zed 連動の軽量 Markdown viewer。
 - 設定画面は状態変更の入口であり、保存処理本体を持たない。
 - 右クリックメニューや Finder 操作は platform service へ委譲する。
 
-## Zed 連動
+## プロジェクト連動
 
 - Zed DB が無い状態は正常系。
 - DB schema 差分や lock はアプリ全体を落とさない。
 - multi-root workspace は最初から考慮する。
 - プロジェクト切替時は、キャッシュがあれば即表示し、裏で再スキャンする。
 - `auto` / `self` / `off` の挙動は pure function としてテストする。
+- Orca の状態ファイルが無い / 読めない / スキーマが違う状態は正常系。
+- Orca の状態ファイルは未文書化の内部形式で、全フィールドを optional に扱う。
 
 ## Markdown security
 

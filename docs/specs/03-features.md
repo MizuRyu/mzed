@@ -6,8 +6,8 @@
 
 | ID | 機能 | 説明 | 優先度 |
 |---|---|---|---|
-| C-01 | Zed プロジェクト連動 | Zed のプロジェクト切り替え検知 → docs 自動切替 | ★★★ |
-| C-02 | 連動モード | auto / self / off の切替。固定トグル Cmd+Shift+L（auto⇄self）あり | ★★★ |
+| C-01 | プロジェクト連動（Zed / Orca） | Zed のプロジェクト切替、Orca の worktree 切替を検知 → docs 自動切替 | ★★★ |
+| C-02 | 連動モード | auto / self / off の切替。固定トグル Cmd+Shift+L（auto⇄self）あり。追従元は `sync_source`（auto / zed / orca）で指定 | ★★★ |
 | C-03 | 瞬時プロジェクト切替 | インメモリキャッシュで Zed 級の速度 | ★★★ |
 | C-04 | シングルインスタンス | IPC で既存プロセスにルーティング | ★★★ |
 
@@ -65,6 +65,7 @@
 | U-06 | キーバインド閲覧・編集 → [10](10-settings-and-context-menu.md) | ★★☆ |
 | U-07 | お気に入り / クイックアクセス | ★★☆ |
 | U-08 | Raw Markdown 表示 | ★★☆ |
+| U-09 | メモ（本文を選択して Cmd+Shift+M → `~/.config/mzed/notes/` に 1 メモ 1 JSON。エージェントがスキル `mzed-notes` で読む。`mzed serve` は非対応） → [10](10-settings-and-context-menu.md) | ★★☆ |
 
 ### コマンドパレット操作
 
@@ -77,6 +78,7 @@
 | P-05 | MD → HTML エクスポート | ★★☆ |
 | P-06 | MD → PDF エクスポート | ★★☆ |
 | P-07 | Toggle Sync Pin（auto⇄self、Cmd+Shift+L） | ★★★ |
+| P-08 | Add Note / Open Notes Folder（メモ追加・保存先を Finder で開く） | ★★☆ |
 
 ### CLI
 
@@ -86,6 +88,7 @@
 | L-02 | `mzed <file>` — 単体ファイル | ★★★ |
 | L-03 | `mzed <dir>` — ディレクトリ内の md | ★★★ |
 | L-04 | `mzed --sync <mode>` — 連動モード指定 | ★★☆ |
+| L-07 | `mzed --sync-source <auto|zed|orca>` — 追従元指定 | ★★☆ |
 | L-05 | `mzed --version` | ★★★ |
 | L-06 | `mzed --help` | ★★★ |
 

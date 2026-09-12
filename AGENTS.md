@@ -1,13 +1,13 @@
 # AGENTS.md
 
-mzed — Zed 連動 Markdown ビューア（Rust + Dioxus 0.7、macOS desktop）。
+mzed — Zed（エディタ）/ Orca（worktree 管理ツール）連動 Markdown ビューア（Rust + Dioxus 0.7、macOS desktop）。
 
 ## 仕様とガイドライン
 
 - 現行仕様は `docs/specs/` が正。索引は `docs/README.md`
 - コーディング規約は `docs/review/coding-standards.md` を入口に読む
   - Rust 一般: `docs/review/rust-coding-guide.md`
-  - mzed 固有設計（レンダリング責務、Zed 連動、security）: `docs/review/mzed-engineering-guide.md`
+  - mzed 固有設計（レンダリング責務、プロジェクト連動（Zed / Orca）、security）: `docs/review/mzed-engineering-guide.md`
   - 性能方針: `docs/review/performance-guide.md`
 - 手動回帰テスト: `docs/specs/manual-test-cases.md`（TC-ID 付き）
 - インストール・設定・キーバインドの操作手順: `.agents/skills/mzed-setup/SKILL.md`
