@@ -4,7 +4,8 @@ use std::thread::JoinHandle;
 
 use tokio::sync::mpsc;
 
-use crate::{watcher, zed};
+use crate::sync::{SyncEvent, SyncOrigin};
+use crate::{orca, watcher, zed};
 
 pub(crate) struct WatchSubscription<T> {
     pub(crate) rx: mpsc::UnboundedReceiver<T>,
@@ -30,20 +31,49 @@ impl<T> Drop for WatchSubscription<T> {
     }
 }
 
-pub(crate) fn zed_projects() -> WatchSubscription<Option<zed::ActiveProject>> {
-    let (tx, rx) = mpsc::unbounded_channel::<Option<zed::ActiveProject>>();
-    let (stop_tx, stop_rx) = std_mpsc::channel::<()>();
-    let join_handle = std::thread::spawn(move || {
+/// Both project sources on one channel.
+///
+/// The watchers always report; which reports actually drive a switch is decided
+/// on the UI side (`sync::accepts`, `SyncMode::decide`), the same way the Zed
+/// watcher has always worked — policy can then change without restarting a
+/// thread. A missing Zed DB ends that thread; the Orca watcher instead waits
+/// for its state file to appear, since Orca may be installed or first launched
+/// after mzed started.
+pub(crate) fn project_sources() -> WatchSubscription<SyncEvent> {
+    let (tx, rx) = mpsc::unbounded_channel::<SyncEvent>();
+    let (zed_stop_tx, zed_stop_rx) = std_mpsc::channel::<()>();
+    let (orca_stop_tx, orca_stop_rx) = std_mpsc::channel::<()>();
+
+    let zed_tx = tx.clone();
+    let zed_handle = std::thread::spawn(move || {
+        // A watcher's first callback is the state it found, not a switch the
+        // user made; the UI side lands on those by a different rule.
+        let mut first = true;
         if let Some(db) = zed::default_zed_db_path() {
-            let _ = zed::watch_until(&db, &stop_rx, move |active| {
-                let _ = tx.send(active);
+            let _ = zed::watch_until(&db, &zed_stop_rx, move |project| {
+                let _ = zed_tx.send(SyncEvent {
+                    origin: SyncOrigin::Zed,
+                    project,
+                    initial: std::mem::take(&mut first),
+                });
             });
         }
     });
+    let orca_handle = std::thread::spawn(move || {
+        let mut first = true;
+        let _ = orca::watch_active_project(&orca_stop_rx, move |project| {
+            let _ = tx.send(SyncEvent {
+                origin: SyncOrigin::Orca,
+                project,
+                initial: std::mem::take(&mut first),
+            });
+        });
+    });
+
     WatchSubscription {
         rx,
-        stop_txs: vec![stop_tx],
-        join_handles: vec![join_handle],
+        stop_txs: vec![zed_stop_tx, orca_stop_tx],
+        join_handles: vec![zed_handle, orca_handle],
     }
 }
 

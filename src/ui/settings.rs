@@ -21,6 +21,8 @@ pub(crate) fn Settings(
     mut theme: Signal<theme::Theme>,
     mut sync_mode: Signal<theme::SyncMode>,
     mut persisted_sync_mode: Signal<theme::SyncMode>,
+    mut sync_source: Signal<sync::SyncSource>,
+    mut persisted_sync_source: Signal<sync::SyncSource>,
     mut zoom: Signal<f32>,
     mut win_w: Signal<i32>,
     mut win_h: Signal<i32>,
@@ -66,6 +68,7 @@ pub(crate) fn Settings(
     let cur_tab = tab();
     let cur_theme = theme();
     let cur_sync = sync_mode();
+    let cur_sync_source = sync_source();
     let zoom_pct = (zoom() * 100.0).round() as i32;
 
     // Left-nav item style: highlighted when it is the current category.
@@ -117,7 +120,7 @@ pub(crate) fn Settings(
                     div { style: nav_item(cur_tab == SettingsTab::General), onclick: move |_| tab.set(SettingsTab::General), "一般 (General)" }
                     div { style: nav_item(cur_tab == SettingsTab::Appearance), onclick: move |_| tab.set(SettingsTab::Appearance), "外観 (Appearance)" }
                     div { style: nav_item(cur_tab == SettingsTab::Features), onclick: move |_| tab.set(SettingsTab::Features), "機能 (Features)" }
-                    div { style: nav_item(cur_tab == SettingsTab::Sync), onclick: move |_| tab.set(SettingsTab::Sync), "Zed 連動 (Sync)" }
+                    div { style: nav_item(cur_tab == SettingsTab::Sync), onclick: move |_| tab.set(SettingsTab::Sync), "プロジェクト連動 (Sync)" }
                     div { style: nav_item(cur_tab == SettingsTab::Hotkeys), onclick: move |_| tab.set(SettingsTab::Hotkeys), "ショートカット (Hotkeys)" }
                 }
 
@@ -133,7 +136,7 @@ pub(crate) fn Settings(
                                 SettingsTab::General => "一般",
                                 SettingsTab::Appearance => "外観",
                                 SettingsTab::Features => "機能",
-                                SettingsTab::Sync => "Zed 連動",
+                                SettingsTab::Sync => "プロジェクト連動",
                                 SettingsTab::Hotkeys => "ショートカット",
                             }}
                         }
@@ -878,7 +881,7 @@ pub(crate) fn Settings(
                                     style: "{row}",
                                     div {
                                         div { style: row_title, "連動モード" }
-                                        div { style: "{row_desc}", "Zed のプロジェクト切替への追従" }
+                                        div { style: "{row_desc}", "プロジェクト切替への追従" }
                                     }
                                     select {
                                         class: "mdo-select",
@@ -900,10 +903,33 @@ pub(crate) fn Settings(
                                 div {
                                     style: "{row} border-top: 1px solid {row_border};",
                                     div {
+                                        div { style: row_title, "追従元" }
+                                        div { style: "{row_desc}", "どのアプリのプロジェクト切替に追従するか。自動は最後に切り替えた方に追従する" }
+                                    }
+                                    select {
+                                        class: "mdo-select",
+                                        style: "{select_style}",
+                                        onchange: move |e| {
+                                            let next = match e.value().as_str() {
+                                                "zed" => sync::SyncSource::Zed,
+                                                "orca" => sync::SyncSource::Orca,
+                                                _ => sync::SyncSource::Auto,
+                                            };
+                                            sync_source.set(next);
+                                            persisted_sync_source.set(next);
+                                        },
+                                        option { value: "auto", selected: cur_sync_source == sync::SyncSource::Auto, "自動 (Zed & Orca)" }
+                                        option { value: "zed", selected: cur_sync_source == sync::SyncSource::Zed, "Zed" }
+                                        option { value: "orca", selected: cur_sync_source == sync::SyncSource::Orca, "Orca" }
+                                    }
+                                }
+                                div {
+                                    style: "{row} border-top: 1px solid {row_border};",
+                                    div {
                                         div { style: row_title, "git worktree に追従しない" }
                                         div {
                                             style: "{row_desc}",
-                                            "Zed で worktree（.git がファイルのリポ）を開いても表示を切り替えない。docs を main 側で持つ運用向け"
+                                            "Zed で worktree（.git がファイルのリポ）を開いても表示を切り替えない。docs を main 側で持つ運用向け。Orca は worktree 管理アプリなので対象外"
                                         }
                                     }
                                     input {

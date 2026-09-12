@@ -7,3 +7,6 @@ docs/memo/
 /node_modules
 /README.html
 result
+
+# AI 作業用の一時領域（AGENTS.md の運用）
+z-ai/

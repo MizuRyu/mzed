@@ -5,6 +5,7 @@
 //! partial or older file still loads. FS read/write is split into thin helpers
 //! ([`load`]/[`save`]) that the unit tests skip.
 
+use crate::sync::SyncSource;
 use crate::theme::{SyncMode, Theme};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -97,6 +98,9 @@ pub struct Config {
     pub theme: Theme,
     #[serde(default)]
     pub sync_mode: SyncMode,
+    /// Which app's project switches mzed follows.
+    #[serde(default)]
+    pub sync_source: SyncSource,
     #[serde(default = "default_zoom")]
     pub zoom: f32,
     /// Quick Access bookmarks (files and project dirs), in display order.
@@ -269,6 +273,7 @@ impl Default for Config {
         Self {
             theme: Theme::default(),
             sync_mode: SyncMode::default(),
+            sync_source: SyncSource::default(),
             zoom: crate::theme::ZOOM_DEFAULT,
             favorites: Vec::new(),
             window_width: default_window_width(),
@@ -429,6 +434,7 @@ mod tests {
         assert_eq!(c.task_view_date_order, DateOrder::Desc);
         assert_eq!(c.task_view_status_order, default_task_view_status_order());
         assert!(c.project_aliases.is_empty());
+        assert_eq!(c.sync_source, SyncSource::Auto);
     }
 
     #[test]

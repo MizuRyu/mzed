@@ -1,39 +1,9 @@
 //! Zed workspace database access (read-only) for the mzed prototype.
 
+use crate::sync::{parse_roots, ActiveProject};
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OpenFlags};
 use std::path::{Path, PathBuf};
-
-/// The most-recently-active Zed project.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ActiveProject {
-    pub paths: String,
-    pub timestamp: String,
-}
-
-impl ActiveProject {
-    /// Split the raw `paths` string into individual workspace roots.
-    #[allow(dead_code)] // Used by the mzed bin, not the zed_watch bin.
-    ///
-    /// Zed stores a multi-root workspace's roots in one TEXT column, joined by
-    /// a newline (`util::path_list::PathList::serialize`). Single-root
-    /// workspaces are just one path. Empty/blank segments are dropped.
-    pub fn roots(&self) -> Vec<PathBuf> {
-        parse_roots(&self.paths)
-    }
-}
-
-/// Parse Zed's newline-joined `paths` column into root paths (blank-trimmed,
-/// empties dropped). Pure for testability.
-#[allow(dead_code)] // Used by the mzed bin, not the zed_watch bin.
-pub fn parse_roots(paths: &str) -> Vec<PathBuf> {
-    paths
-        .split('\n')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
-        .collect()
-}
 
 /// Query the project the user is currently focused on in Zed.
 ///
@@ -440,42 +410,6 @@ mod tests {
         #[test]
         fn 存在しないdbは空ベクタ() {
             assert!(recent_workspaces(Path::new("/no/such/db.sqlite")).is_empty());
-        }
-    }
-
-    #[allow(non_snake_case)]
-    mod roots {
-        use super::super::*;
-        use std::path::PathBuf;
-
-        #[test]
-        fn 単一ルートは1要素() {
-            assert_eq!(parse_roots("/a/b"), vec![PathBuf::from("/a/b")]);
-        }
-
-        #[test]
-        fn 改行区切りの複数ルートを分解する() {
-            assert_eq!(
-                parse_roots("/a\n/b/c\n/d"),
-                vec![
-                    PathBuf::from("/a"),
-                    PathBuf::from("/b/c"),
-                    PathBuf::from("/d"),
-                ]
-            );
-        }
-
-        #[test]
-        fn 空白や空セグメントは無視される() {
-            assert_eq!(
-                parse_roots("  /a  \n\n /b "),
-                vec![PathBuf::from("/a"), PathBuf::from("/b")]
-            );
-        }
-
-        #[test]
-        fn 空文字列は空ベクタ() {
-            assert!(parse_roots("").is_empty());
         }
     }
 }

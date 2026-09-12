@@ -110,6 +110,7 @@ const SHELL: &str = r#"<!DOCTYPE html>
 <script>
 (() => {
   'use strict';
+__MDO_MERMAID_HELPER__
   const treeEl = document.getElementById('tree');
   const contentEl = document.getElementById('content');
   const tocEl = document.getElementById('toc');
@@ -241,13 +242,7 @@ const SHELL: &str = r#"<!DOCTYPE html>
       }
     });
     if (window.mermaid) {
-      mermaid.initialize({
-        startOnLoad: false, securityLevel: 'strict', htmlLabels: false,
-        flowchart: { htmlLabels: false, useMaxWidth: true },
-        theme: dark ? 'dark' : 'default',
-      });
-      const pres = [...body.querySelectorAll('pre.mermaid')];
-      if (pres.length) { try { await mermaid.run({ nodes: pres }); } catch (_) {} }
+      await MDO_MERMAID.run([...body.querySelectorAll('pre.mermaid')], dark);
     }
     if (window.renderMathInElement) {
       try {
@@ -314,7 +309,9 @@ pub(super) fn page(root: &Path) -> String {
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| root.display().to_string());
-    SHELL.replace("__MDO_TITLE__", &html_escape(&title))
+    SHELL
+        .replace("__MDO_TITLE__", &html_escape(&title))
+        .replace("__MDO_MERMAID_HELPER__", &crate::js::mermaid_helper_js())
 }
 
 fn html_escape(s: &str) -> String {
@@ -352,7 +349,17 @@ mod tests {
 
     #[test]
     fn shellはmermaidをstrictで初期化する() {
-        assert!(SHELL.contains("securityLevel: 'strict'"));
-        assert!(!SHELL.contains("securityLevel: 'loose'"));
+        let html = page(Path::new("/tmp/docs"));
+        assert!(html.contains(r#""securityLevel":"strict""#));
+        assert!(!html.contains("loose"));
+    }
+
+    /// mermaid 設定はデスクトップと同じ 1 関数から供給される。
+    #[test]
+    fn shellのmermaid設定は共通関数から供給される() {
+        let html = page(Path::new("/tmp/docs"));
+        assert!(html.contains(&crate::js::mermaid_helper_js()));
+        assert!(html.contains("MDO_MERMAID.run("));
+        assert!(!html.contains("__MDO_MERMAID_HELPER__"));
     }
 }

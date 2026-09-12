@@ -2,12 +2,16 @@
 /// KaTeX laid out, code highlighted) with the interactive chrome (copy buttons,
 /// mermaid toolbars, per-theme inline styles) stripped, for a clean export.
 const EXPORT_CAPTURE_JS_TEMPLATE: &str = r#"
+__MDO_MERMAID_HELPER__
 (async () => {
   const src = document.querySelector('.markdown-body[data-mdo-pane="__MDO_PANE__"]') || document.querySelector('.markdown-body');
   if (!src) { dioxus.send(''); return; }
   const clone = src.cloneNode(true);
   clone.querySelectorAll('.mdo-copy-btn, .mdo-mermaid-bar').forEach((el) => el.remove());
   clone.querySelectorAll('.mdo-mermaid').forEach((el) => { el.removeAttribute('style'); el.removeAttribute('title'); el.style.cursor = 'default'; });
+  // Drop the inline zoom/pan transform: the export page has no viewport to pan
+  // in, so a diagram left zoomed would be clipped by the card's overflow.
+  clone.querySelectorAll('.mdo-mermaid pre.mermaid').forEach((el) => el.removeAttribute('style'));
 
   // Re-render Mermaid in the LIGHT theme for the white export page (the live
   // view may be dark, which is unreadable on white). We render off-DOM-ish:
@@ -22,27 +26,25 @@ const EXPORT_CAPTURE_JS_TEMPLATE: &str = r#"
       if (pre.dataset.mdoSrc) pre.textContent = pre.dataset.mdoSrc;
       pre.removeAttribute('data-processed');
     });
-    try {
-      // htmlLabels:false keeps SVG text labels (zoom-independent) so they don't
-      // clip under the app's page zoom; theme 'default' gives the light palette.
-      mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'default', htmlLabels: false, flowchart: { htmlLabels: false } });
-      await mermaid.run({ nodes: pres });
-    } catch (e) { console.error('mzed export mermaid', e); }
+    await MDO_MERMAID.run(pres, false);
     document.body.removeChild(host); // detach but keep `clone` reference
   }
 
   // Restore the live view's Mermaid theme (we changed the global config above).
   if (window.mermaid) {
-    mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', htmlLabels: false, flowchart: { htmlLabels: false } });
+    mermaid.initialize(MDO_MERMAID.config(__MDO_LIVE_DARK__, false));
   }
 
   dioxus.send(clone.innerHTML);
 })();
 "#;
 
-pub(crate) fn export_capture_js(pane: u8) -> String {
+pub(crate) fn export_capture_js(pane: u8, dark: bool) -> String {
     let pane = if pane == 1 { "1" } else { "0" };
-    EXPORT_CAPTURE_JS_TEMPLATE.replace("__MDO_PANE__", pane)
+    EXPORT_CAPTURE_JS_TEMPLATE
+        .replace("__MDO_MERMAID_HELPER__", &super::mermaid::helper_js())
+        .replace("__MDO_LIVE_DARK__", if dark { "true" } else { "false" })
+        .replace("__MDO_PANE__", pane)
 }
 
 pub(crate) fn webview_action_error(value: &serde_json::Value, context: &str) -> Option<String> {

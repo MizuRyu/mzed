@@ -1,4 +1,7 @@
+use std::time::Instant;
+
 use super::*;
+
 /// Top-left project switcher dropdown (Zed-style). Lists known + recent
 /// projects (passed in as `candidates`), filterable via a search box, marks the
 /// current project with a check, and offers an "Open Folder…" escape hatch.
@@ -24,7 +27,10 @@ pub(crate) fn ProjectMenu(
     let muted = if dark { "#8b949e" } else { "#57606a" };
     let hover_bg = if dark { "#1f6feb22" } else { "#0969da14" };
 
+    // Hover and the keyboard drive the same `sel`; these two keep them apart.
     let mut sel = use_signal(|| 0usize);
+    let mut sel_src = use_signal(|| SelChange::Keyboard);
+    let mut last_key_at = use_signal(|| None::<Instant>);
 
     let q = query();
     let needle = q.trim().to_lowercase();
@@ -52,9 +58,14 @@ pub(crate) fn ProjectMenu(
     let cur = sel().min(total - 1);
     let sel_bg = if dark { "#1f6feb" } else { "#0969da" };
 
-    // Keep the highlighted row scrolled into view as the selection moves.
+    // Keep the highlighted row scrolled into view as the selection moves — but
+    // not when the mouse moved it, since scrolling under the cursor would hand
+    // the selection straight to another row.
     use_effect(move || {
         let i = sel();
+        if sel_src() == SelChange::Hover {
+            return;
+        }
         spawn(async move {
             let script = js::overlay_row_scroll_js(js::OverlayRowKind::Project, i);
             let _ = document::eval(&script).recv::<()>().await;
@@ -94,7 +105,9 @@ pub(crate) fn ProjectMenu(
                 placeholder: "Search projects…",
                 style: "width: 100%; box-sizing: border-box; padding: 10px 12px; font: 13px -apple-system, sans-serif; border: none; border-bottom: 1px solid {border}; background: transparent; color: {text_color}; outline: none;",
                 oninput: move |e| {
+                    last_key_at.set(Some(Instant::now()));
                     query.set(e.value());
+                    sel_src.set(SelChange::Keyboard);
                     sel.set(0);
                 },
                 // Escape is intentionally NOT handled here: the window-level
@@ -102,20 +115,25 @@ pub(crate) fn ProjectMenu(
                 // (Dioxus stop_propagation cannot stop it), so handling it in
                 // both places closed two overlay layers per keypress. The
                 // global Escape chain in app.rs closes this menu first.
-                onkeydown: move |e| match e.key() {
-                    Key::ArrowDown => {
-                        e.prevent_default();
-                        sel.set((cur + 1) % total);
+                onkeydown: move |e| {
+                    last_key_at.set(Some(Instant::now()));
+                    match e.key() {
+                        Key::ArrowDown => {
+                            e.prevent_default();
+                            sel_src.set(SelChange::Keyboard);
+                            sel.set((cur + 1) % total);
+                        }
+                        Key::ArrowUp => {
+                            e.prevent_default();
+                            sel_src.set(SelChange::Keyboard);
+                            sel.set((cur + total - 1) % total);
+                        }
+                        Key::Enter => {
+                            e.prevent_default();
+                            commit();
+                        }
+                        _ => {}
                     }
-                    Key::ArrowUp => {
-                        e.prevent_default();
-                        sel.set((cur + total - 1) % total);
-                    }
-                    Key::Enter => {
-                        e.prevent_default();
-                        commit();
-                    }
-                    _ => {}
                 },
             }
             div {
@@ -148,6 +166,12 @@ pub(crate) fn ProjectMenu(
                                 "data-mdo-prow": "{i}",
                                 style: "display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 6px; cursor: pointer; font: 13px -apple-system, sans-serif; background: {row_bg}; color: {row_fg};",
                                 class: "mdo-proj-row",
+                                onmouseenter: move |_| {
+                                    if hover_takes_selection(i, cur, (*last_key_at.peek()).map(|t| t.elapsed())) {
+                                        sel_src.set(SelChange::Hover);
+                                        sel.set(i);
+                                    }
+                                },
                                 onclick: move |_| on_pick.call(pick.clone()),
                                 span {
                                     style: "flex: 0 0 14px; width: 14px; text-align: center; color: #2da44e;",
@@ -204,6 +228,12 @@ pub(crate) fn ProjectMenu(
                         div {
                             "data-mdo-prow": "{open_folder_idx}",
                             style: "padding: 8px 10px; border-radius: 6px; cursor: pointer; font: 13px -apple-system, sans-serif; color: {row_fg}; background: {row_bg};",
+                            onmouseenter: move |_| {
+                                if hover_takes_selection(open_folder_idx, cur, (*last_key_at.peek()).map(|t| t.elapsed())) {
+                                    sel_src.set(SelChange::Hover);
+                                    sel.set(open_folder_idx);
+                                }
+                            },
                             onclick: move |_| on_open_folder.call(()),
                             "Open Folder…"
                         }

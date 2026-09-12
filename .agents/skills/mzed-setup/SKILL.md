@@ -50,7 +50,7 @@ export PATH="$HOME/.local/bin:$PATH"
 `src/cli.rs` が `clap` で定義。
 
 ```
-mzed [PATH...] [--sync <auto|self|off>]
+mzed [PATH...] [--sync <auto|self|off>] [--sync-source <auto|zed|orca>]
 mzed serve [DIR] [-p PORT] [--no-open]
 ```
 
@@ -59,7 +59,10 @@ mzed serve [DIR] [-p PORT] [--no-open]
 | `PATH`（複数可） | 開くファイルまたはディレクトリ。省略時は Zed 連動モードで起動 |
 | `--sync auto` | Zed の focused project を完全追従（デフォルト） |
 | `--sync self` | sidebar root は追従するがアクティブタブは奪わない |
-| `--sync off` | Zed を無視して独立動作 |
+| `--sync off` | Zed / Orca を無視して独立動作 |
+| `--sync-source auto` | Zed と Orca の両方に追従（デフォルト。最後に切り替えた方に追う） |
+| `--sync-source zed` | Zed のプロジェクト切替だけに追従 |
+| `--sync-source orca` | Orca の worktree 切替だけに追従 |
 | `serve [DIR]` | フォルダをブラウザで表示（127.0.0.1 固定・live-reload・画面共有向け）。既定ポート 6280、`--no-open` でブラウザ自動起動を抑止。フォアグラウンド実行で Ctrl+C 停止。GUI・IPC を通らない headless 経路 |
 
 **パス解決ルール**:
@@ -87,7 +90,8 @@ mzed serve [DIR] [-p PORT] [--no-open]
 | フィールド | 型 | デフォルト | 意味 |
 |-----------|-----|-----------|------|
 | `theme` | `"light"` \| `"dark"` \| `"system"` | `"system"` | 表示テーマ |
-| `sync_mode` | `"auto"` \| `"self"` \| `"off"` | `"auto"` | Zed 連動ポリシー |
+| `sync_mode` | `"auto"` \| `"self"` \| `"off"` | `"auto"` | プロジェクト連動ポリシー |
+| `sync_source` | `"auto"` \| `"zed"` \| `"orca"` | `"auto"` | 追従元。`auto` は Zed と Orca の両方を購読し、最後に切り替えた方に追従（ソースによる優先は無い）。起動時の着地だけは Zed 優先。プロジェクト連動タブで選択 |
 | `zoom` | float | `1.0` | Markdown 本文の表示倍率（0.5 〜 2.0、0.1 刻み） |
 | `startup` | `"restore"` \| `"docs"` \| `"blank"` | `"restore"` | 起動時の動作（前回セッション復元 / Zed の docs 表示 / 空） |
 | `favorites` | `["/path", ...]` | `[]` | Quick Access ブックマーク（ファイル・ディレクトリ） |
@@ -118,16 +122,36 @@ mzed serve [DIR] [-p PORT] [--no-open]
 | `task_view_date_order` | `"desc"` \| `"asc"` | `"desc"` | グループ内タスクの `created` 並び順（新しい順／古い順） |
 | `project_aliases` | `[{"path": "/path", "alias": "名前"}]` | `[]` | プロジェクトの別名。Cmd+O の検索でパスに加えて別名でもヒットし、別名付きフォルダは Zed 履歴に無くても候補に出る。設定 General から追加/削除 |
 | `project_menu_hidden` | `["/path", ...]` | `[]` | Cmd+O の候補から隠すパス。候補行ホバーの ✕ で追加、設定 General「非表示のプロジェクト」で復元 |
-| `sync_skip_worktrees` | bool | `true` | Zed が git worktree（`.git` がファイル）を開いても追従しない。Zed 連動タブでトグル |
+| `sync_skip_worktrees` | bool | `true` | Zed が git worktree（`.git` がファイル）を開いても追従しない。プロジェクト連動タブでトグル。**Orca 由来の切替には効かない**（Orca は worktree 管理アプリのため） |
 | `serve_port` | int | `6280` | アプリ内 Web 共有（コマンドパレット「Web Share: Start / Stop」）のポート。CLI `mzed serve` は `--port` を使う。設定 UI は無く config.json 直編集。リクエストログは `~/Library/Logs/mzed/serve.log` |
 
 ### sync_mode の詳細（`src/theme.rs`）
 
-| 値 | Zed project switch 時の挙動 |
+| 値 | project switch 時の挙動 |
 |----|---------------------------|
 | `"auto"` | sidebar root を切り替え + 代表 Markdown をタブで開く |
-| `"self"` | sidebar root だけ更新、アクティブタブは変えない |
-| `"off"` | Zed を完全に無視 |
+| `"self"` | sidebar root とツリーだけ更新。開いているタブ・アクティブタブ・分割はそのまま |
+| `"off"` | 連動を完全に無視 |
+
+`sync_mode` は「どこまで追うか」、`sync_source` は「誰を追うか」。両方が掛かる。
+
+### Orca 連動（`src/orca.rs`）
+
+Orca の状態ファイル `~/Library/Application Support/orca/profiles/<profile>/orca-data.json` を読み、アクティブ worktree のパスに追従する。**Orca の未文書化内部ファイル**なので、不在・パース失敗はすべて無視して Zed 連動だけが動く。詳細は `docs/specs/05-zed-integration.md` の「Orca 連動」。
+
+状態ファイルが無ければ 1500ms ごとに出現を待つので、mzed 起動後に Orca を入れても再起動は要らない。
+
+環境変数 `MZED_ORCA_DATA` で読み取り先を差し替えられる（手動検証用）。Orca の実ファイルは**絶対に編集しない** — 検証はコピーに対して行う。
+
+追従しないときは `~/Library/Logs/mzed/mzed.log` の `orca:` 行を見る（状態が変わったときだけ記録される）。
+
+| 行 | 意味 |
+|---|---|
+| `no state file found; waiting for one to appear` | プロファイルが見つからない（Orca 未インストール / 未起動） |
+| `cannot watch <dir>: <err>` | 監視の開始に失敗（親ディレクトリ不在など） |
+| `cannot read <path>` / `is not valid JSON` | 一時的な読み取り・パース失敗。前回のプロジェクトを維持して次のポーリングで再試行 |
+| `no active worktree in <path>` | パースできたが期待キーが無い。Orca 側の形式変更を疑う |
+| `reading <path>` | 正常に読めている（復帰時にも出る） |
 
 ---
 
@@ -170,7 +194,7 @@ mzed serve [DIR] [-p PORT] [--no-open]
 | `copy_path` | Cmd+Shift+C | ファイルパスをコピー |
 | `close_tab` | Cmd+W | タブを閉じる |
 | `settings` | Cmd+, | 設定画面を開く |
-| `toggle_sync_pin` | Cmd+Shift+L | Zed 連動モードを auto ⇄ self でトグル |
+| `toggle_sync_pin` | Cmd+Shift+L | 連動モードを auto ⇄ self でトグル（トーストに追従元を表示） |
 
 ### 固定ショートカット（変更不可）
 
@@ -242,6 +266,7 @@ xattr -dr com.apple.quarantine /Applications/mzed.app
 
 1. `config.json` の `sync_mode` が `"off"` または `"self"` になっていないか確認
 2. CLI 起動時に `--sync off` を渡していないか確認
+3. `sync_source` が追従したいアプリ以外に固定されていないか確認（`"auto"` なら両方）
 3. `just watch`（`cargo run --bin zed_watch`）で Zed watch プロセスが動いているか確認
 4. 詳細は `src/zed.rs` と `src/watcher.rs` を参照
 

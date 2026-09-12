@@ -154,6 +154,27 @@ ToC は pulldown-cmark event から見出しを拾って構築する。WebView �
 
 `<pre class="mermaid">` を走査し、mermaid.js で SVG に変換して差し替える。描画後、SVG を画像コピーできるようにツールバーを付ける（arto 由来、R-14）。
 
+**設定の供給元:** `mermaid.initialize` に渡す設定は `src/js/mermaid.rs` の `init_config_json(dark)` が唯一の出所で、インライン表示・ポップアウト窓・HTML エクスポート・`mzed serve` の 4 経路すべてが同じ `MDO_MERMAID` ヘルパ経由でこれを使う。`securityLevel: 'strict'` と `htmlLabels: false` はこの 1 箇所で決まる。
+
+**mindmap の扱い:** mindmap だけは他の図と別の `initialize` + `run` パスで描画する。理由は 2 つ。
+
+- 配色: mzed は mindmap のセクション色を `cScale0..11` / `cScaleLabel0..11`（+ root 用の `git0` / `gitBranchLabel0`）で固定する。これらの theme variable は pie / gitGraph とも共有されるため、mindmap だけを別パスで描くことで他の図種に影響させない。色は light / dark とも文字・背景のコントラスト比 4.5:1 以上を満たす。
+- ソース側の色指定: ソースが色を差し込める口は 2 つある。`%%{init: ...}%%` ディレクティブ（`mermaid.initialize` より後に適用されるため放置すると mzed のプリセットに勝つ）と、YAML frontmatter の `config.themeVariables`。mindmap のソースからは描画前に **両方とも** 取り除く。frontmatter は該当キーだけでなくブロックごと落とす（WebView に YAML パーサを持ち込まずに済み、mindmap のレンダラは frontmatter から何も描画しないため）。mindmap 以外の図はどちらもそのまま尊重する。
+
+図種の判定は mermaid 同梱の `detectType` と同じ前処理（frontmatter・`%%{...}%%` ディレクティブ・`%%` コメントを除去してから図種キーワードを見る）で行う。使う正規表現は `src/js/mermaid.rs` に定数として置き、同梱 mermaid のソースと一致することをテストで固定する（mermaid を上げて前処理が変わったらテストが落ちる）。
+
+`mermaid.initialize` はグローバル設定を書き換えるため、`initialize` → `run` の 1 組は次の 1 組が始まる前に終わる必要がある。`serve` の連続ロードなどで描画要求が重なっても混ざらないよう、描画全体を `window.__mdoMermaidQueue` の 1 本の Promise チェーンで直列化する。
+
+**mindmap ラベルの中央寄せ:** `htmlLabels: false` では、mermaid 11 は図形側が要求したときだけノードラベルを水平中央に寄せる。mindmap が流用する汎用シェイプ（circle / rect / rounded / hexagon）はこれを要求しないため、ラベル group が `translate(0, -h/2)` のまま残り、テキストがノードの右にはみ出す（`root((…))` で最も目立つ）。この transform を選択する `themeCSS` で `text-anchor: middle` を当てて補正する。自前で中央寄せするシェイプ（bang / cloud / 装飾なしノード）は `-w/2` を書くため、この選択子には当たらない。
+
+**インライン図のズーム / パン:** インラインカード（`.mdo-mermaid`）は ⌘+ホイール（トラックパッドのピンチを含む）でカーソル基準ズーム、ドラッグでパン、ダブルクリックで等倍に戻る。修飾キーなしのホイールはページスクロールのまま通す。ズーム状態は図ごとに持ち、再描画（テーマ切替・ライブリロード）で等倍に戻る。ズーム / パンの実装 `mdoZoomPan` はポップアウト窓と共有する（ポップアウトは修飾キーなしでズームし、ダブルクリックは全体表示）。
+
+カーソル基準ズームの座標は、変形対象（`pre.mermaid`）の未変形原点から測る。カードの padding + border の分だけ内側にあるため、カード原点から測るとアンカーがずれる。
+
+ポップアウトを起こすクリックの扱いは 2 つ。ドラッグ後の mouseup はクリックと区別してポップアウトしない（移動量 4px しきい値）。ダブルクリックは先に click が 2 回飛ぶため、単クリックの送信を 250ms 遅らせ、その間に dblclick が来たら取り消す。
+
+**エクスポート:** 複製した DOM からはカードの inline style に加えて `pre.mermaid` の transform も落とす。エクスポート先にはパンするビューポートが無いので、拡大したままだとカードの `overflow: hidden` で欠ける。
+
 ### KaTeX
 
 `renderMathInElement` に渡す delimiter は以下の3種のみ。単一 `$` は通貨・区切り文字との衝突を避けるため **無効**。
@@ -192,11 +213,36 @@ flowchart LR
 
 スクロール位置と開いているタブは保持する。再描画は変更ファイルのみ。
 
+### サイドバー更新の発火条件
+
+サイドバーは**ツリーの形が変わったときだけ**再スキャンする。`watcher::tree_affected` がイベント種別とパスの両方で判定する。
+
+- 種別: `Create` / `Remove` / `Modify(Name)` のみ。`Modify(Data)` / `Modify(Metadata)`（＝ふつうの保存）は対象外
+- パス: root 配下で、祖先に無視ディレクトリ（`.` 始まり、`node_modules`、`target`、`dist`、`build`）を含まないもの。そのうえで
+  - 実在するディレクトリ → 自身の名前も無視判定にかける（`.cache.md/` が md ファイルに見えるのを防ぐ）
+  - 実在するファイル → md（`.md` / `.markdown`）のみ
+  - **すでに消えているパス → 拡張子で判断せず、常に構造変化として扱う**
+
+3 番目が重要。削除やリネーム元は `stat` できず、FSEvents はリネームに file/folder ヒントを付けない（`RenameMode::Any`）。拡張子で判断すると `docs.v1/` を `target/docs.v1/` へ移動したとき、旧側は「拡張子あり＝ファイル」で捨てられ、新側は無視領域で捨てられ、**サイドバーが黙って古いまま**になる。非 md ファイルの削除で 1 回余分に再スキャンが走るほうが安い。
+
+保存のたびに再スキャンすると `trees` シグナルが一度空になってから埋め直され、サイドバーがちらつく。ツリーが持つのは名前だけなので、内容変更で作り直す理由がない。
+
+監視は root ごとに **1 つの再帰 watcher**（`RecursiveMode::Recursive`）。起動後に作られたサブフォルダも watcher を足さずに拾える。無視ディレクトリは「監視しない」のではなく判定側で捨てる。
+
+debouncer の file-id キャッシュは使わない（`NoCache`）。再帰 root の追加時にツリー全体を `stat` するため、`target/` が育った Rust プロジェクトで約 10 秒かかる。キャッシュの用途はリネームの From/To を突き合わせることだけで、この watcher はどちらか片方が届けば十分。
+
+再スキャン中もサイドバーは**旧ツリーを表示したまま**にする。`trees` シグナルを空にするのは roots 自体が変わったとき（プロジェクト切替）だけで、`build_tree_overlay` の完了時に世代カウンタ（`app_state::generation`）で古い結果を弾いてから差し替える。空にしてから埋め直すと、フォーカス復帰やパレット開閉のたびにサイドバーが 1 フレーム消える。
+
+制約:
+
+- FSEvents は同一パスに数秒以内で起きた操作のフラグをまとめることがある。作った直後に消したフォルダの削除が `Remove` として届かない場合があるが、間隔が空けば届く。
+- `NoCache` にしても debouncer は `Modify(Name(Any))` ごとに `Path::exists()` を呼ぶ。`target/` 配下で大量にリネームが起きると、アプリ側の無視判定より先にこの syscall が走る。実害は未計測。
+
 ### パス綴りの正規化（必須）
 
 FSEvents は**完全に解決されたパス**（symlink 展開、`/tmp` → `/private/tmp` などの firmlink 展開、ディスク上の大小文字）で通知する。一方アプリが持つのは CLI 引数・Zed の DB・symlink 経由のサイドバーが与えた綴りで、両者は一致しないことがある。
 
-そのため監視側の一致判定（`watcher::active_file_affected` / `tree_affected`）は、**両辺を canonicalize してから大小文字を無視して比較する**。ファイル自体が消えている場合（削除・リネーム）は親ディレクトリを canonicalize してファイル名を付け直す。
+そのため監視側の一致判定（`watcher::active_file_affected` / `tree_affected`）は、**両辺を canonicalize してから大小文字を無視して比較する**。ファイル自体が消えている場合（削除・リネーム）は親ディレクトリを canonicalize してファイル名を付け直す。`tree_affected` は通知されたパスをまず素のまま root と突き合わせ、外れたときだけ canonicalize する（ビルド中の `target/` のような大量イベントで syscall を使わないため）。
 
 これを verbatim 比較にすると、症状は「そのファイルだけライブリロードもサイドバー更新も**黙って効かない**」になる（エラーも出ない）。symlink を張った docs ディレクトリ、`/tmp` 配下、ホームディレクトリの綴り違いで実際に踏む。
 

@@ -1,6 +1,7 @@
-# 05 - Zed 連動
+# 05 - プロジェクト連動（Zed / Orca）
 
-mzed の中核。Zed のプロジェクト切り替えを検知し、対応する docs を切り替える。
+mzed の中核。**Zed** と **Orca** のプロジェクト切り替えを検知し、対応する docs を切り替える。
+どちらに追従するかは `sync_source`（→ 末尾「Orca 連動」）で決める。既定は `auto`（両方を見て、最後に切り替えた方に追従）。
 
 ## Zed の状態保存先
 
@@ -105,6 +106,8 @@ conn.pragma_update(None, "query_only", true)?;
 
 `paths` に複数ルートが入る場合、全ルートの docs を集約してサイドバーに出す。`paths_order` で表示順を決める。
 
+「同じプロジェクトへの再選択」の判定は **roots 全体の一致**で行う（primary root だけでは足りない）。Zed のマルチルートワークスペースからフォルダが 1 つ外れた場合や、同じリポジトリを Zed が `[A, B]`、Orca が `[A]` として報告する場合、primary は同じでもサイドバーは変わる必要がある。primary が同じで roots だけが違うときは **roots とツリーだけ更新し、タブとユーザーのツリー展開状態は維持する**（プロジェクト切替ではないため）。
+
 v1 は単一ルートを主対象とし、マルチルートは「全ルートをフラットに集約」で対応する。ルートごとのグルーピング表示は将来検討（FT）。
 
 ## 連動モード別の挙動
@@ -112,14 +115,14 @@ v1 は単一ルートを主対象とし、マルチルートは「全ルート�
 | モード | Zed 切替検知時の動作 |
 |---|---|
 | `auto` | プロジェクトを切り替え、docs 配下の md を自動で開く |
-| `self` | プロジェクトコンテキストだけ切り替える。md は自動で開かない（サイドバーは更新、ビューアは現状維持） |
+| `self` | プロジェクトコンテキストだけ切り替える。md は自動で開かない（サイドバーは更新、**開いているタブと分割はそのまま**） |
 | `off` | Zed 監視を止める。手動操作のみ |
 
-モード切替はコマンドパレット（P-02）、`--sync` フラグ（L-04）、または固定トグル（P-07: Cmd+Shift+L、auto⇄self を即切替）から。
+モード切替はコマンドパレット（P-02）、`--sync` フラグ（L-04）、または固定トグル（P-07: Cmd+Shift+L、auto⇄self を即切替）から。Cmd+Shift+L のトーストは追従元を反映する（`Sync: Auto (following Zed & Orca)` / `(following Orca)`）。
 
 ### git worktree への追従スキップ（`sync_skip_worktrees`、既定 ON）
 
-Zed が開いたプロジェクトルートの `.git` が**ファイル**（linked worktree / submodule checkout の目印。通常の checkout はディレクトリ）の場合、切替を無視して現在の表示を維持する。docs を main の checkout 側で持つ運用では、worktree に追従しても見せるものがないため。設定（Zed 連動タブ）で OFF にすれば従来どおり追従する。CLI / D&D / Cmd+O など明示操作で worktree を開くのは制限しない（Zed 連動経路のみのガード）。
+Zed が開いたプロジェクトルートの `.git` が**ファイル**（linked worktree / submodule checkout の目印。通常の checkout はディレクトリ）の場合、切替を無視して現在の表示を維持する。docs を main の checkout 側で持つ運用では、worktree に追従しても見せるものがないため。設定（プロジェクト連動タブ）で OFF にすれば従来どおり追従する。**Orca 由来の切替は対象外**（→「Orca 連動」）。CLI / D&D / Cmd+O など明示操作で worktree を開くのは制限しない（Zed 連動経路のみのガード）。
 
 ### worktree オーバーレイ（常時 ON）
 
@@ -165,6 +168,102 @@ Cmd+N で開いた **2枚目以降のウィンドウ**はベースウィンド�
 | 同一プロジェクト再フォーカス | root/tabs はそのまま維持し再ロードをスキップ（リアクティブ更新なし）|
 | paths が存在しないパス | スキップして次点を採用 |
 | 切替先に md が無い | サイドバーは空表示、ビューアはプレースホルダ |
+
+## Orca 連動
+
+Orca（worktree / ターミナル管理アプリ）のアクティブ worktree にも同じ仕組みで追従する。
+
+### 状態保存先
+
+```
+~/Library/Application Support/orca/profiles/<profile>/orca-data.json
+```
+
+> **未文書化依存**。Orca の公開 API ではなく内部ファイルであり、2026-09-09 に実機で確認した形を読んでいる。Orca 側の変更で壊れうるので、全フィールドを optional として扱い、パース失敗・キー欠落・ファイル不在はすべて「変化なし」に倒す（エラーをユーザーに出さない）。
+
+プロファイルは通常 `local-default` の 1 つ。複数ある場合は `orca-data.json` の mtime が最新のものを使う。
+環境変数 `MZED_ORCA_DATA` でパスを差し替えられる（**手動検証用**。Orca の実ファイルは読み取り専用で、コピーに対して検証する）。
+
+### 読むキー
+
+| キー | 意味 |
+|---|---|
+| `workspaceSession.activeWorktreeId` | 今アクティブな worktree の id |
+| `workspaceSession.lastVisitedAtByWorktreeId` | `"local\|<worktreeId>" -> ms epoch`。`activeWorktreeId` が無い / 解決できないときのフォールバック |
+| `folderWorkspaces[]` | `id` と `folderPath`。`folder:` 形式の id をパスへ解決するために引く |
+
+worktree id は 2 形式ある。
+
+| 形式 | 解決方法 |
+|---|---|
+| `<repoUuid>::<絶対パス>` | `::` 以降がプロジェクトのパス |
+| `folder:<uuid>` | `folderWorkspaces[]` の `id == <uuid>` の要素の `folderPath` |
+
+### 検知方式
+
+Zed と同じ notify + 1500ms ポーリングのハイブリッド。ただし `orca-data.json` は約 500KB の単一 JSON を Orca が頻繁に書き換えるため、**mtime が動いたときだけ**パースする（ポーリングのたびに 500KB を読み直さない）。
+Orca はファイルを置き換えて書くので、監視対象はファイルではなく**親ディレクトリ**。
+書き込み途中の不完全な JSON を読んでしまった場合はパース失敗として前回値を維持し、mtime 記録をクリアして次回必ず読み直す（リネームで戻された古い mtime も取りこぼさない）。
+変化判定は Zed と同じく**解決後のパスのみ**で行う（Orca は UI 操作のたびにファイルを触るため）。
+
+### 追従元（`sync_source`、既定 `auto`）
+
+| 値 | 挙動 |
+|---|---|
+| `auto` | Zed と Orca の両方を購読し、イベントが来た順に追従する |
+| `zed` | Zed のイベントだけ採用（Orca は無視） |
+| `orca` | Orca のイベントだけ採用（Zed は無視） |
+
+複数のイベントが処理前に溜まっていた場合（起動直後は両ウォッチャが現在値を報告する）は、1 回の切替に畳み込む。規則は 2 つだけ。
+
+1. アクティブプロジェクトが無いイベント（`None`）は切替先を持たないので**候補から外す**。
+2. 残った中から**到着順で最後のもの**を採る。
+
+**ソースによる優先は設けない**。片方を常に優先すると `Zed(A) → Orca(B) → Zed(C)` で C が捨てられ、`Zed(Some) → Orca(None)` では正常な Zed の切替まで失われる。「最後に操作した方に追従する」という `auto` の定義そのものが規則になる。判定は `src/sync.rs` の `accepts` / `admit` / `admit_burst`（pure、ユニットテスト済み）。
+
+例外は各ウォッチャの**初回報告**（起動時に見つけた現在値。ユーザーの操作ではない）だけで、これは到着順に依らず Zed が勝つ。Orca 以前の mzed は Zed だけを追っていたので、起動時に別の場所へ着地するのは退行に見えるため。
+
+初回報告はイベントに `initial: true` として乗る（`watch_service` が各スレッドの最初のコールバックにだけ付ける）。app 側は「今どこに着地しているか」を `Landing`（`Nothing` / `Startup(origin)` / `Switch`）で持ち、`sync.rs` の `admit` が 1 件ずつ判定する。
+
+| 着地状態 | `initial: false`（実際の切替） | Zed の初回報告 | Orca の初回報告 |
+|---|---|---|---|
+| `Nothing` | 適用 | 適用 | 適用 |
+| `Startup(Orca)` | 適用 | 適用（Zed が勝つ） | — |
+| `Startup(Zed)` | 適用 | — | 無視 |
+| `Switch` | 適用 | 無視 | 無視 |
+
+これで 2 つの初回報告が同じバーストに揃うかどうかに関係なく着地が決まる（実測では別々の wake-up に分かれる）。遅れて届いた初回報告が、その間にユーザーがした切替を巻き戻すこともない。
+
+`sync_mode`（auto / self / off）は上位ポリシーとして両ソースに等しくかかる。`off` なら Orca の切替も無視し、`self` なら root だけ更新する。
+
+`sync_skip_worktrees` は **Zed 由来のイベントにだけ**適用する。Orca は worktree 管理アプリで、その切替は定義上 worktree 切替なので、スキップすると Orca 連動そのものが機能しなくなる。
+
+スキップ判定は畳み込みの**前**に行い、対象の Zed イベントはバーストから取り除く。畳み込みの後に判定すると、捨てるはずの Zed イベントが着地を確定させ、同じバーストに居た有効な Orca イベントまで消えてしまう（起動時も、スキップされた Zed の初回報告が Orca の初回報告を拒否してしまう）。`sync_source` による絞り込みも同じ理由で畳み込みの前に置く。
+
+### エッジケース
+
+| ケース | 挙動 |
+|---|---|
+| Orca 未インストール / プロファイル無し | 1500ms ごとに状態ファイルの出現を待ち続ける（`stat` のみ）。Orca を後から入れても mzed の再起動は要らない |
+| パースできるが `activeWorktreeId` 等が無い | 前回値を維持（Orca 側の形式変更を「プロジェクト無し」と誤認しない） |
+| `orca-data.json` が消えた / リネームされた | 前回値を維持。戻せば追従を再開する |
+| 書き込み途中の不完全 JSON | 前回値を維持。次のポーリングで読み直す |
+| `activeWorktreeId` が解決できない id | `lastVisitedAtByWorktreeId` の最新へフォールバック |
+
+`workspaceSession.activeFileIdByWorktree`（worktree ごとの開いているファイル）は存在するが、本仕様では読まない。
+
+### ログ
+
+異常は無音にせず `~/Library/Logs/mzed/mzed.log` に出す。1500ms ごとに同じ行を吐かないよう、**状態が変わったときだけ**記録する（初回の異常、異常種別の変化、復帰）。
+
+```
+orca: no state file found; waiting for one to appear
+orca: cannot watch <dir>: <err>
+orca: cannot read <path>; keeping current project
+orca: <path> is not valid JSON (mid-write?); keeping current project
+orca: no active worktree in <path>; keeping current project
+orca: reading <path>
+```
 
 ## 状態保持
 

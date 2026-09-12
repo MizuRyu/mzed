@@ -1,4 +1,7 @@
+use std::time::Instant;
+
 use super::*;
+
 /// Command palette overlay. Owns its candidate list derivation from the current
 /// query + mode, and handles all navigation keys via the input's `onkeydown`
 /// (Esc closes, ↑/↓ move selection, Enter runs). Commands dispatch through
@@ -48,10 +51,17 @@ pub(crate) fn Palette(
     };
     let cur = if len == 0 { 0 } else { sel().min(len - 1) };
 
+    // Hover and the keyboard drive the same `sel`; these two keep them apart.
+    let mut sel_src = use_signal(|| SelChange::Keyboard);
+    let mut last_key_at = use_signal(|| None::<Instant>);
+
     // Keep the selected row in view: on every selection change, scroll the row
     // with the matching data-mdo-row into the candidate list's visible range.
     use_effect(move || {
         let i = sel();
+        if sel_src() == SelChange::Hover {
+            return;
+        }
         spawn(async move {
             let script = js::overlay_row_scroll_js(js::OverlayRowKind::Command, i);
             let _ = document::eval(&script).recv::<()>().await;
@@ -99,10 +109,13 @@ pub(crate) fn Palette(
                     placeholder: if file_mode() { "Search files…" } else { "Type a command…" },
                     style: "width: 100%; box-sizing: border-box; padding: 14px 16px; font: 15px -apple-system, sans-serif; border: none; border-bottom: 1px solid {overlay_border}; background: transparent; color: {text_color}; outline: none;",
                     oninput: move |e| {
+                        last_key_at.set(Some(Instant::now()));
                         query.set(e.value());
+                        sel_src.set(SelChange::Keyboard);
                         sel.set(0);
                     },
                     onkeydown: move |e| {
+                        last_key_at.set(Some(Instant::now()));
                         match e.key() {
                             Key::Escape => {
                                 e.prevent_default();
@@ -110,6 +123,7 @@ pub(crate) fn Palette(
                                 if file_mode() {
                                     file_mode.set(false);
                                     query.set(String::new());
+                                    sel_src.set(SelChange::Keyboard);
                                     sel.set(0);
                                 } else {
                                     open.set(false);
@@ -118,12 +132,14 @@ pub(crate) fn Palette(
                             Key::ArrowDown => {
                                 e.prevent_default();
                                 if len > 0 {
+                                    sel_src.set(SelChange::Keyboard);
                                     sel.set((cur + 1) % len);
                                 }
                             }
                             Key::ArrowUp => {
                                 e.prevent_default();
                                 if len > 0 {
+                                    sel_src.set(SelChange::Keyboard);
                                     sel.set((cur + len - 1) % len);
                                 }
                             }
@@ -150,6 +166,12 @@ pub(crate) fn Palette(
                                     div {
                                         "data-mdo-row": "{i}",
                                         style: "padding: 8px 12px; border-radius: 6px; cursor: pointer; background: {bg}; color: {fg}; font: 14px -apple-system, sans-serif;",
+                                        onmouseenter: move |_| {
+                                            if hover_takes_selection(i, cur, (*last_key_at.peek()).map(|t| t.elapsed())) {
+                                                sel_src.set(SelChange::Hover);
+                                                sel.set(i);
+                                            }
+                                        },
                                         onclick: move |_| {
                                             on_open.call(pick.clone());
                                             open.set(false);
@@ -170,6 +192,12 @@ pub(crate) fn Palette(
                                     div {
                                         "data-mdo-row": "{i}",
                                         style: "padding: 8px 12px; border-radius: 6px; cursor: pointer; background: {bg}; color: {fg}; font: 14px -apple-system, sans-serif;",
+                                        onmouseenter: move |_| {
+                                            if hover_takes_selection(i, cur, (*last_key_at.peek()).map(|t| t.elapsed())) {
+                                                sel_src.set(SelChange::Hover);
+                                                sel.set(i);
+                                            }
+                                        },
                                         onclick: move |_| on_action.call(action),
                                         "{c.label}"
                                     }

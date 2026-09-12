@@ -194,7 +194,9 @@ body {
   margin: 16px 0;
   padding: 20px;
   border-radius: 10px;
-  overflow: auto;
+  /* The card is the zoom viewport: panned/zoomed content is clipped here rather
+     than growing scrollbars (mermaid's useMaxWidth already fits the SVG). */
+  overflow: hidden;
 }
 .mdo-mermaid pre.mermaid {
   margin: 0;
@@ -207,9 +209,9 @@ body {
 }
 .mdo-mermaid svg {
   display: block;
-  /* Fill the card width so wide diagrams (ER, gantt, …) are not capped at the
-     SVG's intrinsic width attribute. height: auto keeps the aspect ratio. */
-  width: 100%;
+  /* Only cap the width. mermaid's useMaxWidth already sizes the SVG to fit;
+     forcing width: 100% additionally stretched diagrams that opt out of it
+     (`useMaxWidth: false`) from their intrinsic width to the whole column. */
   max-width: 100%;
   height: auto;
 }
@@ -287,11 +289,6 @@ body {
 }
 .mdo-lightbox-close:hover {
   background: rgba(240, 246, 252, 0.14);
-}
-
-/* Project switcher dropdown rows. */
-.mdo-proj-row:hover {
-  background: rgba(127, 127, 127, 0.12);
 }
 
 /* Right-click context-menu items. */

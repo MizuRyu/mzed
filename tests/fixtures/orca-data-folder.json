@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "folderWorkspaces": [
+    { "id": "33333333-3333-4333-8333-333333333333", "name": "notes", "folderPath": "/tmp/notes" }
+  ],
+  "workspaceSession": {
+    "activeWorktreeId": "folder:33333333-3333-4333-8333-333333333333",
+    "lastVisitedAtByWorktreeId": {
+      "local|folder:33333333-3333-4333-8333-333333333333": 1788000003000
+    }
+  }
+}

@@ -5,8 +5,11 @@
 ///
 /// `__MDO_DARK__` is substituted with `true`/`false` by [`post_render_js`] so
 /// mermaid renders with a theme that matches the current appearance, and
-/// re-renders when the user toggles light/dark.
+/// re-renders when the user toggles light/dark; `__MDO_MERMAID_HELPER__` is
+/// filled from [`super::mermaid::helper_js`].
 const POST_RENDER_TEMPLATE: &str = r#"
+__MDO_MERMAID_HELPER__
+__MDO_ZOOM_PAN__
 await new Promise(r => requestAnimationFrame(r));
 const MDO_DARK = __MDO_DARK__;
 const MDO_KATEX = __MDO_KATEX__;
@@ -176,15 +179,29 @@ async function mdoProcessBody(body) {
         });
         bar.append(copyBtn, imgBtn);
         wrap.appendChild(bar);
+        // ⌘+wheel (and trackpad pinch) zooms toward the cursor, drag pans,
+        // double-click goes back to 1:1. A plain wheel keeps scrolling the page.
+        wrap.mdoZoom = mdoZoomPan(wrap, pre, { requireModifier: true, grabCursor: 'zoom-in' });
         // Click the diagram (anywhere but the toolbar) to pop it out into a
         // dedicated window that renders at zoom 1 — where gantt/journey/mindmap
-        // also come out correctly (no page-zoom measurement skew).
+        // also come out correctly (no page-zoom measurement skew). A drag that
+        // ended here is a pan, not a click.
         wrap.style.cursor = 'zoom-in';
-        wrap.title = 'Click to open in a new window';
+        wrap.title = 'Click to open in a new window (⌘+scroll to zoom)';
+        let popoutTimer = null;
         wrap.addEventListener('click', () => {
-          dioxus.send({ kind: 'open_mermaid', src: pre.dataset.mdoSrc || '' });
+          if (wrap.mdoZoom && wrap.mdoZoom.tookDrag()) return;
+          // A double-click is a reset gesture, and it fires two clicks first.
+          // Hold the open request long enough for the dblclick below to cancel it.
+          clearTimeout(popoutTimer);
+          popoutTimer = setTimeout(() => {
+            dioxus.send({ kind: 'open_mermaid', src: pre.dataset.mdoSrc || '' });
+          }, 250);
         });
+        wrap.addEventListener('dblclick', () => clearTimeout(popoutTimer));
       }
+      // Each render starts from 1:1: the diagram below is about to be replaced.
+      if (wrap.mdoZoom) wrap.mdoZoom.reset();
       // Theme the card to match the appearance (arto-style navy in dark).
       wrap.style.background = MDO_DARK ? '#161b22' : '#ffffff';
       wrap.style.border = '1px solid ' + (MDO_DARK ? '#30363d' : '#d8dee4');
@@ -192,38 +209,7 @@ async function mdoProcessBody(body) {
       pre.textContent = pre.dataset.mdoSrc;
       pre.removeAttribute('data-processed');
     });
-    mermaid.initialize({
-      startOnLoad: false,
-      securityLevel: 'strict',
-      // Native SVG <text> labels (not foreignObject/HTML). HTML-label widths are
-      // measured with getBoundingClientRect = page-zoomed CSS pixels; our webview
-      // applies page zoom, so that desyncs from the SVG's user units and clips
-      // node text. SVG text measures in user units (zoom-independent). This is
-      // what fixed flowchart/sequence/class/state/er. (cline #7398.)
-      htmlLabels: false,
-      flowchart: { htmlLabels: false, useMaxWidth: true },
-      er: { useMaxWidth: true },
-      sequence: { useMaxWidth: true },
-      gantt: { useMaxWidth: true },
-      // useMaxWidth: let mermaid stretch the SVG to fill its container width.
-      // Combined with .mdo-mermaid svg { width: 100%; max-width: 100% } this
-      // makes wide diagrams (ER, gantt, …) fill the card without fixed-pixel caps.
-      theme: MDO_DARK ? 'dark' : 'default',
-      themeVariables: MDO_DARK
-        ? {
-            background: '#161b22',
-            primaryColor: '#1c2128',
-            primaryBorderColor: '#444c56',
-            primaryTextColor: '#e6edf3',
-            lineColor: '#8b949e',
-            secondaryColor: '#22272e',
-            tertiaryColor: '#1c2128',
-          }
-        : {},
-    });
-    if (pres.length) {
-      try { await mermaid.run({ nodes: pres }); } catch (e) { console.error(e); }
-    }
+    await MDO_MERMAID.run(pres, MDO_DARK);
   }
 
   if (MDO_KATEX && window.renderMathInElement) {
@@ -289,6 +275,8 @@ dioxus.send({
 /// flag into [`POST_RENDER_TEMPLATE`].
 pub(crate) fn post_render_js(dark: bool, katex: bool) -> String {
     POST_RENDER_TEMPLATE
+        .replace("__MDO_MERMAID_HELPER__", &super::mermaid::helper_js())
+        .replace("__MDO_ZOOM_PAN__", super::mermaid::zoom_pan_js())
         .replace("__MDO_DARK__", if dark { "true" } else { "false" })
         .replace("__MDO_KATEX__", if katex { "true" } else { "false" })
 }
@@ -384,25 +372,49 @@ mod tests {
     fn インラインmermaidにuseMaxWidthが設定される() {
         let js = post_render_js(true, false);
         assert!(
-            js.contains("useMaxWidth: true"),
-            "useMaxWidth: true が生成 JS に見つからない"
+            js.contains(r#""useMaxWidth":true"#),
+            "useMaxWidth が生成 JS に見つからない"
         );
     }
 
-    /// mdo.css の .mdo-mermaid svg に width: 100% が設定されている。
-    /// SVG 自体に固定 width 属性があっても CSS で上書きしてカード幅に追従させる。
+    /// インラインカードは ⌘+ホイールでのみズームし、ドラッグ後はポップアウトしない。
     #[test]
-    fn mdo_cssのmermaid_svgにwidth_100が含まれる() {
+    fn インライン図にズームパンが結線される() {
+        let js = post_render_js(false, false);
+        assert!(js.contains("mdoZoomPan(wrap, pre, { requireModifier: true"));
+        assert!(js.contains("if (o.requireModifier && !e.metaKey && !e.ctrlKey) return;"));
+        assert!(js.contains("wrap.mdoZoom.tookDrag()"));
+        assert!(js.contains("wrap.mdoZoom.reset()"));
+        assert!(!js.contains("__MDO_ZOOM_PAN__"));
+    }
+
+    /// ダブルクリックはポップアウトを起こさない。単クリックは遅延確定し、
+    /// 先に来る dblclick が取り消す。
+    #[test]
+    fn ダブルクリックでポップアウトしない() {
+        let js = post_render_js(false, false);
+        assert!(js.contains("clearTimeout(popoutTimer)"));
+        assert!(js.contains("popoutTimer = setTimeout("));
+        assert!(js.contains("wrap.addEventListener('dblclick', () => clearTimeout(popoutTimer))"));
+    }
+
+    /// mdo.css の .mdo-mermaid svg は幅を上限だけ縛る。
+    /// `width: 100%` は小さい図（mindmap / pie）を横に引き伸ばすので使わない。
+    #[test]
+    fn mdo_cssのmermaid_svgは最大幅のみ縛る() {
         let css = include_str!("../../assets/mdo.css");
-        // Both "width: 100%" and "max-width: 100%" must be present inside the
-        // .mdo-mermaid svg rule so intrinsic SVG widths are overridden.
+        let rule = css
+            .split(".mdo-mermaid svg {")
+            .nth(1)
+            .and_then(|s| s.split('}').next())
+            .expect(".mdo-mermaid svg ルールが mdo.css に見つからない");
         assert!(
-            css.contains("width: 100%"),
-            "width: 100% が .mdo-mermaid svg ルールに見つからない"
+            rule.contains("max-width: 100%"),
+            "max-width: 100% が .mdo-mermaid svg ルールに見つからない"
         );
         assert!(
-            css.contains("max-width: 100%"),
-            "max-width: 100% が .mdo-mermaid svg ルールに見つからない"
+            !rule.contains("\n  width:"),
+            ".mdo-mermaid svg に固定の width が残っている"
         );
     }
 
@@ -411,15 +423,15 @@ mod tests {
     fn インラインmermaidのdarkテーマにthemeVariablesが含まれる() {
         let js = post_render_js(true, false);
         assert!(
-            js.contains("primaryColor: '#1c2128'"),
+            js.contains(r##""primaryColor":"#1c2128""##),
             "primaryColor が themeVariables に見つからない"
         );
         assert!(
-            js.contains("primaryTextColor: '#e6edf3'"),
+            js.contains(r##""primaryTextColor":"#e6edf3""##),
             "primaryTextColor が themeVariables に見つからない"
         );
         assert!(
-            js.contains("lineColor: '#8b949e'"),
+            js.contains(r##""lineColor":"#8b949e""##),
             "lineColor が themeVariables に見つからない"
         );
     }
@@ -466,14 +478,13 @@ mod tests {
         );
     }
 
-    /// テーマ切替時も mermaid.initialize の theme 値が MDO_DARK に連動する。
+    /// テーマ切替時も mermaid.initialize の theme 値が dark フラグに連動する。
     #[test]
     fn mermaidテーマがdarkフラグに連動する() {
         let dark_js = post_render_js(true, false);
         let light_js = post_render_js(false, false);
-        assert!(dark_js.contains("theme: MDO_DARK ? 'dark' : 'default'"));
-        assert!(light_js.contains("theme: MDO_DARK ? 'dark' : 'default'"));
-        // The resolved value: dark_js has MDO_DARK=true, light_js has MDO_DARK=false.
+        assert!(dark_js.contains(r#""theme":"dark""#));
+        assert!(light_js.contains(r#""theme":"default""#));
         assert!(dark_js.contains("const MDO_DARK = true;"));
         assert!(light_js.contains("const MDO_DARK = false;"));
     }

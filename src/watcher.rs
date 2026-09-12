@@ -6,8 +6,9 @@
 //! reload) are unit-tested; the FS event plumbing is not.
 
 use anyhow::{Context, Result};
-use notify_debouncer_full::notify::RecursiveMode;
-use notify_debouncer_full::{new_debouncer, DebouncedEvent};
+use notify_debouncer_full::notify::event::{EventKind, ModifyKind};
+use notify_debouncer_full::notify::{RecommendedWatcher, RecursiveMode};
+use notify_debouncer_full::{new_debouncer, new_debouncer_opt, DebouncedEvent, NoCache};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Duration;
@@ -72,31 +73,71 @@ pub fn active_file_affected(target: &Path, changed: &[PathBuf]) -> bool {
         .any(|p| compare_key(&resolved(p)) == target_key)
 }
 
-/// Does a batch of changed paths warrant rebuilding the sidebar tree under
-/// `root`? True when any changed path is a markdown file inside `root` that is
-/// not within an ignored directory. (Add/remove/rename of an `.md` all surface
-/// here; edits of an existing md also match but only cost one tree rebuild.)
-pub fn tree_affected(root: &Path, changed: &[PathBuf]) -> bool {
+/// Does a batch of changes warrant rebuilding the sidebar tree under `root`?
+///
+/// True only for events that change the tree's *shape*: a markdown file or a
+/// directory under `root` (outside the ignored directories) being created,
+/// removed or renamed. Editing a file's content must not match — the sidebar
+/// shows names, not content, so rebuilding on every save only makes it flicker.
+pub fn tree_affected<'a>(
+    root: &Path,
+    changed: impl IntoIterator<Item = (EventKind, &'a Path)>,
+) -> bool {
     let root = resolved(root);
-    changed.iter().any(|p| is_relevant_md_path(&root, p))
+    changed
+        .into_iter()
+        .any(|(kind, p)| is_structural(&kind) && is_relevant_tree_path(&root, p))
 }
 
-/// `root` must already be [`resolved`]; `p` is resolved here.
-fn is_relevant_md_path(root: &Path, p: &Path) -> bool {
-    if !is_markdown(p) {
-        return false;
-    }
-    let p = resolved(p);
-    let Some(rel) = strip_prefix_ignoring_case(&p, root) else {
-        return false;
+/// Creates, deletes and renames reshape the tree; `Modify(Data)` (a save) and
+/// `Modify(Metadata)` (a `touch`, an xattr write) leave it identical.
+fn is_structural(kind: &EventKind) -> bool {
+    matches!(
+        kind,
+        EventKind::Create(_) | EventKind::Remove(_) | EventKind::Modify(ModifyKind::Name(_))
+    )
+}
+
+/// Is `p` inside `root` and part of what the sidebar tree shows?
+///
+/// `root` must already be [`resolved`]. Ordered so the common rejection — one
+/// of the thousands of events a `cargo build` produces under `target/` — costs
+/// no syscall at all: FSEvents already reports resolved paths, so the raw path
+/// normally strips cleanly and [`resolved`] is only the spelling fallback.
+fn is_relevant_tree_path(root: &Path, p: &Path) -> bool {
+    let resolved_p;
+    let rel = match strip_prefix_ignoring_case(p, root) {
+        Some(rel) => rel,
+        None => {
+            resolved_p = resolved(p);
+            match strip_prefix_ignoring_case(&resolved_p, root) {
+                Some(rel) => rel,
+                None => return false,
+            }
+        }
     };
-    // Reject when any intermediate directory component is ignored.
-    let mut comps: Vec<&str> = rel
-        .components()
-        .filter_map(|c| c.as_os_str().to_str())
-        .collect();
-    comps.pop(); // drop the file name itself
-    !comps.iter().any(|c| is_ignored_component(c))
+    let mut components = rel.components();
+    let Some(mut last) = components.next() else {
+        return false; // the root itself
+    };
+    for component in components {
+        if is_ignored_component(&last.as_os_str().to_string_lossy()) {
+            return false;
+        }
+        last = component;
+    }
+    match std::fs::metadata(p) {
+        // A directory's own name has to pass the ignore rule too, or creating
+        // `.cache.md/` would read as a markdown file and refresh the sidebar.
+        Ok(meta) if meta.is_dir() => !is_ignored_component(&last.as_os_str().to_string_lossy()),
+        Ok(_) => is_markdown(p),
+        // The path is already gone (a delete, or the source half of a rename,
+        // which FSEvents reports without any file/folder hint). Guessing from
+        // the extension would silently miss `docs.v1/` being moved out of the
+        // project; one extra rescan when a non-markdown file is deleted is the
+        // cheaper mistake.
+        Err(_) => true,
+    }
 }
 
 /// `Path::strip_prefix` that tolerates a spelling difference in the prefix
@@ -115,29 +156,6 @@ fn strip_prefix_ignoring_case<'a>(path: &'a Path, prefix: &Path) -> Option<&'a P
     Some(path_comps.as_path())
 }
 
-fn collect_watch_dirs(root: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    collect_watch_dirs_inner(root, 0, &mut out);
-    out
-}
-
-fn collect_watch_dirs_inner(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
-    let name = dir.file_name().and_then(|s| s.to_str()).unwrap_or("");
-    if depth > 0 && (name.is_empty() || is_ignored_component(name)) {
-        return;
-    }
-    out.push(dir.to_path_buf());
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            collect_watch_dirs_inner(&path, depth + 1, out);
-        }
-    }
-}
-
 /// Collect all paths touched by a batch of debounced events.
 fn paths_of(events: &[DebouncedEvent]) -> Vec<PathBuf> {
     let mut out = Vec::new();
@@ -145,6 +163,14 @@ fn paths_of(events: &[DebouncedEvent]) -> Vec<PathBuf> {
         out.extend(ev.event.paths.iter().cloned());
     }
     out
+}
+
+/// Same, borrowed and paired with each path's event kind — the tree predicate
+/// needs to tell a create/rename apart from a save.
+fn changes_of(events: &[DebouncedEvent]) -> impl Iterator<Item = (EventKind, &Path)> {
+    events
+        .iter()
+        .flat_map(|ev| ev.event.paths.iter().map(|p| (ev.event.kind, p.as_path())))
 }
 
 pub fn watch_file_until<F>(file: &Path, stop: &Receiver<()>, mut on_change: F) -> Result<()>
@@ -182,22 +208,30 @@ where
     Ok(())
 }
 
+/// Watch a project root for tree-shape changes.
+///
+/// One recursive watcher covers subdirectories created after startup; the noise
+/// directories are dropped by [`tree_affected`] rather than by not watching
+/// them, which no static directory list could keep up with.
+///
+/// `NoCache` replaces the default file-id map because that map `stat`s the
+/// whole tree when a recursive root is added — ~10s of solid IO on a Rust
+/// project with a populated `target/`. Its only job is to stitch a rename's two
+/// halves together, and either half already means "the tree changed".
 pub fn watch_tree_until<F>(root: &Path, stop: &Receiver<()>, mut on_change: F) -> Result<()>
 where
     F: FnMut() -> bool,
 {
     let root_buf = root.to_path_buf();
     let (tx, rx) = std::sync::mpsc::channel();
-    let mut debouncer = new_debouncer(DEBOUNCE, None, tx)?;
-    let mut watched = 0;
-    for dir in collect_watch_dirs(&root_buf) {
-        if debouncer.watch(&dir, RecursiveMode::NonRecursive).is_ok() {
-            watched += 1;
-        }
-    }
-    if watched == 0 {
-        debouncer.watch(&root_buf, RecursiveMode::NonRecursive)?;
-    }
+    let mut debouncer = new_debouncer_opt::<_, RecommendedWatcher, NoCache>(
+        DEBOUNCE,
+        None,
+        tx,
+        NoCache::new(),
+        notify_debouncer_full::notify::Config::default(),
+    )?;
+    debouncer.watch(&root_buf, RecursiveMode::Recursive)?;
 
     loop {
         if stop_requested(stop) {
@@ -205,8 +239,7 @@ where
         }
         match rx.recv_timeout(STOP_POLL) {
             Ok(Ok(events)) => {
-                let paths = paths_of(&events);
-                if tree_affected(&root_buf, &paths) && !on_change() {
+                if tree_affected(&root_buf, changes_of(&events)) && !on_change() {
                     break;
                 }
             }
@@ -228,6 +261,12 @@ fn stop_requested(stop: &Receiver<()>) -> bool {
 #[allow(non_snake_case)] // Japanese test names may embed ASCII.
 mod tests {
     use super::*;
+    use notify_debouncer_full::notify::event::{
+        CreateKind, DataChange, MetadataKind, RemoveKind, RenameMode,
+    };
+
+    const CREATE: EventKind = EventKind::Create(CreateKind::Any);
+    const REMOVE_FILE: EventKind = EventKind::Remove(RemoveKind::File);
 
     fn p(s: &str) -> PathBuf {
         PathBuf::from(s)
@@ -247,50 +286,130 @@ mod tests {
         assert!(!active_file_affected(&target, &changed));
     }
 
+    // ── path rules that need no filesystem ───────────────────────────────
+
     #[test]
-    fn root下のmd追加はツリー更新対象() {
-        let root = p("/proj");
-        let changed = vec![p("/proj/docs/new.md")];
-        assert!(tree_affected(&root, &changed));
+    fn root外のパスはツリー更新しない() {
+        assert!(!tree_affected(
+            Path::new("/proj"),
+            [(CREATE, Path::new("/other/a.md"))]
+        ));
     }
 
     #[test]
-    fn markdown拡張子もツリー更新対象() {
-        let root = p("/proj");
-        let changed = vec![p("/proj/note.markdown")];
-        assert!(tree_affected(&root, &changed));
+    fn root自体のイベントはツリー更新しない() {
+        assert!(!tree_affected(
+            Path::new("/proj"),
+            [(CREATE, Path::new("/proj"))]
+        ));
     }
 
     #[test]
-    fn 非mdファイルはツリー更新しない() {
-        let root = p("/proj");
-        let changed = vec![p("/proj/src/main.rs"), p("/proj/notes.txt")];
-        assert!(!tree_affected(&root, &changed));
-    }
-
-    #[test]
-    fn 無視ディレクトリ内のmdはツリー更新しない() {
-        let root = p("/proj");
-        let changed = vec![
-            p("/proj/node_modules/pkg/x.md"),
-            p("/proj/.git/y.md"),
-            p("/proj/target/z.md"),
+    fn 無視ディレクトリ配下はツリー更新しない() {
+        let changed = [
+            (CREATE, Path::new("/proj/node_modules/pkg/x.md")),
+            (CREATE, Path::new("/proj/.git/y.md")),
+            (CREATE, Path::new("/proj/target/z.md")),
         ];
-        assert!(!tree_affected(&root, &changed));
+        assert!(!tree_affected(Path::new("/proj"), changed));
+    }
+
+    // ── event kind: only structural changes redraw the sidebar ───────────
+
+    #[test]
+    fn mdの内容変更はツリー更新しない() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.md");
+        std::fs::write(&file, "# a").unwrap();
+        let saved = EventKind::Modify(ModifyKind::Data(DataChange::Content));
+        let touched = EventKind::Modify(ModifyKind::Metadata(MetadataKind::Any));
+        assert!(!tree_affected(dir.path(), [(saved, file.as_path())]));
+        assert!(!tree_affected(dir.path(), [(touched, file.as_path())]));
     }
 
     #[test]
-    fn root外のmdはツリー更新しない() {
-        let root = p("/proj");
-        let changed = vec![p("/other/a.md")];
-        assert!(!tree_affected(&root, &changed));
+    fn mdの削除とリネームはツリー更新対象() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+        let gone = dir.path().join("docs/a.md");
+        let renamed = EventKind::Modify(ModifyKind::Name(RenameMode::Any));
+        assert!(tree_affected(dir.path(), [(REMOVE_FILE, gone.as_path())]));
+        assert!(tree_affected(dir.path(), [(renamed, gone.as_path())]));
+    }
+
+    // ── what the tree is built from: markdown files and directories ──────
+
+    #[test]
+    fn mdの追加はツリー更新対象() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+        for name in ["README.md", "docs/new.md", "docs/note.markdown"] {
+            let file = dir.path().join(name);
+            std::fs::write(&file, "# x").unwrap();
+            assert!(
+                tree_affected(dir.path(), [(CREATE, file.as_path())]),
+                "{name}"
+            );
+        }
     }
 
     #[test]
-    fn root直下のmdもツリー更新対象() {
-        let root = p("/proj");
-        let changed = vec![p("/proj/README.md")];
-        assert!(tree_affected(&root, &changed));
+    fn 既存の非mdファイルはツリー更新しない() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["main.rs", "notes.txt", "LICENSE"] {
+            let file = dir.path().join(name);
+            std::fs::write(&file, "x").unwrap();
+            assert!(
+                !tree_affected(dir.path(), [(CREATE, file.as_path())]),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn フォルダの作成はツリー更新対象() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("docs/sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        let created_dir = EventKind::Create(CreateKind::Folder);
+        assert!(tree_affected(dir.path(), [(created_dir, sub.as_path())]));
+    }
+
+    #[test]
+    fn 拡張子付きの無視ディレクトリの作成はツリー更新しない() {
+        // `.cache.md/` is a directory, not a markdown file: the ignore rule has
+        // to be applied to the last component before its extension is read.
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join(".cache.md");
+        std::fs::create_dir_all(&cache).unwrap();
+        let created_dir = EventKind::Create(CreateKind::Folder);
+        assert!(!tree_affected(dir.path(), [(created_dir, cache.as_path())]));
+    }
+
+    // ── vanished paths: never judged by their extension ──────────────────
+
+    #[test]
+    fn 拡張子付きディレクトリの無視領域への移動を取り逃がさない() {
+        // `docs.v1/` moved to `target/docs.v1/`: the destination is ignored, so
+        // only the source half can save the sidebar — and FSEvents gives a
+        // rename no folder hint.
+        let dir = tempfile::tempdir().unwrap();
+        let renamed = EventKind::Modify(ModifyKind::Name(RenameMode::Any));
+        let from = dir.path().join("docs.v1");
+        let to = dir.path().join("target/docs.v1");
+        assert!(tree_affected(
+            dir.path(),
+            [(renamed, from.as_path()), (renamed, to.as_path())]
+        ));
+    }
+
+    #[test]
+    fn 消えた非mdファイルは余分に再スキャンしてよい() {
+        // The counterpart of the rule above: a vanished path is never rejected
+        // on its extension, so deleting `LICENSE` costs one extra rescan.
+        let dir = tempfile::tempdir().unwrap();
+        let gone = dir.path().join("LICENSE");
+        assert!(tree_affected(dir.path(), [(REMOVE_FILE, gone.as_path())]));
     }
 
     // ── path spelling: FSEvents reports the fully resolved real path ─────
@@ -340,12 +459,12 @@ mod tests {
         std::os::unix::fs::symlink(&real, &link).unwrap();
 
         let reported = std::fs::canonicalize(real.join("docs/new.md")).unwrap();
-        assert!(tree_affected(&link, &[reported.clone()]));
+        assert!(tree_affected(&link, [(CREATE, reported.as_path())]));
         // The ignored-directory rule still applies after resolving.
         std::fs::create_dir_all(real.join("node_modules/pkg")).unwrap();
         std::fs::write(real.join("node_modules/pkg/x.md"), "# x").unwrap();
         let noise = std::fs::canonicalize(real.join("node_modules/pkg/x.md")).unwrap();
-        assert!(!tree_affected(&link, &[noise]));
+        assert!(!tree_affected(&link, [(CREATE, noise.as_path())]));
     }
 
     #[test]
@@ -398,20 +517,21 @@ mod tests {
     }
 
     #[test]
-    fn tree_watch_dirs_skip_noisy_directories() {
+    fn 再帰監視でも既存ディレクトリのノイズは判定側で捨てる() {
+        // The recursive watcher delivers events from every subdirectory, so the
+        // ignore rule has to hold on real (stat-able) paths too.
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         std::fs::create_dir_all(root.join("docs/nested")).unwrap();
         std::fs::create_dir_all(root.join("node_modules/pkg")).unwrap();
-        std::fs::create_dir_all(root.join("target/debug")).unwrap();
         std::fs::create_dir_all(root.join(".git/objects")).unwrap();
+        let nested = root.join("docs/nested");
+        let noise = [root.join("node_modules/pkg"), root.join(".git/objects")];
 
-        let watched = collect_watch_dirs(root);
-
-        assert!(watched.iter().any(|p| p.ends_with("docs/nested")));
-        assert!(!watched.iter().any(|p| p.ends_with("node_modules")));
-        assert!(!watched.iter().any(|p| p.ends_with("pkg")));
-        assert!(!watched.iter().any(|p| p.ends_with("target")));
-        assert!(!watched.iter().any(|p| p.ends_with(".git")));
+        assert!(tree_affected(root, [(CREATE, nested.as_path())]));
+        assert!(!tree_affected(
+            root,
+            noise.iter().map(|p| (CREATE, p.as_path()))
+        ));
     }
 }

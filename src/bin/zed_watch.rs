@@ -1,6 +1,10 @@
 //! Standalone PoC: watch Zed's DB and log the active project on every switch.
 //! Run this, then switch projects in Zed and confirm log lines appear.
 
+#[path = "../sync.rs"]
+#[allow(dead_code)] // Only the Zed half of the shared module is used here.
+mod sync;
+
 #[path = "../zed.rs"]
 mod zed;
 

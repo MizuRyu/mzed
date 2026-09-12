@@ -7,6 +7,7 @@
 //! which is exercised against real temp paths; the argument-to-intent mapping
 //! itself is pure and unit-tested with plain strings.
 
+use crate::sync::SyncSource;
 use crate::theme::SyncMode;
 use clap::Parser;
 use std::path::PathBuf;
@@ -25,9 +26,13 @@ pub struct Cli {
     #[arg(value_name = "PATH")]
     pub paths: Vec<PathBuf>,
 
-    /// Sync mode: how mzed follows Zed's focused project.
+    /// Sync mode: how mzed follows the focused project.
     #[arg(long, value_enum)]
     pub sync: Option<SyncArg>,
+
+    /// Sync source: which app's project switches mzed follows.
+    #[arg(long = "sync-source", value_enum)]
+    pub sync_source: Option<SyncSource>,
 
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -86,6 +91,8 @@ pub struct Intent {
     pub target: Target,
     pub sync: SyncMode,
     pub sync_overridden: bool,
+    pub sync_source: SyncSource,
+    pub sync_source_overridden: bool,
 }
 
 /// A predicate over a path: is it an existing directory?
@@ -104,6 +111,8 @@ pub type IsDir<'a> = dyn Fn(&std::path::Path) -> bool + 'a;
 pub fn resolve_with(cli: &Cli, is_dir: &IsDir) -> Intent {
     let sync_overridden = cli.sync.is_some();
     let sync = cli.sync.unwrap_or(SyncArg::Auto).into();
+    let sync_source_overridden = cli.sync_source.is_some();
+    let sync_source = cli.sync_source.unwrap_or_default();
     let target = match cli.paths.as_slice() {
         [] => Target::Zed,
         [only] if is_dir(only) => Target::Dir(only.clone()),
@@ -122,6 +131,8 @@ pub fn resolve_with(cli: &Cli, is_dir: &IsDir) -> Intent {
         target,
         sync,
         sync_overridden,
+        sync_source,
+        sync_source_overridden,
     }
 }
 
@@ -139,6 +150,7 @@ mod tests {
         Cli {
             paths: paths.iter().map(PathBuf::from).collect(),
             sync,
+            sync_source: None,
             command: None,
         }
     }
@@ -213,7 +225,20 @@ mod tests {
         let c = Cli::try_parse_from(["mzed", "a.md", "b.md", "--sync", "off"]).unwrap();
         assert_eq!(c.paths, vec![PathBuf::from("a.md"), PathBuf::from("b.md")]);
         assert_eq!(c.sync, Some(SyncArg::Off));
+        assert_eq!(c.sync_source, None);
         assert_eq!(c.command, None);
+    }
+
+    #[test]
+    fn sync_sourceフラグと指定の有無を保持する() {
+        let intent = resolve_with(&cli(&[], None), &never_dir);
+        assert_eq!(intent.sync_source, SyncSource::Auto);
+        assert!(!intent.sync_source_overridden);
+
+        let c = Cli::try_parse_from(["mzed", "--sync-source", "orca"]).unwrap();
+        let intent = resolve_with(&c, &never_dir);
+        assert_eq!(intent.sync_source, SyncSource::Orca);
+        assert!(intent.sync_source_overridden);
     }
 
     #[test]

@@ -11,7 +11,7 @@ pub(crate) use dom::{
 pub(crate) use export::{export_capture_js, webview_action_error};
 pub(crate) use find::{find_highlight_js, find_step_js};
 pub(crate) use keyboard::{keydown_bridge_js, sidebar_resize_js};
-pub(crate) use mermaid::mermaid_window_js;
+pub(crate) use mermaid::{helper_js as mermaid_helper_js, mermaid_window_js};
 pub(crate) use render::post_render_js;
 
 #[cfg(test)]
@@ -25,7 +25,7 @@ mod tests {
 
         assert!(js.contains("const MDO_DARK = true;"));
         assert!(js.contains("const MDO_KATEX = false;"));
-        assert!(js.contains("securityLevel: 'strict'"));
+        assert!(js.contains(r#""securityLevel":"strict""#));
         assert!(js.contains("href.toLowerCase()"));
         assert!(js.contains("function mdoOpenImageLightbox"));
         assert!(js.contains("querySelectorAll('img[src]')"));
@@ -34,12 +34,13 @@ mod tests {
         assert!(js.contains("performance.now() - MDO_POST_RENDER_START"));
         assert!(!js.contains("__MDO_DARK__"));
         assert!(!js.contains("__MDO_KATEX__"));
-        assert!(!js.contains("securityLevel: 'loose'"));
+        assert!(!js.contains("__MDO_MERMAID_CONFIG__"));
+        assert!(!js.contains("loose"));
     }
 
     #[test]
     fn export_capture_js_targets_requested_pane() {
-        let js = export_capture_js(1);
+        let js = export_capture_js(1, false);
 
         assert!(js.contains(".markdown-body[data-mdo-pane=\"1\"]"));
         assert!(!js.contains(".markdown-body[data-mdo-pane=\"0\"]"));
@@ -48,10 +49,31 @@ mod tests {
 
     #[test]
     fn export_capture_js_uses_first_pane_for_unknown_index() {
-        let js = export_capture_js(2);
+        let js = export_capture_js(2, false);
 
         assert!(js.contains(".markdown-body[data-mdo-pane=\"0\"]"));
         assert!(!js.contains("__MDO_PANE__"));
+    }
+
+    /// エクスポートは常に light で描画し、終了後にライブ表示のテーマへ戻す。
+    #[test]
+    fn export_capture_js_renders_light_and_restores_live_theme() {
+        let js = export_capture_js(0, true);
+
+        assert!(js.contains("MDO_MERMAID.run(pres, false)"));
+        assert!(js.contains("MDO_MERMAID.config(true, false)"));
+        assert!(!js.contains("__MDO_MERMAID_HELPER__"));
+        assert!(!js.contains("__MDO_LIVE_DARK__"));
+    }
+
+    /// エクスポートはインライン図のズーム / パン transform を落としてから複製する。
+    #[test]
+    fn export_capture_js_clears_inline_zoom_transform() {
+        let js = export_capture_js(0, false);
+
+        assert!(js.contains(
+            "clone.querySelectorAll('.mdo-mermaid pre.mermaid').forEach((el) => el.removeAttribute('style'))"
+        ));
     }
 
     #[test]
@@ -99,10 +121,10 @@ mod tests {
     fn mermaid_window_replaces_dark_flag() {
         let js = mermaid_window_js(true);
 
-        assert!(js.contains("theme: true ? 'dark' : 'default'"));
-        assert!(js.contains("securityLevel: 'strict'"));
-        assert!(!js.contains("__MDO_DARK__"));
-        assert!(!js.contains("securityLevel: 'loose'"));
+        assert!(js.contains(r#""theme":"dark""#));
+        assert!(js.contains(r#""securityLevel":"strict""#));
+        assert!(!js.contains("__MDO_MERMAID_CONFIG__"));
+        assert!(!js.contains("loose"));
     }
 
     #[test]

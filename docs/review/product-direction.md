@@ -45,3 +45,16 @@ Markdown 編集機能は含めない。
 
 v1 では Tauri/SolidJS への移行を計画しない。
 性能や配布の課題は、まず Dioxus root crate 内の責務分離、計測、macOS 配布設計で解決する。
+
+## 再検討記録
+
+### 2026-09-09: ox-content への parser 差し替え — 見送り
+
+`ox_content_parser` / `ox_content_renderer` を pulldown-cmark の代替として spike した（記録: ローカル `docs/memo/tasks/260909-01-v2大型update計画/p4-result.md`）。
+
+- 性能: 通常の 1MB 散文で差なし。ox が速く見えたのは pulldown-cmark 0.13 の脚注処理が O(n²) の場合のみ。mzed の実コストは自前の二重パースが主因で、parser を変えずに直せる。
+- 防御: ox の `disallow_raw_html` は GFM tagfilter（9 タグ）で全エスケープではない。属性のエスケープ形式も違い、`raw_html::reconstruct_allowed` が壊れる。protocol-relative URL を通す。
+- 互換: 純 Rust 経路に frontmatter が無い。alerts クラス名、mermaid の `pre class`、table alignment の DOM が異なる。
+- 部分取り込み: ハイライト（tree-sitter）と mermaid の crate は crates.io 未公開。sanitize の許可リストは mzed より広い。
+
+再検討条件: ox-content が frontmatter を純 Rust 経路で提供し、raw HTML を全エスケープするモードを持ち、ハイライト crate を公開したとき。

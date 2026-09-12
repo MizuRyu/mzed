@@ -2,7 +2,7 @@ use crate::domain::action::AppCommand;
 use crate::tabs::Tabs;
 use crate::{
     app_state, cli, config, export, files, instance, js, logging, palette, perf, search, services,
-    session, theme, ui, zed,
+    session, sync, theme, ui, zed,
 };
 use clap::Parser;
 use dioxus::dioxus_core::Task;
@@ -40,6 +40,29 @@ const EXPORT_KATEX_CSS: &str = include_str!("../assets/katex/katex.min.css");
 
 /// The startup intent (CLI-derived), consumed by the first `App` on mount.
 static INITIAL: OnceLock<Mutex<Option<cli::Intent>>> = OnceLock::new();
+
+/// Whether a project switch may take over the visible tabs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TabPolicy {
+    /// Park the current tabs and restore the target project's (a real switch).
+    Swap,
+    /// Leave the tabs and the split alone (SelfPinned: sidebar only).
+    Keep,
+}
+
+/// Whether a switch request names exactly what is already on screen.
+///
+/// The primary root alone is not enough: Zed can add or drop a folder in a
+/// multi-root workspace, and Orca reports the same repo as a single root, so
+/// two selections can share a primary and still need different sidebars.
+fn same_selection(
+    old_root: Option<&Path>,
+    old_roots: &[PathBuf],
+    new_primary: &Path,
+    new_roots: &[PathBuf],
+) -> bool {
+    old_root == Some(new_primary) && old_roots == new_roots
+}
 
 /// Per-window message senders. The process-level IPC router forwards secondary
 /// instance requests to the latest live window, pruning closed windows lazily.
@@ -155,6 +178,46 @@ mod tests {
         Msg::Open {
             path: PathBuf::from(path),
         }
+    }
+
+    fn paths(list: &[&str]) -> Vec<PathBuf> {
+        list.iter().map(PathBuf::from).collect()
+    }
+
+    #[test]
+    fn same_selection_needs_the_whole_root_set() {
+        let a = Path::new("/a");
+        // Identical selection.
+        assert!(same_selection(
+            Some(a),
+            &paths(&["/a", "/b"]),
+            a,
+            &paths(&["/a", "/b"])
+        ));
+        // Same primary, different roots: Zed dropped /b from the workspace.
+        assert!(!same_selection(
+            Some(a),
+            &paths(&["/a", "/b"]),
+            a,
+            &paths(&["/a"])
+        ));
+        assert!(!same_selection(
+            Some(a),
+            &paths(&["/a"]),
+            a,
+            &paths(&["/a", "/b"])
+        ));
+    }
+
+    #[test]
+    fn same_selection_is_false_for_another_project() {
+        assert!(!same_selection(
+            Some(Path::new("/a")),
+            &paths(&["/a"]),
+            Path::new("/b"),
+            &paths(&["/b"])
+        ));
+        assert!(!same_selection(None, &[], Path::new("/a"), &paths(&["/a"])));
     }
 
     #[test]
@@ -522,6 +585,11 @@ pub(crate) fn App() -> Element {
         }
     });
     let mut persisted_sync_mode = use_signal(|| saved_config.sync_mode);
+    let sync_source = use_signal(|| match initial_intent.as_ref() {
+        Some(intent) if intent.sync_source_overridden => intent.sync_source,
+        _ => saved_config.sync_source,
+    });
+    let persisted_sync_source = use_signal(|| saved_config.sync_source);
     let mut zed_sync_on = use_signal(|| true);
     let mut zoom = use_signal(|| saved_config.zoom);
     // Toggle a path's favorite status (add if absent, remove if present).
@@ -769,28 +837,46 @@ pub(crate) fn App() -> Element {
     // Switch to `new_primary` (with `new_roots` as the full sidebar set),
     // retaining per-project tabs. Parks the current project's tabs, restores the
     // target's (or starts empty + opens `open_pick`). A re-selection of the same
-    // primary root keeps the live tabs untouched. Centralised so Zed auto-switch,
-    // IPC OpenDir, and the manual dropdown all behave identically.
+    // primary root keeps the live tabs untouched. Centralised so Zed/Orca
+    // auto-switch, IPC OpenDir, and the manual dropdown all behave identically.
     let mut switch_project = move |new_primary: PathBuf,
                                    new_roots: Vec<PathBuf>,
                                    expanded_set: HashSet<PathBuf>,
-                                   open_pick: Option<PathBuf>| {
+                                   open_pick: Option<PathBuf>,
+                                   tab_policy: TabPolicy| {
         let old = root();
-        let same = old.as_ref() == Some(&new_primary);
-        // Park current + take target tabs via the pure helper.
-        let mut restored = project_tabs
-            .write()
-            .switch(old.as_ref(), &tabs.read(), &new_primary);
-        if same {
-            // Same project re-selected: root/roots/expanded are already correct,
-            // so skip their signal writes to avoid spurious reactive updates
-            // (tree rebuild, document reload, sidebar flicker). Only honour an
-            // explicit additional file pick.
+        let same_primary = old.as_deref() == Some(new_primary.as_path());
+        if same_selection(old.as_deref(), &roots.read(), &new_primary, &new_roots) {
+            // Exactly what is already on screen: skip the signal writes to avoid
+            // spurious reactive updates (tree rebuild, document reload, sidebar
+            // flicker). Only honour an explicit additional file pick.
             if let Some(f) = open_pick {
                 tabs.write().open(f);
             }
             return;
         }
+        if same_primary {
+            // Same project, different root set — Zed adding or dropping a folder
+            // in a multi-root workspace. The sidebar has to follow, but this is
+            // not a project switch: keep the tabs and the user's expansion.
+            roots.set(new_roots);
+            if let Some(f) = open_pick {
+                tabs.write().open(f);
+            }
+            return;
+        }
+        if tab_policy == TabPolicy::Keep {
+            // SelfPinned: follow the project in the sidebar without taking the
+            // viewer. Tabs, the split and per-project parking all stay put.
+            root.set(Some(new_primary));
+            roots.set(new_roots);
+            expanded.set(expanded_set);
+            return;
+        }
+        // Park current + take target tabs via the pure helper.
+        let mut restored = project_tabs
+            .write()
+            .switch(old.as_ref(), &tabs.read(), &new_primary);
         // Keep a reference to the primary path for B4 (latest-file lookup)
         // before it is consumed by `root.set`.
         let primary_for_latest = new_primary.clone();
@@ -897,7 +983,7 @@ pub(crate) fn App() -> Element {
                     .as_ref()
                     .map(|f| file_service::ancestor_dirs(&path, f))
                     .unwrap_or_default();
-                switch_project(path.clone(), vec![path], exp, pick);
+                switch_project(path.clone(), vec![path], exp, pick, TabPolicy::Swap);
             }
         }
     };
@@ -962,34 +1048,44 @@ pub(crate) fn App() -> Element {
         _ => {}
     });
 
-    // Watch Zed: on a project switch, swap the root, open a representative
-    // markdown file in a new active tab, and expand the directories leading to
-    // it. Existing tabs are kept. Only the base window tracks Zed; secondary
-    // windows (Cmd+N) remain pinned to their current project.
+    // Watch Zed and Orca: on a project switch, swap the root, open a
+    // representative markdown file in a new active tab, and expand the
+    // directories leading to it. Existing tabs are kept. Only the base window
+    // follows; secondary windows (Cmd+N) remain pinned to their current project.
     use_future(move || async move {
         if !is_base_window {
-            return; // secondary windows don't follow Zed
+            return; // secondary windows don't follow an editor
         }
-        let mut subscription = services::watch_service::zed_projects();
-        while let Some(active) = subscription.rx.recv().await {
-            // Read the *current* sync mode here (not a thread snapshot): the
-            // watch thread always notifies; policy is applied on the async side.
+        let mut subscription = services::watch_service::project_sources();
+        // What we have landed on, so a watcher's startup report cannot arrive
+        // late and undo a switch the user made in the meantime.
+        let mut landing = sync::Landing::default();
+        while let Some(first) = subscription.rx.recv().await {
+            // Read the *current* policy here (not a thread snapshot): the watch
+            // threads always notify; policy is applied on the async side.
+            let policy = sync::Policy {
+                source: sync_source(),
+                skip_worktrees: sync_skip_worktrees(),
+            };
+            let mut burst = vec![first];
+            while let Ok(next) = subscription.rx.try_recv() {
+                burst.push(next);
+            }
+            let Some(event) =
+                sync::admit_burst(&mut landing, policy, &files::is_git_worktree, burst)
+            else {
+                continue;
+            };
             let decision = sync_mode().decide();
             if !decision.update_root {
                 continue; // Off: ignore the switch entirely.
             }
-            if let Some(p) = active {
+            if let Some(p) = event.project {
                 // Multi-root aware: a Zed workspace may have several roots.
                 let new_roots = p.roots();
                 let Some(primary) = new_roots.first().cloned() else {
                     continue;
                 };
-                // Don't follow Zed into a linked worktree: with docs kept on
-                // the main checkout, a worktree switch would swap the viewer
-                // to a tree that has nothing to show.
-                if sync_skip_worktrees() && files::is_git_worktree(&primary) {
-                    continue;
-                }
                 // Representative markdown is picked from the primary root.
                 let pick = file_service::pick_markdown(&primary);
                 let exp = pick
@@ -997,8 +1093,12 @@ pub(crate) fn App() -> Element {
                     .map(|f| file_service::ancestor_dirs_multi(&new_roots, f))
                     .unwrap_or_default();
                 // SelfPinned updates the sidebar but does not steal the tab.
-                let open_pick = if decision.open_markdown { pick } else { None };
-                switch_project(primary, new_roots, exp, open_pick);
+                let (open_pick, tab_policy) = if decision.open_markdown {
+                    (pick, TabPolicy::Swap)
+                } else {
+                    (None, TabPolicy::Keep)
+                };
+                switch_project(primary, new_roots, exp, open_pick, tab_policy);
             }
         }
     });
@@ -1033,11 +1133,20 @@ pub(crate) fn App() -> Element {
         let current_roots = roots();
         let current_overlay = overlay.peek().clone();
         let generation = tree_generation.write().advance();
-        if current_roots.is_empty() {
+        // Only a project switch empties the sidebar. A plain rescan (focus
+        // regain, palette, a file created on disk) keeps the current tree on
+        // screen until the new one lands — clearing first is what made the
+        // sidebar blink on every refresh.
+        let shows_other_project = {
+            let shown = trees.peek();
+            !shown.is_empty() && !shown.iter().map(|(root, _)| root).eq(current_roots.iter())
+        };
+        if shows_other_project {
             trees.set(Vec::new());
+        }
+        if current_roots.is_empty() {
             return;
         }
-        trees.set(Vec::new());
         spawn(async move {
             let result = tokio::task::spawn_blocking(move || {
                 current_roots
@@ -1305,6 +1414,7 @@ pub(crate) fn App() -> Element {
         let cfg = config::Config {
             theme: theme(),
             sync_mode: persisted_sync_mode(),
+            sync_source: persisted_sync_source(),
             zoom: zoom(),
             favorites: favorites(),
             window_width: win_w(),
@@ -1842,11 +1952,13 @@ pub(crate) fn App() -> Element {
                 };
                 set_sync(new_mode);
                 let label = match new_mode {
-                    theme::SyncMode::Auto => "Sync: Auto (following Zed)",
-                    theme::SyncMode::SelfPinned => "Sync: Self (pinned)",
-                    theme::SyncMode::Off => "Sync: Off",
+                    theme::SyncMode::Auto => {
+                        format!("Sync: Auto (following {})", sync_source().label())
+                    }
+                    theme::SyncMode::SelfPinned => "Sync: Self (pinned)".to_string(),
+                    theme::SyncMode::Off => "Sync: Off".to_string(),
                 };
-                show_toast(label.into());
+                show_toast(label);
             }
             ZoomIn => zoom.set(theme::zoom_in(zoom())),
             ZoomOut => zoom.set(theme::zoom_out(zoom())),
@@ -1898,10 +2010,11 @@ pub(crate) fn App() -> Element {
                     let export_pane = app_state::pane::focused_pane_index(split(), active_pane());
                     if let Some(file) = focused_file() {
                         let dir = export_dir(&export_dir_sig());
+                        let live_dark = appearance() == theme::Appearance::Dark;
                         spawn(async move {
                             // Capture the rendered body (with SVG diagrams) from
                             // the live view, then wrap + write a white-page doc.
-                            let script = js::export_capture_js(export_pane);
+                            let script = js::export_capture_js(export_pane, live_dark);
                             let body = document::eval(&script)
                                 .recv::<String>()
                                 .await
@@ -2104,7 +2217,7 @@ pub(crate) fn App() -> Element {
                                                                         let exp = pick.as_ref()
                                                                             .map(|f| file_service::ancestor_dirs(&open_path, f))
                                                                             .unwrap_or_default();
-                                                                        switch_project(open_path.clone(), vec![open_path.clone()], exp, pick);
+                                                                        switch_project(open_path.clone(), vec![open_path.clone()], exp, pick, TabPolicy::Swap);
                                                                     } else {
                                                                         open_active(open_path.clone());
                                                                     }
@@ -2313,6 +2426,8 @@ pub(crate) fn App() -> Element {
                         theme,
                         sync_mode,
                         persisted_sync_mode,
+                        sync_source,
+                        persisted_sync_source,
                         zoom,
                         win_w,
                         win_h,
@@ -2404,7 +2519,7 @@ pub(crate) fn App() -> Element {
                                 .as_ref()
                                 .map(|f| file_service::ancestor_dirs(&path, f))
                                 .unwrap_or_default();
-                            switch_project(path.clone(), vec![path], exp, pick);
+                            switch_project(path.clone(), vec![path], exp, pick, TabPolicy::Swap);
                         },
                         on_open_folder: move |_| {
                             proj_menu_open.set(false);
@@ -2418,7 +2533,7 @@ pub(crate) fn App() -> Element {
                                         .as_ref()
                                         .map(|f| file_service::ancestor_dirs(&path, f))
                                         .unwrap_or_default();
-                                    switch_project(path.clone(), vec![path], exp, pick);
+                                    switch_project(path.clone(), vec![path], exp, pick, TabPolicy::Swap);
                                 }
                             });
                         },
