@@ -86,12 +86,26 @@ impl SyncSource {
     }
 }
 
+/// What a project switch onto a linked git worktree does: show the worktree's
+/// main repository instead (`worktrees::redirect`, where the overlay
+/// aggregates every worktree's docs into one tree), ignore the switch, or open
+/// the worktree as it is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorktreeSwitch {
+    #[default]
+    Main,
+    Skip,
+    Follow,
+}
+
 /// The follow policy a burst is judged against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Policy {
     pub source: SyncSource,
-    /// Ignore Zed switches into a linked git worktree.
-    pub skip_worktrees: bool,
+    /// What a switch onto a linked git worktree does. Only `Skip` concerns the
+    /// burst; `Main` is applied later, by `worktrees::redirect`.
+    pub worktree: WorktreeSwitch,
 }
 
 /// Whether an event from `origin` may drive a project switch.
@@ -127,17 +141,15 @@ pub fn admit(landing: Landing, event: &SyncEvent) -> Option<Landing> {
     allowed.then_some(Landing::Startup(event.origin))
 }
 
-/// Whether this event is a Zed switch into a linked worktree, which the follow
-/// ignores.
-///
-/// With docs kept on the main checkout, a worktree switch would swap the viewer
-/// to a tree that has nothing to show. Orca is exempt — it is a worktree
-/// manager, so its switches are worktree switches by definition and skipping
-/// them would disable the follow entirely.
+/// Whether this event is a Zed switch into a linked worktree that
+/// `worktree_switch: skip` drops. Orca is exempt — it is a worktree manager,
+/// so its switches are worktree switches by definition and skipping them would
+/// disable the follow entirely. `main` keeps the event instead, so
+/// `worktrees::redirect` can put the viewer on the parent checkout.
 ///
 /// `is_worktree` touches the disk, so it is asked at most once per Zed event.
 fn skipped(policy: Policy, event: &SyncEvent, is_worktree: &dyn Fn(&Path) -> bool) -> bool {
-    if !policy.skip_worktrees || event.origin != SyncOrigin::Zed {
+    if policy.worktree != WorktreeSwitch::Skip || event.origin != SyncOrigin::Zed {
         return false;
     }
     event
@@ -252,7 +264,7 @@ mod tests {
     fn follow_all() -> Policy {
         Policy {
             source: SyncSource::Auto,
-            skip_worktrees: true,
+            worktree: WorktreeSwitch::Skip,
         }
     }
 
@@ -466,28 +478,33 @@ mod tests {
     }
 
     #[test]
-    fn worktreeスキップはOrcaには効かない() {
+    fn worktreeイベントを落とすのはZedのskipだけ() {
         let is_worktree = |p: &Path| p == Path::new("/w");
+        for (mode, origin) in [
+            (WorktreeSwitch::Skip, SyncOrigin::Orca),
+            (WorktreeSwitch::Main, SyncOrigin::Zed),
+            (WorktreeSwitch::Main, SyncOrigin::Orca),
+            (WorktreeSwitch::Follow, SyncOrigin::Zed),
+            (WorktreeSwitch::Follow, SyncOrigin::Orca),
+        ] {
+            let policy = Policy {
+                source: SyncSource::Auto,
+                worktree: mode,
+            };
+            assert_eq!(
+                landed_with(policy, &is_worktree, vec![vec![event(origin, Some("/w"))]]),
+                Some("/w".to_string()),
+                "{mode:?} / {origin:?}"
+            );
+        }
+        // The one dropped combination.
         assert_eq!(
             landed_with(
                 follow_all(),
                 &is_worktree,
-                vec![vec![event(SyncOrigin::Orca, Some("/w"))]]
-            ),
-            Some("/w".to_string())
-        );
-        // And not at all when the setting is off.
-        let policy = Policy {
-            source: SyncSource::Auto,
-            skip_worktrees: false,
-        };
-        assert_eq!(
-            landed_with(
-                policy,
-                &is_worktree,
                 vec![vec![event(SyncOrigin::Zed, Some("/w"))]]
             ),
-            Some("/w".to_string())
+            None
         );
     }
 
@@ -495,7 +512,7 @@ mod tests {
     fn 追従しないソースは着地を奪わない() {
         let policy = Policy {
             source: SyncSource::Zed,
-            skip_worktrees: true,
+            worktree: WorktreeSwitch::Skip,
         };
         assert_eq!(
             landed_with(

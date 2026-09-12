@@ -313,15 +313,43 @@ allowlist 方式で再構築する安全な生 HTML サブセット（`<img>` / 
 | **手順** | Zed で別ウィンドウを開いた後、同じプロジェクトに戻ってフォーカスする |
 | **期待結果** | mzed の表示が変化しない（タブが再ロードされない、スクロール位置が保たれる） |
 
-### ZED-06 git worktree に追従しない
+### ZED-06 Zed で worktree を開いたときの 3 択
 
 | 項目 | 内容 |
 |---|---|
-| **前提** | あるリポで `git worktree add` した worktree が存在。mzed は main の checkout を表示中（sync: auto、`sync_skip_worktrees`: ON） |
-| **手順** | 1. Zed でその worktree を開く。2. 設定 → プロジェクト連動 → 「git worktree に追従しない」を OFF にして再度 worktree を開く |
-| **期待結果** | 1. mzed の表示は変わらない（main のまま）。2. 従来どおり worktree に切り替わる |
-| **備考** | 判定は `.git` がファイルかどうか（submodule checkout も同様にスキップされる）。CLI や Cmd+O で明示的に開くのは制限しない |
-| **自動化済み** | `src/files.rs` の `is_git_worktreeはgitファイルのみ真` |
+| **前提** | あるリポで `git worktree add` した worktree が存在。mzed は別のプロジェクトを表示中（sync: auto） |
+| **手順** | 設定 → プロジェクト連動 → 「worktree を開いたとき」を 1. 親リポジトリに切り替える（既定） 2. 無視する 3. そのまま開く の順に変え、それぞれで Zed からその worktree を開く |
+| **期待結果** | 1. mzed が **main の checkout** に切り替わり、サイドバーに worktree 側の md も合成されている。2. 表示が変わらない。3. worktree 自体が開く |
+| **備考** | 判定は `.git` がファイルかどうか（submodule checkout も同様）。親が引けない通常の checkout は 1. でも付け替わらない |
+| **自動化済み** | `src/files.rs` の `is_git_worktreeはgitファイルのみ真`、`src/worktrees.rs` の `redirect` 系 4 テスト、`src/sync.rs` の `worktreeイベントを落とすのはZedのskipだけ` |
+
+### ZED-09 明示的に開いた worktree も親に集約される
+
+| 項目 | 内容 |
+|---|---|
+| **前提** | `worktree_switch`: `main`（既定）。linked worktree のパスが分かっている |
+| **手順** | 1. `mzed <worktree のパス>` を実行。2. Cmd+O からその worktree を選ぶ（無ければ「フォルダを開く」で選択）。3. worktree のフォルダをウィンドウにドラッグ&ドロップ。4. お気に入りに登録した worktree の行をクリック |
+| **期待結果** | どの経路でも main の checkout が開く（ヘッダのプロジェクト名が main のフォルダ名になる） |
+| **備考** | `skip` では明示操作を制限しない（worktree がそのまま開く）。`skip` は Zed 由来の切替だけに効く |
+
+### ZED-10 旧 `sync_skip_worktrees` が移行される
+
+| 項目 | 内容 |
+|---|---|
+| **前提** | `~/.config/mzed/config.json` に `"sync_skip_worktrees": true`（または `false`）があり、`worktree_switch` が無い |
+| **手順** | 1. mzed を起動し、数秒後に config.json を見る。2. `mzed serve <dir>` だけを実行して config.json の更新時刻を見る |
+| **期待結果** | 1. `worktree_switch` が `"skip"`（`false` なら `"follow"`）になり、`sync_skip_worktrees` が消えている。設定画面の「worktree を開いたとき」も同じ値を表示する。2. config.json は書き換わらない（読み込みは書き込まない） |
+| **自動化済み** | `src/config.rs` の `旧sync_skip_worktreesはworktree_switchへ移行する` ほか 2 テスト |
+
+### ZED-11 同じリポジトリの worktree 間を移ってもタブが変わらない
+
+| 項目 | 内容 |
+|---|---|
+| **前提** | `worktree_switch`: `main`（既定）。1 つのリポジトリに worktree が 2 つ以上。mzed はその main を表示中で、代表 Markdown 以外のファイルをアクティブタブにし、フォルダをいくつか開いておく |
+| **手順** | 1. Zed / Orca で worktree A に移る。2. 続けて worktree B に移る。3. main 自体に戻る |
+| **期待結果** | いずれもアクティブタブ・タブの並び・ツリーの展開状態・スクロール位置が変わらない（どれも親から見れば同じプロジェクト。代表 Markdown が開き直されない） |
+| **備考** | 壊れた worktree 登録（`gitdir` の指す先が消えている）を開いた場合は付け替えず、その worktree がそのまま開く（`/tmp` などの無関係なディレクトリに飛ばない） |
+| **自動化済み** | `src/worktrees.rs` の `redirectは同じ親の別worktreeを同じ選択に写す` / `main_root_ofは壊れたgitdirを親と誤認しない`、`src/app.rs` の `same_selection_needs_the_whole_root_set` |
 
 ### ZED-07 worktree オーバーレイ: 本文が最新の checkout を映す
 
@@ -352,13 +380,13 @@ allowlist 方式で再構築する安全な生 HTML サブセット（`<img>` / 
 | **期待結果** | 1.5 秒以内に mzed のプロジェクトが切り替わり、代表 Markdown が開く |
 | **備考** | 状態は `~/Library/Application Support/orca/profiles/<profile>/orca-data.json`（Orca の未文書化内部ファイル） |
 
-### ORC-02 Orca の worktree には追従する（`sync_skip_worktrees` の対象外）
+### ORC-02 Orca の worktree 切替も親に集約される（`skip` の対象外）
 
 | 項目 | 内容 |
 |---|---|
-| **前提** | `sync_skip_worktrees`: ON（既定）。Orca に linked worktree（`.git` がファイル）の workspace がある |
-| **手順** | Orca でその worktree に切り替える |
-| **期待結果** | mzed がその worktree に切り替わる（Zed 経由なら無視される切替でも Orca 経由なら追従する） |
+| **前提** | Orca に linked worktree（`.git` がファイル）の workspace がある |
+| **手順** | 「worktree を開いたとき」を 1. 親リポジトリに切り替える（既定） 2. 無視する の順に変え、それぞれ Orca でその worktree に切り替える |
+| **期待結果** | 1. mzed が main の checkout に切り替わり、サイドバーに worktree 側の md も合成されている。2. **worktree 自体に切り替わる**（`skip` は Zed 由来だけに効く） |
 | **備考** | Orca は worktree 管理アプリなので、スキップすると連動そのものが成立しない |
 
 ### ORC-03 追従元の切り替え

@@ -51,7 +51,7 @@ pub(crate) fn Settings(
     mut task_view_date_order: Signal<config::DateOrder>,
     mut project_aliases: Signal<Vec<config::ProjectAlias>>,
     mut project_menu_hidden: Signal<Vec<PathBuf>>,
-    mut sync_skip_worktrees: Signal<bool>,
+    mut worktree_switch: Signal<WorktreeSwitch>,
     dark: bool,
 ) -> Element {
     let win = dioxus::desktop::use_window();
@@ -70,6 +70,7 @@ pub(crate) fn Settings(
     let cur_theme = theme();
     let cur_sync = sync_mode();
     let cur_sync_source = sync_source();
+    let cur_worktree = worktree_switch();
     let zoom_pct = (zoom() * 100.0).round() as i32;
 
     // Left-nav item style: highlighted when it is the current category.
@@ -946,16 +947,25 @@ pub(crate) fn Settings(
                                 div {
                                     style: "{row} border-top: 1px solid {row_border};",
                                     div {
-                                        div { style: row_title, "git worktree に追従しない" }
+                                        div { style: row_title, "worktree を開いたとき" }
                                         div {
                                             style: "{row_desc}",
-                                            "Zed で worktree（.git がファイルのリポ）を開いても表示を切り替えない。docs を main 側で持つ運用向け。Orca は worktree 管理アプリなので対象外"
+                                            "git worktree（.git がファイルのリポ）を開いたときの表示。親リポジトリに切り替えると、各 worktree の md も親のツリーに合成される。「無視する」は Zed 由来の切替だけが対象"
                                         }
                                     }
-                                    input {
-                                        r#type: "checkbox", checked: sync_skip_worktrees(),
-                                        style: "width: 16px; height: 16px; cursor: pointer;",
-                                        onchange: move |e| sync_skip_worktrees.set(e.value() == "true"),
+                                    select {
+                                        class: "mdo-select",
+                                        style: "{select_style}",
+                                        onchange: move |e| {
+                                            worktree_switch.set(match e.value().as_str() {
+                                                "skip" => WorktreeSwitch::Skip,
+                                                "follow" => WorktreeSwitch::Follow,
+                                                _ => WorktreeSwitch::Main,
+                                            });
+                                        },
+                                        option { value: "main", selected: cur_worktree == WorktreeSwitch::Main, "親リポジトリに切り替える" }
+                                        option { value: "skip", selected: cur_worktree == WorktreeSwitch::Skip, "無視する" }
+                                        option { value: "follow", selected: cur_worktree == WorktreeSwitch::Follow, "そのまま開く" }
                                     }
                                 }
                             },

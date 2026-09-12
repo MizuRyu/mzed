@@ -53,6 +53,7 @@
 | F-07 | プロジェクトオープン時に最終更新ファイルを自動で開く（config トグル、デフォルト OFF） | ★★☆ |
 | F-08 | `mzed serve` — フォルダをブラウザで表示（127.0.0.1 固定、live-reload、画面共有向け） → [12](12-web-serve.md) | ★★☆ |
 | F-09 | worktree オーバーレイ — linked worktree 側の docs 更新を main 表示に反映（mtime 最新を表示。ツリー合成・Task View 帰属・全文検索も対象） → [05](05-zed-integration.md) | ★★☆ |
+| F-10 | worktree を開いたら親リポジトリに付け替える（`worktree_switch`: main / skip / follow、既定 main。プロジェクトの新規オープン経路に適用） → [05](05-zed-integration.md) | ★★☆ |
 
 ### UI
 

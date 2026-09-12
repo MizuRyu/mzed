@@ -120,13 +120,32 @@ v1 は単一ルートを主対象とし、マルチルートは「全ルート�
 
 モード切替はコマンドパレット（P-02）、`--sync` フラグ（L-04）、または固定トグル（P-07: Cmd+Shift+L、auto⇄self を即切替）から。Cmd+Shift+L のトーストは追従元を反映する（`Sync: Auto (following Zed & Orca)` / `(following Orca)`）。
 
-### git worktree への追従スキップ（`sync_skip_worktrees`、既定 ON）
+### worktree を開いたときの挙動（`worktree_switch`、既定 `main`）
 
-Zed が開いたプロジェクトルートの `.git` が**ファイル**（linked worktree / submodule checkout の目印。通常の checkout はディレクトリ）の場合、切替を無視して現在の表示を維持する。docs を main の checkout 側で持つ運用では、worktree に追従しても見せるものがないため。設定（プロジェクト連動タブ）で OFF にすれば従来どおり追従する。**Orca 由来の切替は対象外**（→「Orca 連動」）。CLI / D&D / Cmd+O など明示操作で worktree を開くのは制限しない（Zed 連動経路のみのガード）。
+プロジェクトルートの `.git` が**ファイル**なら linked worktree（または submodule checkout）である。通常の checkout は `.git` がディレクトリ。その worktree を開こうとしたときの挙動を 3 択で選ぶ（設定 > プロジェクト連動）。
+
+| 値 | 挙動 | 適用される経路 |
+|---|---|---|
+| `main`（既定） | `.git` ファイルから親 checkout を引き、**親リポジトリを開く**。worktree 側の docs はオーバーレイで親のツリーに合成される（→ 次節） | プロジェクトの新規オープン経路すべて（Zed / Orca / CLI / D&D / Cmd+O / お気に入り）。セッション復元・単一ファイルの直接オープン・Task View は対象外 |
+| `skip` | 切替を無視して現在の表示を維持する | Zed 由来のみ |
+| `follow` | worktree をそのまま開く（`worktree_switch` 導入前の `sync_skip_worktrees: false` 相当） | — |
+
+`main` を既定にしたのは、docs を main 側で持つ運用でも worktree 側で書いた docs を見たいという要求に、オーバーレイ（次節）が既に応えているため。親に集約すれば全 worktree + 親の docs が 1 つのツリーに見える。`skip`（旧既定）は「worktree に追従しても見せるものがない」前提の挙動で、オーバーレイが無かった時代の名残。
+
+実装は 2 箇所に分かれる。
+
+- `skip` の判定は追従ループのバースト畳み込みの**前**（`sync::skipped`）。理由は末尾「Orca 連動」に同じ。
+- `main` の付け替えは `worktrees::redirect(primary, roots, mode)` が担う。`switch_project` に渡す前の唯一の入口（`app.rs` の `open_project`）で呼ぶので、どの経路から来た切替も同じ扱いになる。roots 全体を親へ写して順序を保ち、同じ親になった root は 1 つに畳む（`[main, main の worktree]` は `[main]`）。primary は写した結果の先頭（各 root の `.git` を読むのは 1 回だけ）。
+- 付け替えた結果が**今表示している選択と同じなら何もしない**（`same_selection`）。同じリポジトリの worktree A → B の移動は、親から見れば同じプロジェクトなので、代表 Markdown を開き直してタブを奪ってはいけない。`pick_markdown` の走査もこの判定より後に置く。
+- 親が引けない root はそのまま残す。`main_root_of` は git の実レイアウト `<main>/.git/worktrees/<name>` が**ディスク上に揃っていること**を要求する（指示先が実在し、その親が `worktrees`、その親が `.git` ディレクトリ）。祖先をそのまま親と見なすと、消えた worktree の `gitdir: /tmp/gone/x` が `/tmp` を「親リポジトリ」にしてしまう。submodule checkout（`<super>/.git/modules/<name>`）も対象外 — superproject のオーバーレイは submodule の docs を見られないので、付け替えると逆に見えなくなる。
+- 開くファイル（`pick_markdown`）は**付け替え後**の親側で選ぶ。worktree で更新されたファイルはオーバーレイで親に見える。
+- 性能: `main_root_of` は `.git` ファイルの読み取り 1 回 + 数回の `stat`。イベント 1 件につき root ごと 1 回で、オーバーレイの走査コストは増えない（親を表示するのは従来と同じ経路）。
+
+`skip` が Zed 由来だけなのは、Orca が worktree 管理アプリで、その切替は定義上 worktree 切替だから（スキップすると Orca 連動そのものが無効になる）。CLI / D&D / Cmd+O の明示操作も `skip` では制限しない（ユーザーが指名したものは開く）。
 
 ### worktree オーバーレイ（常時 ON）
 
-追従スキップの補完。mzed が main の checkout を表示している間、そのリポジトリの **linked worktree 側で更新された docs を UI 上 main に重ねて見せる**。worktree で作業しつつ mzed は main を開いたままでよい。ファイルのコピー・書き込みは一切しない。
+`worktree_switch: main` の相方。mzed が main の checkout を表示している間、そのリポジトリの **linked worktree 側で更新された docs を UI 上 main に重ねて見せる**。worktree で作業しつつ mzed は main を開いたままでよい。ファイルのコピー・書き込みは一切しない。
 
 - **検出**: `.git/worktrees/<name>/gitdir` を直接読む（git コマンド起動なし）。消えた worktree の残骸登録は無視。worktree の追加/削除はツリー監視経由で自動反映
 - **本文**: 表示パスは常に main 側の「論理パス」。読み込み時に main + 各 worktree の同相対パスを **mtime 比較し最新の実体**を表示（出所表示なし）。全候補をウォッチし、どの checkout の保存でも即再解決
@@ -236,9 +255,9 @@ Orca はファイルを置き換えて書くので、監視対象はファイル
 
 `sync_mode`（auto / self / off）は上位ポリシーとして両ソースに等しくかかる。`off` なら Orca の切替も無視し、`self` なら root だけ更新する。
 
-`sync_skip_worktrees` は **Zed 由来のイベントにだけ**適用する。Orca は worktree 管理アプリで、その切替は定義上 worktree 切替なので、スキップすると Orca 連動そのものが機能しなくなる。
+`worktree_switch: skip` は **Zed 由来のイベントにだけ**適用する。Orca は worktree 管理アプリで、その切替は定義上 worktree 切替なので、スキップすると Orca 連動そのものが機能しなくなる。`main` は Orca 由来にも適用する（Orca で worktree に移ると mzed は親リポジトリを表示する）。
 
-スキップ判定は畳み込みの**前**に行い、対象の Zed イベントはバーストから取り除く。畳み込みの後に判定すると、捨てるはずの Zed イベントが着地を確定させ、同じバーストに居た有効な Orca イベントまで消えてしまう（起動時も、スキップされた Zed の初回報告が Orca の初回報告を拒否してしまう）。`sync_source` による絞り込みも同じ理由で畳み込みの前に置く。
+スキップ判定は畳み込みの**前**に行い、対象の Zed イベントはバーストから取り除く。畳み込みの後に判定すると、捨てるはずの Zed イベントが着地を確定させ、同じバーストに居た有効な Orca イベントまで消えてしまう（起動時も、スキップされた Zed の初回報告が Orca の初回報告を拒否してしまう）。`sync_source` による絞り込みも同じ理由で畳み込みの前に置く。`main` の付け替えは逆に畳み込みの**後**（切替が 1 つに決まってから）で、イベントの取捨には関与しない。
 
 ### エッジケース
 

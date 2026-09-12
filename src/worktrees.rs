@@ -1,12 +1,14 @@
 //! Git worktree overlay: show a worktree's fresher docs on the main checkout.
 //!
 //! The user keeps mzed on the main repository while editing in a linked
-//! worktree (Zed + `sync_skip_worktrees`). Every path mzed holds (tabs,
+//! worktree ([`redirect`] puts it there). Every path mzed holds (tabs,
 //! sidebar, session) stays a *logical* main-checkout path; this module maps a
 //! logical path to whichever checkout — main or any linked worktree — has the
 //! most recently modified copy, purely for display. Nothing is ever written
 //! or copied between checkouts.
 
+use crate::sync::WorktreeSwitch;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -37,17 +39,60 @@ pub fn linked_worktrees(root: &Path) -> Vec<PathBuf> {
 
 /// Main-checkout root of a linked worktree, from its `.git` file
 /// (`gitdir: <main>/.git/worktrees/<name>`). `None` when `root` is not a
-/// linked worktree or the pointer is malformed.
+/// linked worktree or the pointer no longer describes that layout.
+///
+/// why: taking the third ancestor on trust turns a dangling or foreign pointer
+/// into a "main repository" that merely happens to exist — `gitdir: /tmp/gone/x`
+/// would answer `/tmp`, and a submodule's `<super>/.git/modules/<name>` would
+/// answer the superproject, whose overlay cannot see the submodule's docs. So
+/// every level of git's own layout is demanded, on disk.
 pub fn main_root_of(root: &Path) -> Option<PathBuf> {
     let git_file = root.join(".git");
     if !git_file.is_file() {
         return None;
     }
     let content = std::fs::read_to_string(&git_file).ok()?;
-    let gitdir = content.strip_prefix("gitdir:")?.trim();
-    // <main>/.git/worktrees/<name> → <main>
-    let main = Path::new(gitdir).ancestors().nth(3)?;
-    main.is_dir().then(|| main.to_path_buf())
+    let gitdir = Path::new(content.strip_prefix("gitdir:")?.trim());
+    if !gitdir.is_dir() {
+        return None;
+    }
+    let mut up = gitdir.ancestors().skip(1);
+    let worktrees = up.next()?;
+    let git_dir = up.next()?;
+    let main = up.next()?;
+    let laid_out = worktrees.file_name() == Some(OsStr::new("worktrees"))
+        && git_dir.file_name() == Some(OsStr::new(".git"))
+        && git_dir.is_dir();
+    laid_out.then(|| main.to_path_buf())
+}
+
+/// Rewrite a project switch target under `mode`, before the app acts on it.
+/// Under [`WorktreeSwitch::Main`] every root that is a linked worktree becomes
+/// its main checkout (duplicates collapse: `[main, wt-of-main]` is one root);
+/// the other modes pass the target through untouched. Roots with no main
+/// checkout — an ordinary clone, or a broken `gitdir` pointer — stay as they
+/// are, so this never leaves the app with a project that isn't there.
+///
+/// `primary` is `roots[0]` at every call site, so the mapped head *is* the
+/// resolved primary; resolving it again would re-read the same `.git` file.
+/// It is still taken as an argument for the (unused) empty-roots case.
+pub fn redirect(
+    primary: PathBuf,
+    roots: Vec<PathBuf>,
+    mode: WorktreeSwitch,
+) -> (PathBuf, Vec<PathBuf>) {
+    if mode != WorktreeSwitch::Main {
+        return (primary, roots);
+    }
+    let mut mapped: Vec<PathBuf> = Vec::with_capacity(roots.len());
+    for root in roots {
+        let root = main_root_of(&root).unwrap_or(root);
+        if !mapped.contains(&root) {
+            mapped.push(root);
+        }
+    }
+    let primary = mapped.first().cloned().unwrap_or(primary);
+    (primary, mapped)
 }
 
 /// The overlay for one window's project roots: each main root paired with its
@@ -160,6 +205,28 @@ mod tests {
         (dir, main, wt)
     }
 
+    /// Register one more worktree on the same main checkout.
+    fn add_worktree(main: &Path, name: &str) -> PathBuf {
+        let admin = main.join(".git/worktrees").join(name);
+        let wt = main.parent().unwrap().join(name);
+        fs::create_dir_all(&admin).unwrap();
+        fs::create_dir_all(&wt).unwrap();
+        fs::write(
+            admin.join("gitdir"),
+            format!("{}\n", wt.join(".git").display()),
+        )
+        .unwrap();
+        fs::write(wt.join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
+        wt
+    }
+
+    /// An ordinary directory: no `.git` at all, so never redirected.
+    fn plain_dir(under: &Path, name: &str) -> PathBuf {
+        let p = under.join(name);
+        fs::create_dir_all(&p).unwrap();
+        p
+    }
+
     #[test]
     fn linked_worktreesは登録済みworktreeを返す() {
         let (_dir, main, wt) = fixture();
@@ -178,6 +245,142 @@ mod tests {
         let (_dir, main, wt) = fixture();
         assert_eq!(main_root_of(&wt), Some(main.clone()));
         assert_eq!(main_root_of(&main), None);
+    }
+
+    #[test]
+    fn main_root_ofは壊れたgitdirを親と誤認しない() {
+        let (dir, _main, wt) = fixture();
+        let broken = dir.path().join("broken");
+        fs::create_dir_all(&broken).unwrap();
+
+        // Target gone, but its third ancestor exists: /tmp must not become
+        // the main repository.
+        fs::write(wt.join(".git"), "gitdir: /tmp/mzed-no-such-wt/x/y\n").unwrap();
+        assert_eq!(main_root_of(&wt), None);
+
+        // Target exists but is not git's layout (no `.git`/`worktrees` levels).
+        let foreign = plain_dir(dir.path(), "a/b/c");
+        fs::write(wt.join(".git"), format!("gitdir: {}\n", foreign.display())).unwrap();
+        assert_eq!(main_root_of(&wt), None);
+
+        // A submodule checkout points at `<super>/.git/modules/<name>`; the
+        // superproject's overlay cannot see its docs, so it is not a parent.
+        let modules = plain_dir(dir.path(), "super/.git/modules/sub");
+        fs::write(wt.join(".git"), format!("gitdir: {}\n", modules.display())).unwrap();
+        assert_eq!(main_root_of(&wt), None);
+
+        // Not a pointer at all.
+        fs::write(wt.join(".git"), "something else\n").unwrap();
+        assert_eq!(main_root_of(&wt), None);
+        assert_eq!(main_root_of(&broken), None);
+    }
+
+    #[test]
+    fn redirectは混在rootsの順序とprimaryを保つ() {
+        let (dir, main, wt) = fixture();
+        let a = plain_dir(dir.path(), "plain-a");
+        let b = plain_dir(dir.path(), "plain-b");
+
+        // Non-worktree head keeps the primary; the worktree in the middle is
+        // the only root rewritten.
+        assert_eq!(
+            redirect(
+                a.clone(),
+                vec![a.clone(), wt.clone(), b.clone()],
+                WorktreeSwitch::Main
+            ),
+            (a.clone(), vec![a.clone(), main.clone(), b.clone()])
+        );
+        // Worktree head: the primary becomes its main checkout.
+        assert_eq!(
+            redirect(
+                wt.clone(),
+                vec![wt.clone(), a.clone()],
+                WorktreeSwitch::Main
+            ),
+            (main.clone(), vec![main.clone(), a.clone()])
+        );
+    }
+
+    #[test]
+    fn redirectは同じ親の別worktreeを同じ選択に写す() {
+        let (_dir, main, wt) = fixture();
+        let wt2 = add_worktree(&main, "wt-other");
+        let expected = (main.clone(), vec![main.clone()]);
+        assert_eq!(
+            redirect(wt.clone(), vec![wt], WorktreeSwitch::Main),
+            expected
+        );
+        assert_eq!(
+            redirect(wt2.clone(), vec![wt2], WorktreeSwitch::Main),
+            expected
+        );
+    }
+
+    #[test]
+    fn redirectはmainモードでworktreeを親に付け替える() {
+        let (_dir, main, wt) = fixture();
+        assert_eq!(
+            redirect(wt.clone(), vec![wt.clone()], WorktreeSwitch::Main),
+            (main.clone(), vec![main.clone()])
+        );
+    }
+
+    #[test]
+    fn redirectはskipとfollowでは何もしない() {
+        let (_dir, _main, wt) = fixture();
+        for mode in [WorktreeSwitch::Skip, WorktreeSwitch::Follow] {
+            assert_eq!(
+                redirect(wt.clone(), vec![wt.clone()], mode),
+                (wt.clone(), vec![wt.clone()])
+            );
+        }
+    }
+
+    #[test]
+    fn redirectは通常checkoutを付け替えない() {
+        let (_dir, main, _wt) = fixture();
+        let plain = PathBuf::from("/nonexistent/plain");
+        for mode in [
+            WorktreeSwitch::Main,
+            WorktreeSwitch::Skip,
+            WorktreeSwitch::Follow,
+        ] {
+            assert_eq!(
+                redirect(main.clone(), vec![main.clone()], mode),
+                (main.clone(), vec![main.clone()])
+            );
+            assert_eq!(
+                redirect(plain.clone(), vec![plain.clone()], mode),
+                (plain.clone(), vec![plain.clone()])
+            );
+        }
+    }
+
+    #[test]
+    fn redirectは同じ親になったrootを1つに畳む() {
+        let (_dir, main, wt) = fixture();
+        let other = PathBuf::from("/nonexistent/other");
+        assert_eq!(
+            redirect(
+                wt.clone(),
+                vec![wt.clone(), main.clone(), other.clone()],
+                WorktreeSwitch::Main
+            ),
+            (main.clone(), vec![main.clone(), other])
+        );
+    }
+
+    #[test]
+    fn worktree_switchはsnake_caseでシリアライズされる() {
+        assert_eq!(
+            serde_json::to_string(&WorktreeSwitch::Main).unwrap(),
+            "\"main\""
+        );
+        assert_eq!(
+            serde_json::from_str::<WorktreeSwitch>("\"follow\"").unwrap(),
+            WorktreeSwitch::Follow
+        );
     }
 
     #[test]

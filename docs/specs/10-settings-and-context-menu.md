@@ -29,7 +29,7 @@ Cmd+, で開く単一の設定画面。Obsidian 風に左ナビ + 右ペイン�
 | `frontmatter_default_open` | bool | false | frontmatter の「Metadata」折りたたみを開いた状態で表示。設定 General でトグル、表示中ドキュメントに即反映（`mzed serve` はサーバ起動時の値） |
 | `project_aliases` | `[{path, alias}]` | `[]` | プロジェクトフォルダに付ける論理名（別名） |
 | `project_menu_hidden` | `[string]` | `[]` | プロジェクト切替（Cmd+O）から隠すパス。候補行の ✕ で追加、設定 General の「非表示のプロジェクト」で復元。Zed の履歴自体は編集できないためローカルの重ね掛け |
-| `sync_skip_worktrees` | bool | `true` | Zed が git worktree（`.git` がファイル）を開いても追従しない（→ [05](05-zed-integration.md)）。プロジェクト連動タブでトグル。Orca 由来の切替には効かない |
+| `worktree_switch` | enum | `main` | git worktree（`.git` がファイル）を開いたときの挙動。`main`(親リポジトリに切り替える) / `skip`(無視する) / `follow`(そのまま開く)（→ [05](05-zed-integration.md)）。プロジェクト連動タブで選択。旧 `sync_skip_worktrees: true/false` は読み込み時に `skip`/`follow` へ読み替え、次の config 保存（起動直後に 1 回走る）で旧キーが消える。読み込み自体は書き込まない（`mzed serve` やテストもユーザーの config を読むため） |
 | `sync_source` | enum | `auto` | 追従元 `auto`(Zed & Orca) / `zed` / `orca`（→ [05](05-zed-integration.md)）。プロジェクト連動タブで選択 |
 
 #### プロジェクトの別名（`project_aliases`）

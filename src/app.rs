@@ -770,7 +770,7 @@ pub(crate) fn App() -> Element {
     let task_view_date_order = use_signal(|| saved_config.task_view_date_order);
     let project_aliases = use_signal(|| saved_config.project_aliases.clone());
     let mut project_menu_hidden = use_signal(|| saved_config.project_menu_hidden.clone());
-    let sync_skip_worktrees = use_signal(|| saved_config.sync_skip_worktrees);
+    let worktree_switch = use_signal(|| saved_config.worktree_switch);
     let serve_port = use_signal(|| saved_config.serve_port);
     let mut task_view_open = use_signal(|| false);
     // Bumped to force a Task View re-scan (Cmd+R and the ↻ header button).
@@ -956,6 +956,26 @@ pub(crate) fn App() -> Element {
         }
     };
 
+    // why: every switch (Zed, Orca, CLI, drop, Cmd+O, favourite) goes through
+    // here, so `worktree_switch` applies once and the representative markdown
+    // is picked on the roots the redirect left. Keep (SelfPinned) opens nothing.
+    let mut open_project = move |primary: PathBuf, roots_in: Vec<PathBuf>, policy: TabPolicy| {
+        let (primary, new_roots) = crate::worktrees::redirect(primary, roots_in, worktree_switch());
+        // why: two worktrees of one repository redirect to the same selection,
+        // so moving between them must be a no-op. Picking a representative
+        // markdown first would scan the disk and then steal the active tab.
+        if same_selection(root().as_deref(), &roots.read(), &primary, &new_roots) {
+            return;
+        }
+        let pick = file_service::pick_markdown(&primary);
+        let expanded_set = pick
+            .as_ref()
+            .map(|f| file_service::ancestor_dirs_multi(&new_roots, f))
+            .unwrap_or_default();
+        let open_pick = (policy == TabPolicy::Swap).then_some(pick).flatten();
+        switch_project(primary, new_roots, expanded_set, open_pick, policy);
+    };
+
     // Open a standalone file without touching the project: the file gets a tab
     // and renders, but its directory never joins `roots`, so the sidebar tree
     // and the Task View / watcher scope stay on the current project. Its parent
@@ -1015,12 +1035,7 @@ pub(crate) fn App() -> Element {
         }
         Msg::OpenDir { path } => {
             if path.is_dir() {
-                let pick = file_service::pick_markdown(&path);
-                let exp = pick
-                    .as_ref()
-                    .map(|f| file_service::ancestor_dirs(&path, f))
-                    .unwrap_or_default();
-                switch_project(path.clone(), vec![path], exp, pick, TabPolicy::Swap);
+                open_project(path.clone(), vec![path], TabPolicy::Swap);
             }
         }
     };
@@ -1103,7 +1118,7 @@ pub(crate) fn App() -> Element {
             // threads always notify; policy is applied on the async side.
             let policy = sync::Policy {
                 source: sync_source(),
-                skip_worktrees: sync_skip_worktrees(),
+                worktree: worktree_switch(),
             };
             let mut burst = vec![first];
             while let Ok(next) = subscription.rx.try_recv() {
@@ -1124,19 +1139,13 @@ pub(crate) fn App() -> Element {
                 let Some(primary) = new_roots.first().cloned() else {
                     continue;
                 };
-                // Representative markdown is picked from the primary root.
-                let pick = file_service::pick_markdown(&primary);
-                let exp = pick
-                    .as_ref()
-                    .map(|f| file_service::ancestor_dirs_multi(&new_roots, f))
-                    .unwrap_or_default();
                 // SelfPinned updates the sidebar but does not steal the tab.
-                let (open_pick, tab_policy) = if decision.open_markdown {
-                    (pick, TabPolicy::Swap)
+                let tab_policy = if decision.open_markdown {
+                    TabPolicy::Swap
                 } else {
-                    (None, TabPolicy::Keep)
+                    TabPolicy::Keep
                 };
-                switch_project(primary, new_roots, exp, open_pick, tab_policy);
+                open_project(primary, new_roots, tab_policy);
             }
         }
     });
@@ -1670,7 +1679,7 @@ pub(crate) fn App() -> Element {
             task_view_date_order: task_view_date_order(),
             project_aliases: project_aliases(),
             project_menu_hidden: project_menu_hidden(),
-            sync_skip_worktrees: sync_skip_worktrees(),
+            worktree_switch: worktree_switch(),
             serve_port: serve_port(),
             tab_insert: tab_insert(),
         };
@@ -2558,11 +2567,7 @@ pub(crate) fn App() -> Element {
                                                                 style: "display: flex; align-items: center; gap: 6px; padding: 5px 8px 5px 14px; cursor: pointer; user-select: none; font: 13px -apple-system, sans-serif; line-height: 1.4; color: {fav_fg}; border-radius: 4px;",
                                                                 onclick: move |_| {
                                                                     if open_path.is_dir() {
-                                                                        let pick = file_service::pick_markdown(&open_path);
-                                                                        let exp = pick.as_ref()
-                                                                            .map(|f| file_service::ancestor_dirs(&open_path, f))
-                                                                            .unwrap_or_default();
-                                                                        switch_project(open_path.clone(), vec![open_path.clone()], exp, pick, TabPolicy::Swap);
+                                                                        open_project(open_path.clone(), vec![open_path.clone()], TabPolicy::Swap);
                                                                     } else {
                                                                         open_active(open_path.clone());
                                                                     }
@@ -2819,7 +2824,7 @@ pub(crate) fn App() -> Element {
                         task_view_date_order,
                         project_aliases,
                         project_menu_hidden,
-                        sync_skip_worktrees,
+                        worktree_switch,
                         dark,
                     }
                 }
@@ -2882,12 +2887,7 @@ pub(crate) fn App() -> Element {
                             if root().as_ref() == Some(&path) {
                                 return;
                             }
-                            let pick = file_service::pick_markdown(&path);
-                            let exp = pick
-                                .as_ref()
-                                .map(|f| file_service::ancestor_dirs(&path, f))
-                                .unwrap_or_default();
-                            switch_project(path.clone(), vec![path], exp, pick, TabPolicy::Swap);
+                            open_project(path.clone(), vec![path], TabPolicy::Swap);
                         },
                         on_open_folder: move |_| {
                             proj_menu_open.set(false);
@@ -2896,12 +2896,7 @@ pub(crate) fn App() -> Element {
                             spawn(async move {
                                 if let Some(handle) = rfd::AsyncFileDialog::new().pick_folder().await {
                                     let path = handle.path().to_path_buf();
-                                    let pick = file_service::pick_markdown(&path);
-                                    let exp = pick
-                                        .as_ref()
-                                        .map(|f| file_service::ancestor_dirs(&path, f))
-                                        .unwrap_or_default();
-                                    switch_project(path.clone(), vec![path], exp, pick, TabPolicy::Swap);
+                                    open_project(path.clone(), vec![path], TabPolicy::Swap);
                                 }
                             });
                         },

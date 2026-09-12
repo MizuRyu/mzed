@@ -131,7 +131,7 @@ mzed serve [DIR] [-p PORT] [--no-open]
 | `task_view_date_order` | `"desc"` \| `"asc"` | `"desc"` | グループ内タスクの `created` 並び順（新しい順／古い順） |
 | `project_aliases` | `[{"path": "/path", "alias": "名前"}]` | `[]` | プロジェクトの別名。Cmd+O の検索でパスに加えて別名でもヒットし、別名付きフォルダは Zed 履歴に無くても候補に出る。設定 General から追加/削除 |
 | `project_menu_hidden` | `["/path", ...]` | `[]` | Cmd+O の候補から隠すパス。候補行ホバーの ✕ で追加、設定 General「非表示のプロジェクト」で復元 |
-| `sync_skip_worktrees` | bool | `true` | Zed が git worktree（`.git` がファイル）を開いても追従しない。プロジェクト連動タブでトグル。**Orca 由来の切替には効かない**（Orca は worktree 管理アプリのため） |
+| `worktree_switch` | `"main"` \| `"skip"` \| `"follow"` | `"main"` | git worktree（`.git` がファイル）を開いたときの挙動 → 下表。プロジェクト連動タブで選択。旧 `sync_skip_worktrees: true/false` は読み込み時に `"skip"`/`"follow"` へ読み替えられ、起動直後の config 保存で旧キーが消える |
 | `serve_port` | int | `6280` | アプリ内 Web 共有（コマンドパレット「Web Share: Start / Stop」）のポート。CLI `mzed serve` は `--port` を使う。設定 UI は無く config.json 直編集。リクエストログは `~/Library/Logs/mzed/serve.log` |
 
 ### sync_mode の詳細（`src/theme.rs`）
@@ -143,6 +143,16 @@ mzed serve [DIR] [-p PORT] [--no-open]
 | `"off"` | 連動を完全に無視 |
 
 `sync_mode` は「どこまで追うか」、`sync_source` は「誰を追うか」。両方が掛かる。
+
+### worktree_switch の詳細（`src/worktrees.rs` の `redirect`）
+
+| 値 | 挙動 | 効く経路 |
+|----|------|---------|
+| `"main"` | `.git` ファイルから親 checkout を引いて**親リポジトリを開く**。worktree 側の md はオーバーレイで親のツリーに合成される | プロジェクトの新規オープン経路すべて（Zed / Orca / CLI / D&D / Cmd+O / お気に入り）。セッション復元・単一ファイルのオープンは対象外 |
+| `"skip"` | 切替を無視して現在の表示を維持 | Zed 由来のみ（明示操作は制限しない） |
+| `"follow"` | worktree をそのまま開く | — |
+
+通常の checkout（`.git` がディレクトリ）は `"main"` でも付け替わらない。
 
 ### Orca 連動（`src/orca.rs`）
 

@@ -5,7 +5,7 @@
 //! partial or older file still loads. FS read/write is split into thin helpers
 //! ([`load`]/[`save`]) that the unit tests skip.
 
-use crate::sync::SyncSource;
+use crate::sync::{SyncSource, WorktreeSwitch};
 use crate::tabs::TabInsert;
 use crate::theme::{SyncMode, Theme};
 use anyhow::{Context, Result};
@@ -195,11 +195,11 @@ pub struct Config {
     /// mzed, so hiding is a local overlay rather than a deletion.
     #[serde(default)]
     pub project_menu_hidden: Vec<PathBuf>,
-    /// Ignore Zed switches into git worktrees (a repo whose `.git` is a file).
-    /// For the docs-live-on-main workflow: editing in a worktree shouldn't
-    /// steal the viewer away from the main checkout.
-    #[serde(default = "default_true")]
-    pub sync_skip_worktrees: bool,
+    /// What opening a git worktree (a repo whose `.git` is a file) does. For
+    /// the docs-live-on-main workflow: the viewer belongs on the main
+    /// checkout, where the overlay aggregates every worktree's docs.
+    #[serde(default)]
+    pub worktree_switch: WorktreeSwitch,
     /// Port for the in-app web share (palette「Web Share: Toggle」). The CLI
     /// `mzed serve` takes its port from `--port` instead.
     #[serde(default = "default_serve_port")]
@@ -309,7 +309,7 @@ impl Default for Config {
             task_view_date_order: DateOrder::default(),
             project_aliases: Vec::new(),
             project_menu_hidden: Vec::new(),
-            sync_skip_worktrees: true,
+            worktree_switch: WorktreeSwitch::default(),
             serve_port: default_serve_port(),
             tab_insert: TabInsert::default(),
         }
@@ -355,12 +355,42 @@ fn config_path() -> Option<PathBuf> {
     config_dir().map(|d| d.join("config.json"))
 }
 
+/// Adopt the legacy `sync_skip_worktrees: bool` as `worktree_switch`.
+/// Only applies when the new key is absent: once written, the user's choice
+/// there is the answer. The old key then disappears on the app's next config
+/// save, because [`Config`] no longer carries it.
+fn migrate_worktree_switch(text: &str, cfg: &mut Config) {
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(text) else {
+        return;
+    };
+    if json.get("worktree_switch").is_some() {
+        return;
+    }
+    let Some(skip) = json
+        .get("sync_skip_worktrees")
+        .and_then(serde_json::Value::as_bool)
+    else {
+        return;
+    };
+    cfg.worktree_switch = if skip {
+        WorktreeSwitch::Skip
+    } else {
+        WorktreeSwitch::Follow
+    };
+}
+
 /// Load the persisted config, or `Config::default()` if absent/unreadable.
+/// why: reading must never write — `mzed serve` and the unit tests load the
+/// user's real config, and a save from there would edit a file they only read.
 pub fn load() -> Config {
-    config_path()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|s| Config::from_json(&s).ok())
-        .unwrap_or_default()
+    let Some(text) = config_path().and_then(|p| std::fs::read_to_string(p).ok()) else {
+        return Config::default();
+    };
+    let Ok(mut cfg) = Config::from_json(&text) else {
+        return Config::default();
+    };
+    migrate_worktree_switch(&text, &mut cfg);
+    cfg
 }
 
 /// Atomically write the config to disk, creating its directory if needed.
@@ -442,6 +472,37 @@ mod tests {
         assert!(c.project_aliases.is_empty());
         assert_eq!(c.sync_source, SyncSource::Auto);
         assert_eq!(c.tab_insert, TabInsert::Start);
+        assert_eq!(c.worktree_switch, WorktreeSwitch::Main);
+    }
+
+    #[test]
+    fn 旧sync_skip_worktreesはworktree_switchへ移行する() {
+        for (legacy, expected) in [
+            (r#"{"sync_skip_worktrees":true}"#, WorktreeSwitch::Skip),
+            (r#"{"sync_skip_worktrees":false}"#, WorktreeSwitch::Follow),
+        ] {
+            let mut c = Config::from_json(legacy).expect("parse");
+            migrate_worktree_switch(legacy, &mut c);
+            assert_eq!(c.worktree_switch, expected);
+            assert!(!c.to_json().contains("sync_skip_worktrees"));
+        }
+    }
+
+    #[test]
+    fn worktree_switchがあれば旧キーは無視される() {
+        let text = r#"{"sync_skip_worktrees":true,"worktree_switch":"follow"}"#;
+        let mut c = Config::from_json(text).expect("parse");
+        migrate_worktree_switch(text, &mut c);
+        assert_eq!(c.worktree_switch, WorktreeSwitch::Follow);
+    }
+
+    #[test]
+    fn 旧キーが無ければ移行しない() {
+        for text in ["{}", r#"{"theme":"dark"}"#, "not json"] {
+            let mut c = Config::default();
+            migrate_worktree_switch(text, &mut c);
+            assert_eq!(c.worktree_switch, WorktreeSwitch::Main);
+        }
     }
 
     #[test]
