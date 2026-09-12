@@ -57,7 +57,16 @@ pub(crate) fn TreeView(
                     }
                     span { style: "overflow: hidden; text-overflow: ellipsis; white-space: nowrap;", "{node.name}" }
                 }
-                span { style: "color: {muted}; font-size: 11px; opacity: 0.7; flex: 0 0 auto;", "{node.md_count}" }
+                span {
+                    style: "display: flex; align-items: center; gap: 6px; flex: 0 0 auto;",
+                    if node.unread_count > 0 {
+                        span {
+                            style: "color: {unread_color(dark)}; font-size: 11px; opacity: 0.85;",
+                            "{node.unread_count}"
+                        }
+                    }
+                    span { style: "color: {muted}; font-size: 11px; opacity: 0.7;", "{node.md_count}" }
+                }
             }
             if open {
                 for child in node.children.clone() {
@@ -92,6 +101,9 @@ pub(crate) fn TreeView(
                     on_context.call(CtxMenu { x: c.x as i32, y: c.y as i32, path: ctx_path.clone(), is_dir: false });
                 },
                 {file_icon(muted)}
+                if node.unread {
+                    {unread_dot(dark)}
+                }
                 if editing {
                     input {
                         value: "{rename_buf}",

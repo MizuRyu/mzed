@@ -65,6 +65,70 @@ pub fn fuzzy_match(query: &str, candidate: &str) -> Option<i32> {
     }
 }
 
+/// Match quality, best first. An exact name beats a prefix, which beats a
+/// contiguous substring, which beats a scattered subsequence hit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Tier {
+    Exact,
+    Prefix,
+    Substring,
+    Fuzzy,
+}
+
+/// Best tier (and its fuzzy score) `query` reaches across `keys`. `query` is
+/// already lowercased and non-empty. `None` when no key matches at all.
+fn best_tier(query: &str, keys: &[String]) -> Option<(Tier, i32)> {
+    let mut best: Option<(Tier, i32)> = None;
+    for key in keys {
+        let lower = key.to_lowercase();
+        let hit = if lower == query {
+            Some((Tier::Exact, 0))
+        } else if lower.starts_with(query) {
+            Some((Tier::Prefix, 0))
+        } else if lower.contains(query) {
+            Some((Tier::Substring, 0))
+        } else {
+            fuzzy_match(query, key).map(|s| (Tier::Fuzzy, s))
+        };
+        best = match (best, hit) {
+            (Some((bt, bs)), Some((t, s))) if t < bt || (t == bt && s > bs) => Some((t, s)),
+            (None, hit) => hit,
+            (best, _) => best,
+        };
+    }
+    best
+}
+
+/// Filter and rank `items` by `query` into tiers: exact → prefix → substring →
+/// fuzzy score, with the most recent item first inside a tier. `keys` returns
+/// every string an item may be matched by (a file offers its relative path, its
+/// name and its extension-less name); `recency` is any "bigger is newer" stamp.
+/// An empty query returns every item, most recent first.
+pub fn rank_tiered<'a, T, K, R>(query: &str, items: &'a [T], keys: K, recency: R) -> Vec<&'a T>
+where
+    K: Fn(&'a T) -> Vec<String>,
+    R: Fn(&'a T) -> u64,
+{
+    let q = query.trim().to_lowercase();
+    let mut scored: Vec<(&T, Tier, i32, u64)> = if q.is_empty() {
+        items
+            .iter()
+            .map(|it| (it, Tier::Exact, 0, recency(it)))
+            .collect()
+    } else {
+        items
+            .iter()
+            .filter_map(|it| best_tier(&q, &keys(it)).map(|(t, s)| (it, t, s, recency(it))))
+            .collect()
+    };
+    scored.sort_by(|a, b| {
+        a.1.cmp(&b.1)
+            .then_with(|| b.2.cmp(&a.2))
+            .then_with(|| b.3.cmp(&a.3))
+    });
+    scored.into_iter().map(|(it, _, _, _)| it).collect()
+}
+
 /// Filter and rank `items` by `query`, returning matching items paired with
 /// their score, sorted best-first. The `key` closure extracts the text to match
 /// for each item. Ties keep the original order (stable sort).
@@ -144,5 +208,106 @@ mod tests {
         let items = vec!["alpha", "beta", "gamma"];
         let ranked = rank("zzz", &items, |s| s);
         assert!(ranked.is_empty());
+    }
+
+    /// (keys, recency) rows for the tiered tests.
+    fn row(keys: &[&str], recency: u64) -> (Vec<String>, u64) {
+        (keys.iter().map(|s| s.to_string()).collect(), recency)
+    }
+
+    fn ranked_keys<'a>(query: &str, items: &'a [(Vec<String>, u64)]) -> Vec<&'a str> {
+        rank_tiered(query, items, |it| it.0.clone(), |it| it.1)
+            .into_iter()
+            .map(|it| it.0[0].as_str())
+            .collect()
+    }
+
+    #[test]
+    fn rank_tieredはtier順に並ぶ() {
+        let items = vec![
+            row(&["replan.md"], 0),         // substring
+            row(&["planning-notes.md"], 0), // prefix
+            row(&["plan.md", "plan"], 0),   // exact (extension-less key)
+            row(&["p-l-a-n-x.md"], 0),      // fuzzy only
+        ];
+        assert_eq!(
+            ranked_keys("plan", &items),
+            vec!["plan.md", "planning-notes.md", "replan.md", "p-l-a-n-x.md"]
+        );
+    }
+
+    #[test]
+    fn rank_tieredは拡張子なしでも完全一致() {
+        let items = vec![row(&["docs/plan.md", "plan.md", "plan"], 0)];
+        let ranked = rank_tiered("plan", &items, |it| it.0.clone(), |it| it.1);
+        assert_eq!(ranked.len(), 1);
+        // 完全一致なので、前方一致だけの候補より上に来る。
+        let mixed = vec![
+            row(&["plan-b.md", "plan-b"], 9),
+            row(&["docs/plan.md", "plan.md", "plan"], 1),
+        ];
+        assert_eq!(
+            ranked_keys("plan", &mixed),
+            vec!["docs/plan.md", "plan-b.md"]
+        );
+    }
+
+    #[test]
+    fn 同tierでは新しい方が上() {
+        let items = vec![
+            row(&["plan-old.md"], 100),
+            row(&["plan-new.md"], 500),
+            row(&["plan-mid.md"], 300),
+        ];
+        assert_eq!(
+            ranked_keys("plan", &items),
+            vec!["plan-new.md", "plan-mid.md", "plan-old.md"]
+        );
+    }
+
+    #[test]
+    fn ファジー同士はスコアが優先されrecencyはタイブレークのみ() {
+        // どちらも substring/prefix/exact ではない（scattered な subsequence のみ）
+        // ので、両方 Tier::Fuzzy。連続一致+単語境界を多く持つ方が高スコア。
+        let items = vec![
+            row(&["xpxlxaxnx.md"], 999), // 低スコア・新しい
+            row(&["p-l-a-n-x.md"], 1),   // 高スコア・古い
+        ];
+        assert_eq!(
+            ranked_keys("plan", &items),
+            vec!["p-l-a-n-x.md", "xpxlxaxnx.md"]
+        );
+
+        // 同スコア同士（末尾の飾り文字だけが違う）は recency で決まる。
+        let tie = vec![row(&["p-l-a-n-x.md"], 1), row(&["p-l-a-n-y.md"], 2)];
+        assert_eq!(
+            ranked_keys("plan", &tie),
+            vec!["p-l-a-n-y.md", "p-l-a-n-x.md"]
+        );
+    }
+
+    #[test]
+    fn 空クエリは全件が最近順() {
+        let items = vec![row(&["a.md"], 1), row(&["b.md"], 3), row(&["c.md"], 2)];
+        assert_eq!(ranked_keys("", &items), vec!["b.md", "c.md", "a.md"]);
+        assert_eq!(ranked_keys("   ", &items).len(), 3);
+    }
+
+    #[test]
+    fn rank_tieredはフォルダ名を含むクエリで当たる() {
+        let items = vec![
+            row(&["docs/specs/05-zed.md", "05-zed.md", "05-zed"], 0),
+            row(&["README.md", "README"], 0),
+        ];
+        assert_eq!(
+            ranked_keys("specs/05", &items),
+            vec!["docs/specs/05-zed.md"]
+        );
+    }
+
+    #[test]
+    fn rank_tieredはマッチしない項目を除外する() {
+        let items = vec![row(&["alpha.md"], 0), row(&["beta.md"], 0)];
+        assert!(ranked_keys("zzzq", &items).is_empty());
     }
 }

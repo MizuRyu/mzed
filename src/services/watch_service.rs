@@ -100,8 +100,8 @@ pub(crate) fn files_changes(files: Vec<PathBuf>) -> WatchSubscription<()> {
     }
 }
 
-pub(crate) fn tree_changes(roots: Vec<PathBuf>) -> WatchSubscription<()> {
-    let (tx, rx) = mpsc::unbounded_channel::<()>();
+pub(crate) fn tree_changes(roots: Vec<PathBuf>) -> WatchSubscription<watcher::TreeChange> {
+    let (tx, rx) = mpsc::unbounded_channel::<watcher::TreeChange>();
     let mut stop_txs = Vec::new();
     let mut join_handles = Vec::new();
     for root in roots {
@@ -109,7 +109,8 @@ pub(crate) fn tree_changes(roots: Vec<PathBuf>) -> WatchSubscription<()> {
         let (stop_tx, stop_rx) = std_mpsc::channel::<()>();
         stop_txs.push(stop_tx);
         let join_handle = std::thread::spawn(move || {
-            let _ = watcher::watch_tree_until(&root, &stop_rx, move || tx.send(()).is_ok());
+            let _ =
+                watcher::watch_tree_until(&root, &stop_rx, move |change| tx.send(change).is_ok());
         });
         join_handles.push(join_handle);
     }

@@ -13,7 +13,7 @@ pub(crate) fn Palette(
     mut file_mode: Signal<bool>,
     mut open: Signal<bool>,
     on_open: EventHandler<PathBuf>,
-    files: Vec<PathBuf>,
+    files: Vec<files::PaletteFile>,
     html_export_on: bool,
     pdf_export_on: bool,
     dark: bool,
@@ -33,13 +33,12 @@ pub(crate) fn Palette(
             _ => true,
         })
         .collect();
-    let file_rows: Vec<PathBuf> = if file_mode() {
-        fuzzy::rank(&q, &files, |p| {
-            p.file_name().and_then(|s| s.to_str()).unwrap_or("")
-        })
-        .into_iter()
-        .map(|(p, _)| p.clone())
-        .collect()
+    let file_rows: Vec<files::PaletteFile> = if file_mode() {
+        let mut ranked = fuzzy::rank_tiered(&q, &files, |f| f.keys(), |f| f.mtime);
+        // Unread outranks every tier; the sort is stable, so the tiered order
+        // survives inside each group.
+        ranked.sort_by_key(|f| !f.unread);
+        ranked.into_iter().cloned().collect()
     } else {
         Vec::new()
     };
@@ -71,6 +70,7 @@ pub(crate) fn Palette(
     let overlay_bg = if dark { "#161b22" } else { "#ffffff" };
     let overlay_border = if dark { "#30363d" } else { "#d0d7de" };
     let text_color = if dark { "#e6edf3" } else { "#1f2328" };
+    let muted = if dark { "#8b949e" } else { "#57606a" };
     let sel_bg = if dark { "#1f6feb" } else { "#0969da" };
 
     // Commit the current selection.
@@ -78,8 +78,8 @@ pub(crate) fn Palette(
     let cmd_rows_for_enter = cmd_rows.clone();
     let mut commit = move || {
         if file_mode() {
-            if let Some(p) = file_rows_for_enter.get(cur) {
-                on_open.call(p.clone());
+            if let Some(f) = file_rows_for_enter.get(cur) {
+                on_open.call(f.path.clone());
                 open.set(false);
             }
         } else if let Some(c) = cmd_rows_for_enter.get(cur) {
@@ -155,17 +155,19 @@ pub(crate) fn Palette(
                     "data-mdo-scroll": "palette",
                     style: "max-height: 50vh; overflow: auto; padding: 6px;",
                     if file_mode() {
-                        for (i, p) in file_rows.iter().enumerate() {
+                        for (i, f) in file_rows.iter().enumerate() {
                             {
-                                let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
-                                let sub = p.display().to_string();
+                                let name = f.name.clone();
+                                let dir = f.dir().to_string();
                                 let bg = if i == cur { sel_bg } else { "transparent" };
                                 let fg = if i == cur { "#ffffff" } else { text_color };
-                                let pick = p.clone();
+                                let dir_fg = if i == cur { "#ffffffcc" } else { muted };
+                                let unread = f.unread;
+                                let pick = f.path.clone();
                                 rsx! {
                                     div {
                                         "data-mdo-row": "{i}",
-                                        style: "padding: 8px 12px; border-radius: 6px; cursor: pointer; background: {bg}; color: {fg}; font: 14px -apple-system, sans-serif;",
+                                        style: "display: flex; align-items: baseline; gap: 8px; padding: 8px 12px; border-radius: 6px; cursor: pointer; background: {bg}; color: {fg}; font: 14px -apple-system, sans-serif;",
                                         onmouseenter: move |_| {
                                             if hover_takes_selection(i, cur, (*last_key_at.peek()).map(|t| t.elapsed())) {
                                                 sel_src.set(SelChange::Hover);
@@ -176,8 +178,14 @@ pub(crate) fn Palette(
                                             on_open.call(pick.clone());
                                             open.set(false);
                                         },
-                                        div { "{name}" }
-                                        div { style: "font-size: 11px; opacity: 0.6;", "{sub}" }
+                                        if unread {
+                                            {unread_dot(dark)}
+                                        }
+                                        span { style: "flex: 0 0 auto;", "{name}" }
+                                        span {
+                                            style: "min-width: 0; flex: 1 1 auto; font-size: 12px; color: {dir_fg}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                                            "{dir}"
+                                        }
                                     }
                                 }
                             }

@@ -1,6 +1,7 @@
 pub(crate) mod generation;
 pub(crate) mod pane;
 pub(crate) mod rename;
+pub(crate) mod unread;
 
 #[cfg(test)]
 mod generation_contract_tests {

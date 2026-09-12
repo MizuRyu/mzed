@@ -38,6 +38,8 @@ pub enum Action {
     OpenNotesFolder,
     /// Start/stop the `mzed serve` share server for the current project.
     ToggleWebShare,
+    /// Clear the unread markers for the whole project.
+    MarkAllRead,
 }
 
 /// A selectable command entry: a human label plus its action.
@@ -80,6 +82,7 @@ pub fn commands(share_url: Option<&str>) -> Vec<Command> {
         Command::new("Search Files…", Action::FileSearch),
         Command::new("Search in Project…", Action::FullTextSearch),
         Command::new("Copy File Path", Action::CopyFilePath),
+        Command::new("Mark All as Read", Action::MarkAllRead),
         Command::new("Add Note", Action::AddNote),
         Command::new("Open Notes Folder", Action::OpenNotesFolder),
         Command::new(share_label, Action::ToggleWebShare),
@@ -166,6 +169,13 @@ mod tests {
         assert!(filter_commands("note", None)
             .iter()
             .any(|c| c.action == Action::AddNote));
+    }
+
+    #[test]
+    fn 一括既読コマンドがreadクエリで返る() {
+        assert!(filter_commands("read", None)
+            .iter()
+            .any(|c| c.action == Action::MarkAllRead));
     }
 
     #[test]

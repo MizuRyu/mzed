@@ -4,6 +4,7 @@
 //! nested) appear in the tree. Each directory carries a recursive markdown
 //! count for an Obsidian-style badge.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// A node in the markdown tree.
@@ -14,6 +15,13 @@ pub struct TreeNode {
     pub is_dir: bool,
     /// For directories: number of markdown files in the subtree. For files: 1.
     pub md_count: usize,
+    /// why: taken during the walk so the palette and the unread marker never
+    /// stat again. Seconds since the epoch (0 when unreadable); for a directory,
+    /// the newest mtime in its subtree.
+    pub mtime: u64,
+    /// Filled in by [`crate::app_state::unread`]; directories carry the count.
+    pub unread: bool,
+    pub unread_count: usize,
     pub children: Vec<TreeNode>,
 }
 
@@ -30,6 +38,27 @@ pub(crate) fn is_markdown(p: &Path) -> bool {
 /// has a `.git` directory.
 pub(crate) fn is_git_worktree(root: &Path) -> bool {
     root.join(".git").is_file()
+}
+
+/// Modification time in whole seconds. why: the only stat in the walk, and it
+/// is paid for markdown files alone — directories take the max of their children.
+fn entry_mtime(entry: &std::fs::DirEntry) -> u64 {
+    entry
+        .metadata()
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Modification time in whole seconds, or `None` if `p` can't be stat-ed.
+pub fn path_mtime(p: &Path) -> Option<u64> {
+    std::fs::metadata(p)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
 }
 
 fn is_ignored_dir(name: &str) -> bool {
@@ -85,6 +114,9 @@ fn build_dir(dir: &Path, depth: usize) -> Vec<TreeNode> {
                     name,
                     is_dir: true,
                     md_count,
+                    mtime: children.iter().map(|c| c.mtime).max().unwrap_or(0),
+                    unread: false,
+                    unread_count: 0,
                     children,
                 });
             }
@@ -94,6 +126,9 @@ fn build_dir(dir: &Path, depth: usize) -> Vec<TreeNode> {
                 name,
                 is_dir: false,
                 md_count: 1,
+                mtime: entry_mtime(&entry),
+                unread: false,
+                unread_count: 0,
                 children: Vec::new(),
             });
         }
@@ -145,9 +180,12 @@ fn merge_trees(a: Vec<TreeNode>, b: Vec<TreeNode>) -> Vec<TreeNode> {
             Some(existing) if existing.is_dir => {
                 let children = merge_trees(std::mem::take(&mut existing.children), node.children);
                 existing.md_count = children.iter().map(|c| c.md_count).sum();
+                existing.mtime = children.iter().map(|c| c.mtime).max().unwrap_or(0);
                 existing.children = children;
             }
-            Some(_) => {} // same file in both checkouts → one logical node
+            // Same file in both checkouts → one logical node, carrying the
+            // mtime of the copy `Overlay::resolve` will display (the freshest).
+            Some(existing) => existing.mtime = existing.mtime.max(node.mtime),
             None => merged.push(node),
         }
     }
@@ -171,6 +209,117 @@ fn collect_md(nodes: &[TreeNode], out: &mut Vec<PathBuf>) {
         } else {
             out.push(n.path.clone());
         }
+    }
+}
+
+/// The mtime already sitting in the tree for `path`, without stat-ing it again.
+/// Used to mark a file "seen" at the moment it is opened or live-reloaded.
+pub fn find_mtime(nodes: &[TreeNode], path: &Path) -> Option<u64> {
+    for n in nodes {
+        if n.path == path {
+            return Some(n.mtime);
+        }
+        if n.is_dir && path.starts_with(&n.path) {
+            if let Some(m) = find_mtime(&n.children, path) {
+                return Some(m);
+            }
+        }
+    }
+    None
+}
+
+/// Apply freshly stat-ed mtimes to the files named in `updates`, bubbling each
+/// change up through its ancestor directories (max of children), without
+/// touching anything else in the tree. Used for a content-only fs event, where
+/// a full rescan would be a full re-stat of the project for one saved file.
+/// Returns whether anything actually changed.
+pub fn update_mtimes(nodes: &mut [TreeNode], updates: &HashMap<PathBuf, u64>) -> bool {
+    let mut changed = false;
+    for n in nodes {
+        if n.is_dir {
+            if update_mtimes(&mut n.children, updates) {
+                n.mtime = n.children.iter().map(|c| c.mtime).max().unwrap_or(0);
+                changed = true;
+            }
+        } else if let Some(&mtime) = updates.get(&n.path) {
+            if n.mtime != mtime {
+                n.mtime = mtime;
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
+/// A markdown file as the command palette sees it: the logical path plus the
+/// root-relative label it is matched and displayed by.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaletteFile {
+    pub path: PathBuf,
+    /// `docs/specs/05-zed.md`, prefixed with the root's name when multi-root.
+    pub rel: String,
+    pub name: String,
+    pub mtime: u64,
+    pub unread: bool,
+}
+
+impl PaletteFile {
+    /// Directory part of `rel`, empty at the root. Shown dimmed after the name.
+    pub fn dir(&self) -> &str {
+        match self.rel.rfind('/') {
+            Some(i) => &self.rel[..i],
+            None => "",
+        }
+    }
+
+    /// Everything a query may match: the relative path, the file name, and the
+    /// name without its extension (so `plan` exactly matches `plan.md`).
+    pub fn keys(&self) -> Vec<String> {
+        let stem = self.name.rsplit_once('.').map(|(s, _)| s).unwrap_or("");
+        let mut keys = vec![self.rel.clone(), self.name.clone()];
+        if !stem.is_empty() && stem != self.name {
+            keys.push(stem.to_string());
+        }
+        keys
+    }
+}
+
+/// Flatten per-root markdown trees into palette candidates.
+pub fn palette_files(trees: &[(PathBuf, Vec<TreeNode>)]) -> Vec<PaletteFile> {
+    let multi = trees.len() > 1;
+    let mut out = Vec::new();
+    for (root, nodes) in trees {
+        let prefix = if multi {
+            root.file_name()
+                .map(|s| format!("{}/", s.to_string_lossy()))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        collect_palette_files(nodes, root, &prefix, &mut out);
+    }
+    out
+}
+
+fn collect_palette_files(
+    nodes: &[TreeNode],
+    root: &Path,
+    prefix: &str,
+    out: &mut Vec<PaletteFile>,
+) {
+    for n in nodes {
+        if n.is_dir {
+            collect_palette_files(&n.children, root, prefix, out);
+            continue;
+        }
+        let rel = n.path.strip_prefix(root).unwrap_or(&n.path);
+        out.push(PaletteFile {
+            path: n.path.clone(),
+            rel: format!("{prefix}{}", rel.to_string_lossy()),
+            name: n.name.clone(),
+            mtime: n.mtime,
+            unread: n.unread,
+        });
     }
 }
 
@@ -235,6 +384,116 @@ mod tests {
         assert_eq!(files.len(), 2);
         assert!(files.iter().any(|p| p.ends_with("README.md")));
         assert!(files.iter().any(|p| p.ends_with("guide.md")));
+    }
+
+    #[test]
+    fn treeはmdファイルのmtimeを持つ() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("docs")).unwrap();
+        fs::write(root.join("docs/guide.md"), "# g").unwrap();
+
+        let tree = build_tree(root);
+        let docs = &tree[0];
+        let guide = &docs.children[0];
+        assert!(guide.mtime > 0, "file mtime should be read during the walk");
+        // ディレクトリは配下の最新 mtime を持つ。
+        assert_eq!(docs.mtime, guide.mtime);
+    }
+
+    #[test]
+    fn palette_filesは相対パスと名前を返す() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("docs/specs")).unwrap();
+        fs::write(root.join("docs/specs/05-zed.md"), "# z").unwrap();
+        fs::write(root.join("README.md"), "# r").unwrap();
+
+        let trees = vec![(root.to_path_buf(), build_tree(root))];
+        let files = palette_files(&trees);
+        let zed = files.iter().find(|f| f.name == "05-zed.md").unwrap();
+        assert_eq!(zed.rel, "docs/specs/05-zed.md");
+        assert_eq!(zed.dir(), "docs/specs");
+        assert_eq!(
+            zed.keys(),
+            vec!["docs/specs/05-zed.md", "05-zed.md", "05-zed"]
+        );
+        let readme = files.iter().find(|f| f.name == "README.md").unwrap();
+        assert_eq!(readme.rel, "README.md");
+        assert_eq!(readme.dir(), "");
+    }
+
+    #[test]
+    fn palette_filesは複数rootでroot名を前置する() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("alpha");
+        let b = dir.path().join("beta");
+        fs::create_dir_all(&a).unwrap();
+        fs::create_dir_all(&b).unwrap();
+        fs::write(a.join("x.md"), "# x").unwrap();
+        fs::write(b.join("y.md"), "# y").unwrap();
+
+        let trees = vec![(a.clone(), build_tree(&a)), (b.clone(), build_tree(&b))];
+        let rels: Vec<String> = palette_files(&trees).into_iter().map(|f| f.rel).collect();
+        assert_eq!(rels, vec!["alpha/x.md", "beta/y.md"]);
+    }
+
+    #[test]
+    fn find_mtimeはツリーに既にある値を返す() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("docs")).unwrap();
+        fs::write(root.join("docs/guide.md"), "# g").unwrap();
+        let tree = build_tree(root);
+
+        let path = root.join("docs/guide.md");
+        let mtime = find_mtime(&tree, &path).unwrap();
+        assert!(mtime > 0);
+        assert_eq!(find_mtime(&tree, &root.join("docs/missing.md")), None);
+    }
+
+    #[test]
+    fn update_mtimesは対象ノードとその祖先だけ更新する() {
+        let mut tree = vec![TreeNode {
+            path: PathBuf::from("/p/docs"),
+            name: "docs".into(),
+            is_dir: true,
+            md_count: 2,
+            mtime: 100,
+            unread: false,
+            unread_count: 0,
+            children: vec![
+                TreeNode {
+                    path: PathBuf::from("/p/docs/a.md"),
+                    name: "a.md".into(),
+                    is_dir: false,
+                    md_count: 1,
+                    mtime: 100,
+                    unread: false,
+                    unread_count: 0,
+                    children: vec![],
+                },
+                TreeNode {
+                    path: PathBuf::from("/p/docs/b.md"),
+                    name: "b.md".into(),
+                    is_dir: false,
+                    md_count: 1,
+                    mtime: 50,
+                    unread: false,
+                    unread_count: 0,
+                    children: vec![],
+                },
+            ],
+        }];
+        let mut updates = HashMap::new();
+        updates.insert(PathBuf::from("/p/docs/b.md"), 200);
+        assert!(update_mtimes(&mut tree, &updates));
+        assert_eq!(tree[0].children[1].mtime, 200);
+        assert_eq!(tree[0].children[0].mtime, 100); // 触っていないファイルは不変
+        assert_eq!(tree[0].mtime, 200); // 祖先ディレクトリへ最新値が伝播する
+
+        // 変化の無い更新は false を返す（既に同じ mtime）。
+        assert!(!update_mtimes(&mut tree, &updates));
     }
 
     #[test]

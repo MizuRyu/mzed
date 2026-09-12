@@ -25,6 +25,25 @@ pub struct PerProjectTabs {
     pub active: Option<PathBuf>,
 }
 
+/// Per-project reading history, keyed in [`Session::project_history`] by the
+/// project's primary root. `seen` maps a root-relative path to the mtime the
+/// file carried when it was opened; [`crate::app_state::unread`] owns the rules
+/// that keep it small.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct PerProjectHistory {
+    /// When mzed first opened this project: the floor for never-opened files.
+    #[serde(default)]
+    pub first_opened_at: u64,
+    /// When mzed last opened it; orders the Cmd+O list.
+    #[serde(default)]
+    pub last_opened_at: u64,
+    /// Last "mark all as read" (0 = never).
+    #[serde(default)]
+    pub read_all_at: u64,
+    #[serde(default)]
+    pub seen: HashMap<String, u64>,
+}
+
 fn default_sidebar_width() -> u32 {
     DEFAULT_SIDEBAR_WIDTH
 }
@@ -48,6 +67,9 @@ pub struct Session {
     /// Allows restoring the last-opened file per project across restarts.
     #[serde(default)]
     pub project_tabs: HashMap<PathBuf, PerProjectTabs>,
+    /// Reading history per project, keyed by primary root path.
+    #[serde(default)]
+    pub project_history: HashMap<PathBuf, PerProjectHistory>,
 }
 
 impl Default for Session {
@@ -58,6 +80,7 @@ impl Default for Session {
             active: None,
             sidebar_width: DEFAULT_SIDEBAR_WIDTH,
             project_tabs: HashMap::new(),
+            project_history: HashMap::new(),
         }
     }
 }
@@ -72,6 +95,7 @@ impl Session {
             active: tabs.active().cloned(),
             sidebar_width,
             project_tabs: HashMap::new(),
+            project_history: HashMap::new(),
         }
     }
 
@@ -101,6 +125,7 @@ impl Session {
         tabs: &Tabs,
         sidebar_width: u32,
         pt: &ProjectTabs,
+        project_history: HashMap<PathBuf, PerProjectHistory>,
     ) -> Self {
         let mut sess = Self::capture(roots.clone(), tabs, sidebar_width);
         let mut ptmap = HashMap::new();
@@ -130,6 +155,7 @@ impl Session {
             }
         }
         sess.project_tabs = ptmap;
+        sess.project_history = project_history;
         sess
     }
 
@@ -322,7 +348,7 @@ mod tests {
         let mut live = Tabs::default();
         live.open(p("/a/readme.md"));
 
-        let sess = Session::capture_full(vec![p("/a")], &live, 300, &pt);
+        let sess = Session::capture_full(vec![p("/a")], &live, 300, &pt, HashMap::new());
 
         assert_eq!(sess.roots, vec![p("/a")]);
         // 現プロジェクト /a のタブが記録される。
@@ -360,6 +386,26 @@ mod tests {
         let json = r#"{"roots":["/proj"],"tabs":["/proj/a.md"],"active":"/proj/a.md","sidebar_width":280}"#;
         let sess = Session::from_json(json).unwrap();
         assert!(sess.project_tabs.is_empty());
+        assert!(sess.project_history.is_empty());
+    }
+
+    #[test]
+    fn project_historyはserdeラウンドトリップできる() {
+        let mut history = HashMap::new();
+        history.insert(
+            p("/proj"),
+            PerProjectHistory {
+                first_opened_at: 100,
+                last_opened_at: 200,
+                read_all_at: 150,
+                seen: HashMap::from([("docs/a.md".to_string(), 180)]),
+            },
+        );
+        let sess = Session {
+            project_history: history,
+            ..Session::default()
+        };
+        assert_eq!(Session::from_json(&sess.to_json()).unwrap(), sess);
     }
 
     #[test]
@@ -368,10 +414,29 @@ mod tests {
         let pt = ProjectTabs::default();
         let mut live = Tabs::default();
         live.open(p("/proj/x.md"));
-        let sess = Session::capture_full(vec![p("/proj")], &live, 280, &pt);
+        let sess = Session::capture_full(vec![p("/proj")], &live, 280, &pt, HashMap::new());
         let json = sess.to_json();
         let restored = Session::from_json(&json).unwrap();
         assert_eq!(restored.project_tabs, sess.project_tabs);
+    }
+
+    #[test]
+    fn capture_fullは渡されたproject_historyを持つ() {
+        use crate::project_tabs::ProjectTabs;
+        let pt = ProjectTabs::default();
+        let live = Tabs::default();
+        let mut history = HashMap::new();
+        history.insert(
+            p("/proj"),
+            PerProjectHistory {
+                first_opened_at: 10,
+                last_opened_at: 20,
+                read_all_at: 0,
+                seen: HashMap::new(),
+            },
+        );
+        let sess = Session::capture_full(vec![p("/proj")], &live, 280, &pt, history.clone());
+        assert_eq!(sess.project_history, history);
     }
 
     #[cfg(unix)]

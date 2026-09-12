@@ -10,8 +10,14 @@ pub(crate) fn ContentToolbar(
     mut raw_view: Signal<bool>,
     has_toc: bool,
     find_open: bool,
+    /// Unread files, newest first, already trimmed to what the popover shows.
+    unread: Vec<files::PaletteFile>,
+    /// Total unread in the project (the popover list may be shorter).
+    unread_total: usize,
     dark: bool,
     on_copy: EventHandler<()>,
+    on_open: EventHandler<PathBuf>,
+    on_mark_all_read: EventHandler<()>,
 ) -> Element {
     let icon = if dark { "#c9d1d9" } else { "#57606a" };
     let on_bg = if dark { "#1f6feb" } else { "#0969da" };
@@ -26,6 +32,9 @@ pub(crate) fn ContentToolbar(
 
     let toc_on = toc_open() && has_toc;
     let raw_on = raw_view();
+    // Hover keeps working via CSS; this just lets a click pin the unread
+    // popover open (and closes it again) independent of the mouse.
+    let mut pinned_open = use_signal(|| false);
 
     let btn_style = |active: bool| {
         if active {
@@ -83,6 +92,83 @@ pub(crate) fn ContentToolbar(
                     raw_view.set(!v);
                 },
                 {toolbar_code_icon()}
+            }
+            if unread_total > 0 {
+                div {
+                    style: "height: 1px; margin: 2px 4px; background: rgba(127,127,127,0.25);",
+                }
+                div {
+                    class: if pinned_open() { "mdo-unread-wrap mdo-unread-pinned" } else { "mdo-unread-wrap" },
+                    style: "position: relative;",
+                    button {
+                        style: "display: flex; align-items: center; justify-content: center; gap: 4px; min-width: 30px; height: 30px; padding: 0 6px; border: none; border-radius: 7px; cursor: pointer; background: transparent; color: {icon};",
+                        class: "mdo-tool-btn",
+                        title: "未読 {unread_total} 件",
+                        onclick: move |_| {
+                            let v = pinned_open();
+                            pinned_open.set(!v);
+                        },
+                        {unread_dot(dark)}
+                        span { style: "font: 600 11px -apple-system, sans-serif;", "{unread_total}" }
+                    }
+                    {unread_popover(unread, dark, on_open, on_mark_all_read, pinned_open)}
+                }
+            }
+        }
+    }
+}
+
+/// The popover listing unread files, plus the "mark all read" footer. Shown on
+/// hover (CSS-only) or pinned open by a click on the badge (`pinned_open`);
+/// picking a row or marking all read un-pins it so it doesn't linger.
+fn unread_popover(
+    files: Vec<files::PaletteFile>,
+    dark: bool,
+    on_open: EventHandler<PathBuf>,
+    on_mark_all_read: EventHandler<()>,
+    mut pinned_open: Signal<bool>,
+) -> Element {
+    let bg = if dark { "#161b22" } else { "#ffffff" };
+    let border = if dark { "#30363d" } else { "#d0d7de" };
+    let fg = if dark { "#e6edf3" } else { "#1f2328" };
+    let muted = if dark { "#8b949e" } else { "#57606a" };
+    rsx! {
+        div {
+            class: "mdo-unread-popover",
+            style: "position: absolute; top: 0; right: 36px; width: 260px; max-height: 320px; overflow-y: auto; background: {bg}; border: 1px solid {border}; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,0.25); padding: 4px; color: {fg};",
+            for f in files {
+                {
+                    let p = f.path.clone();
+                    let name = f.name.clone();
+                    let dir = f.dir().to_string();
+                    rsx! {
+                        div {
+                            key: "{p.display()}",
+                            class: "mdo-unread-row",
+                            style: "display: flex; align-items: baseline; gap: 6px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font: 13px -apple-system, sans-serif;",
+                            onclick: move |_| {
+                                pinned_open.set(false);
+                                on_open.call(p.clone());
+                            },
+                            {unread_dot(dark)}
+                            span { style: "flex: 0 0 auto;", "{name}" }
+                            span {
+                                style: "min-width: 0; flex: 1 1 auto; font-size: 11px; color: {muted}; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;",
+                                "{dir}"
+                            }
+                        }
+                    }
+                }
+            }
+            div { style: "height: 1px; margin: 4px 4px; background: rgba(127,127,127,0.25);" }
+            button {
+                class: "mdo-unread-row",
+                style: "width: 100%; padding: 6px 8px; border: none; background: transparent; color: {fg}; cursor: pointer; font: 13px -apple-system, sans-serif; text-align: left; border-radius: 6px;",
+                onclick: move |_| {
+                    pinned_open.set(false);
+                    on_mark_all_read.call(());
+                },
+                "すべて既読にする"
             }
         }
     }

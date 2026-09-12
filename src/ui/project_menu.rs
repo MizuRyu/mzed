@@ -1,6 +1,16 @@
+use std::collections::HashMap;
+use std::path::Path;
 use std::time::Instant;
 
 use super::*;
+
+/// What a project row is labelled with: the user's alias, else the folder name.
+fn display_name(aliases: &[config::ProjectAlias], path: &Path) -> String {
+    config::alias_for(aliases, path)
+        .map(|a| a.to_string())
+        .or_else(|| path.file_name().map(|s| s.to_string_lossy().to_string()))
+        .unwrap_or_else(|| path.display().to_string())
+}
 
 /// Top-left project switcher dropdown (Zed-style). Lists known + recent
 /// projects (passed in as `candidates`), filterable via a search box, marks the
@@ -14,6 +24,8 @@ pub(crate) fn ProjectMenu(
     current: Option<PathBuf>,
     /// User-defined nicknames; matched by the search box and shown on the row.
     aliases: Signal<Vec<config::ProjectAlias>>,
+    /// When mzed last opened each project; orders projects of equal match.
+    last_opened: HashMap<PathBuf, u64>,
     dark: bool,
     on_pick: EventHandler<PathBuf>,
     on_open_folder: EventHandler<()>,
@@ -33,24 +45,26 @@ pub(crate) fn ProjectMenu(
     let mut last_key_at = use_signal(|| None::<Instant>);
 
     let q = query();
-    let needle = q.trim().to_lowercase();
     let alias_list = aliases();
-    // Match on the path or the alias, so a project can be found by a nickname
-    // that doesn't appear anywhere on disk.
-    let rows: Vec<PathBuf> = candidates
-        .into_iter()
-        .filter(|p| {
-            if needle.is_empty() {
-                return true;
-            }
-            if p.to_string_lossy().to_lowercase().contains(&needle) {
-                return true;
-            }
-            config::alias_for(&alias_list, p)
-                .map(|a| a.to_lowercase().contains(&needle))
-                .unwrap_or(false)
-        })
-        .collect();
+    // Matched by display name (the alias when there is one) and by full path, so
+    // a project can be found by a nickname that appears nowhere on disk or by a
+    // fragment of where it lives. Equal matches fall back to last opened.
+    let mut rows: Vec<PathBuf> = fuzzy::rank_tiered(
+        &q,
+        &candidates,
+        |p| {
+            vec![
+                display_name(&alias_list, p),
+                p.to_string_lossy().to_string(),
+            ]
+        },
+        |p| last_opened.get(p).copied().unwrap_or(0),
+    )
+    .into_iter()
+    .cloned()
+    .collect();
+    // The project already on screen stays first (stable sort keeps the rest).
+    rows.sort_by_key(|p| current.as_ref() != Some(p));
 
     // Selectable items = the filtered projects plus the trailing "Open Folder…".
     let open_folder_idx = rows.len();

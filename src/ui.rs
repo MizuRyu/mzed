@@ -32,6 +32,25 @@ pub(crate) use task_view::TaskView;
 pub(crate) use toolbar::ContentToolbar;
 pub(crate) use window::{open_main_window, open_mermaid_window};
 
+/// Unread green, dark enough to read on white and light enough on #0d1117.
+pub(crate) fn unread_color(dark: bool) -> &'static str {
+    if dark {
+        "#3fb950"
+    } else {
+        "#1a7f37"
+    }
+}
+
+/// The 6px dot in front of an unread file (sidebar row and palette row).
+pub(crate) fn unread_dot(dark: bool) -> Element {
+    let color = unread_color(dark);
+    rsx! {
+        span {
+            style: "flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%; background: {color};",
+        }
+    }
+}
+
 /// Arrow keys scroll an overlay list under a stationary cursor, and the row that
 /// slides under it fires `mouseenter`; ignoring hover for a moment after a key
 /// press keeps that from yanking the selection back. A "wait for a real

@@ -101,6 +101,18 @@ body {
   background: rgba(127, 127, 127, 0.18) !important;
 }
 
+/* Unread popover (toolbar): hidden until hovered, or pinned open by a click. */
+.mdo-unread-popover {
+  display: none;
+}
+.mdo-unread-wrap:hover .mdo-unread-popover,
+.mdo-unread-wrap.mdo-unread-pinned .mdo-unread-popover {
+  display: block;
+}
+.mdo-unread-row:hover {
+  background: rgba(127, 127, 127, 0.18);
+}
+
 /* In-document search (Cmd+F): CSS Custom Highlight API ranges. */
 ::highlight(mdo-find) {
   background-color: #fff3b0;

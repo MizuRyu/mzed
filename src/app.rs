@@ -2,7 +2,7 @@ use crate::domain::action::AppCommand;
 use crate::tabs::Tabs;
 use crate::{
     app_state, cli, config, export, files, instance, js, logging, palette, perf, search, services,
-    session, sync, theme, ui, zed,
+    session, sync, theme, ui, watcher, zed,
 };
 use clap::Parser;
 use dioxus::dioxus_core::Task;
@@ -10,7 +10,7 @@ use dioxus::html::HasFileData;
 use dioxus::prelude::*;
 use instance::Msg;
 use services::file_service;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -535,6 +535,22 @@ pub(crate) fn App() -> Element {
     // restarts.
     let initial_pt = saved_session.restore_project_tabs();
     let mut project_tabs = use_signal(move || initial_pt);
+    // Per-project reading history (B-9 unread markers), keyed by primary root.
+    // Seeded from the persisted session; kept in memory and folded back into the
+    // session save on any change.
+    let initial_history = saved_session.project_history.clone();
+    let mut history = use_signal(move || initial_history);
+    // Stamp every root of a (possibly multi-root) project as opened: bumps
+    // `last_opened_at` (Cmd+O ordering) and, the first time, `first_opened_at`
+    // (the unread floor for never-opened files) — for every root, not just the
+    // primary, or a secondary root's files would never clear their floor.
+    let mut record_project_open = move |ps: &[PathBuf]| {
+        let mut hist_map = history();
+        for p in ps {
+            app_state::unread::record_open(hist_map.entry(p.clone()).or_default());
+        }
+        history.set(hist_map);
+    };
     let mut expanded = use_signal(HashSet::<PathBuf>::new);
     // Open a file and reveal it in the sidebar (expand its ancestor folders).
     // Used by palette/search so the user can see where the file lives.
@@ -883,6 +899,7 @@ pub(crate) fn App() -> Element {
         if tab_policy == TabPolicy::Keep {
             // SelfPinned: follow the project in the sidebar without taking the
             // viewer. Tabs, the split and per-project parking all stay put.
+            record_project_open(&new_roots);
             root.set(Some(new_primary));
             roots.set(new_roots);
             expanded.set(expanded_set);
@@ -896,6 +913,7 @@ pub(crate) fn App() -> Element {
         // before it is consumed by `root.set`.
         let primary_for_latest = new_primary.clone();
         let roots_for_reveal = new_roots.clone();
+        record_project_open(&new_roots);
         root.set(Some(new_primary));
         roots.set(new_roots);
         // When the project has previously-parked (or session-restored) tabs,
@@ -966,6 +984,7 @@ pub(crate) fn App() -> Element {
                 if root().is_none() {
                     if let Some(parent) = path.parent() {
                         let p = parent.to_path_buf();
+                        record_project_open(std::slice::from_ref(&p));
                         root.set(Some(p.clone()));
                         roots.set(vec![p]);
                     }
@@ -981,6 +1000,7 @@ pub(crate) fn App() -> Element {
                     if root().is_none() {
                         if let Some(parent) = path.parent() {
                             let p = parent.to_path_buf();
+                            record_project_open(std::slice::from_ref(&p));
                             root.set(Some(p.clone()));
                             roots.set(vec![p]);
                         }
@@ -1023,6 +1043,7 @@ pub(crate) fn App() -> Element {
             let restored_roots: Vec<PathBuf> =
                 sess.roots.iter().filter(|p| p.is_dir()).cloned().collect();
             if restore && !restored_roots.is_empty() {
+                record_project_open(&restored_roots);
                 root.set(Some(restored_roots[0].clone()));
                 roots.set(restored_roots);
                 let t = sess.restore_tabs();
@@ -1188,7 +1209,25 @@ pub(crate) fn App() -> Element {
         });
     });
 
-    // Flat tree across all roots, for the palette/full-text file lists.
+    // `trees` marked up with unread state (B-9): purely in-memory (the mtimes
+    // are already on every node from the walk above), so this recomputes on any
+    // `history` change — e.g. a file just read, or "mark all read" — without
+    // touching disk again. Borrows `history` rather than cloning the whole map.
+    let marked_trees = use_memo(move || {
+        let mut list = trees();
+        let hist_map = history.read();
+        let empty = session::PerProjectHistory::default();
+        for (r, nodes) in list.iter_mut() {
+            let hist = hist_map.get(r).unwrap_or(&empty);
+            app_state::unread::mark(nodes, r, hist);
+        }
+        list
+    });
+
+    // Flat tree across all roots, for the palette/full-text file lists. Sourced
+    // from `trees` (not `marked_trees`): a `history`-only change — a file just
+    // read, "mark all read" — must never re-trigger full-text search's stat
+    // pass, only a real filesystem change should.
     let tree = use_memo(move || {
         trees()
             .into_iter()
@@ -1265,6 +1304,51 @@ pub(crate) fn App() -> Element {
                 Err(err) => show_toast(format!("Document load failed: {err}")),
             }
         });
+    });
+
+    // B-9: whatever pane(s) are on screen count as read. Depends on `trees`
+    // (not `marked_trees`) for a real mtime change — opening a tab, or a live
+    // reload bumping mtime. It also reads `history`, so it re-runs whenever
+    // that changes elsewhere too; `mark_read` is a no-op past the first call
+    // for the same mtime, so that re-run never becomes a loop.
+    use_effect(move || {
+        let list = trees();
+        let rs = roots();
+        let mut targets = Vec::new();
+        if let Some(p) = active() {
+            targets.push(p);
+        }
+        if split() {
+            if let Some(p) = active_r() {
+                targets.push(p);
+            }
+        }
+        if targets.is_empty() {
+            return;
+        }
+        let mut hist_map = history();
+        let mut changed = false;
+        for path in targets {
+            let Some(proj_root) = rs.iter().find(|r| path.starts_with(r)).cloned() else {
+                continue;
+            };
+            let Some((_, nodes)) = list.iter().find(|(r, _)| r == &proj_root) else {
+                continue;
+            };
+            let Some(mtime) = files::find_mtime(nodes, &path) else {
+                continue;
+            };
+            let entry = hist_map.entry(proj_root.clone()).or_default();
+            let key = app_state::unread::seen_key(&proj_root, &path);
+            let before = entry.seen.get(&key).copied();
+            app_state::unread::mark_read(entry, &proj_root, &path, mtime);
+            if entry.seen.get(&key).copied() != before {
+                changed = true;
+            }
+        }
+        if changed {
+            history.set(hist_map);
+        }
     });
 
     let html = use_memo(move || {
@@ -1512,8 +1596,36 @@ pub(crate) fn App() -> Element {
         }
         let task = spawn(async move {
             let mut subscription = services::watch_service::tree_changes(rs);
-            while subscription.rx.recv().await.is_some() {
-                tree_refresh += 1;
+            while let Some(change) = subscription.rx.recv().await {
+                match change {
+                    watcher::TreeChange::Structural => tree_refresh += 1,
+                    // P2 keeps a save from rescanning the whole project: stat
+                    // just the changed paths and patch their mtime in place.
+                    watcher::TreeChange::Content(paths) => {
+                        let mtimes = tokio::task::spawn_blocking(move || {
+                            let mut map = HashMap::new();
+                            for p in paths {
+                                if let Some(mtime) = files::path_mtime(&p) {
+                                    map.insert(p, mtime);
+                                }
+                            }
+                            map
+                        })
+                        .await
+                        .unwrap_or_default();
+                        if mtimes.is_empty() {
+                            continue;
+                        }
+                        let mut list = trees();
+                        let mut changed = false;
+                        for (_, nodes) in list.iter_mut() {
+                            changed |= files::update_mtimes(nodes, &mtimes);
+                        }
+                        if changed {
+                            trees.set(list);
+                        }
+                    }
+                }
             }
         });
         tree_watch_task.set(Some(task));
@@ -1575,14 +1687,20 @@ pub(crate) fn App() -> Element {
     // on any change so the next launch restores it. Saving on every change avoids
     // relying on a desktop quit hook.
     use_effect(move || {
+        // `history` is kept pruned live (see the dedicated effect below), so it
+        // is saved as-is here.
         let sess = session::Session::capture_full(
             roots(),
             &tabs.read(),
             sidebar_width(),
             &project_tabs.read(),
+            history(),
         );
         let generation = session_save_generation.write().advance();
         spawn(async move {
+            // Coalesce a burst of rapid changes into one write: only the last
+            // task standing after the quiet period still matches `generation`.
+            tokio::time::sleep(Duration::from_millis(300)).await;
             if !session_save_generation.read().is_current(generation) {
                 return;
             }
@@ -1591,6 +1709,22 @@ pub(crate) fn App() -> Element {
                 Err(err) => show_toast(format!("Session save failed: {err}")),
             }
         });
+    });
+
+    // Keep `history` itself bounded (not just what gets saved): once the tree
+    // for every current root has actually loaded (not the transient empty
+    // state mid-switch), drop `seen` records for files no longer in that
+    // root's tree. Parked/other-root history is left untouched.
+    use_effect(move || {
+        let list = trees();
+        let want = roots();
+        if want.is_empty() || !want.iter().all(|r| list.iter().any(|(lr, _)| lr == r)) {
+            return;
+        }
+        let next = app_state::unread::pruned(&history(), &list);
+        if next != *history.peek() {
+            history.set(next);
+        }
     });
 
     // Derived: current project name for the top-left switcher button.
@@ -1638,6 +1772,32 @@ pub(crate) fn App() -> Element {
         out.retain(|p| current.as_ref() == Some(p) || !hidden.contains(p));
         out
     });
+
+    // Unread files, newest first, trimmed to the toolbar popover's 20 rows;
+    // `.1` is the untrimmed total for the badge.
+    let unread_summary = use_memo(move || {
+        let mut unread: Vec<files::PaletteFile> = files::palette_files(&marked_trees())
+            .into_iter()
+            .filter(|f| f.unread)
+            .collect();
+        unread.sort_by_key(|f| std::cmp::Reverse(f.mtime));
+        let total = unread.len();
+        unread.truncate(20);
+        (unread, total)
+    });
+    // Every root of the current (possibly multi-root) project, not just the
+    // primary — otherwise a secondary root's files would stay unread forever.
+    let mut mark_all_read_now = move || {
+        let rs = roots();
+        if rs.is_empty() {
+            return;
+        }
+        let mut hist_map = history();
+        for r in rs {
+            app_state::unread::mark_all_read(hist_map.entry(r).or_default());
+        }
+        history.set(hist_map);
+    };
 
     // Re-run highlight/mermaid/katex and (re)attach UI bridges whenever the
     // rendered HTML changes. The eval keeps a channel open: internal `.mdo-link`
@@ -2150,6 +2310,10 @@ pub(crate) fn App() -> Element {
                     }
                 });
             }
+            MarkAllRead => {
+                mark_all_read_now();
+                show_toast("すべて既読にしました".into());
+            }
             ToggleWebShare => {
                 let Some(project) = root() else {
                     show_toast("プロジェクトを開いてから実行してください".into());
@@ -2408,7 +2572,7 @@ pub(crate) fn App() -> Element {
                                             }
                                         }
                                     }
-                                    for (r, nodes) in trees() {
+                                    for (r, nodes) in marked_trees() {
                                         // Show a section header per root only when multi-root.
                                         if multi {
                                             {
@@ -2462,7 +2626,11 @@ pub(crate) fn App() -> Element {
                                 raw_view,
                                 has_toc: !toc().is_empty(),
                                 find_open: find_open(),
+                                unread: unread_summary().0,
+                                unread_total: unread_summary().1,
                                 dark,
+                                on_open: move |p| open_and_reveal(p),
+                                on_mark_all_read: move |_| mark_all_read_now(),
                                 on_copy: move |_| {
                                     let md = if split() && active_pane() == 1 {
                                         let active_path = active_r();
@@ -2582,7 +2750,7 @@ pub(crate) fn App() -> Element {
                         file_mode: palette_file_mode,
                         open: palette_open,
                         on_open: move |p| open_and_reveal(p),
-                        files: files::flatten_md(&tree()),
+                        files: files::palette_files(&marked_trees()),
                         html_export_on: feature_html_export(),
                         pdf_export_on: feature_pdf_export(),
                         dark,
@@ -2685,6 +2853,10 @@ pub(crate) fn App() -> Element {
                         candidates: proj_candidates(),
                         current: root(),
                         aliases: project_aliases,
+                        last_opened: history()
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.last_opened_at))
+                            .collect::<HashMap<_, _>>(),
                         on_hide: move |p: PathBuf| {
                             let mut h = project_menu_hidden.write();
                             if !h.contains(&p) {

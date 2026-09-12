@@ -73,20 +73,59 @@ pub fn active_file_affected(target: &Path, changed: &[PathBuf]) -> bool {
         .any(|p| compare_key(&resolved(p)) == target_key)
 }
 
+/// How a batch of changes affects the tree under `root`: its shape changed
+/// (create/remove/rename — needs a full rescan), or only markdown file bodies
+/// changed (their mtimes can be refreshed in place, no rescan needed).
+pub enum TreeChange {
+    Structural,
+    Content(Vec<PathBuf>),
+}
+
+/// Classify a batch of changes for `root`'s tree. `None` when nothing in the
+/// batch is relevant. A structural event anywhere in the batch wins outright.
+pub fn classify_tree_change<'a>(
+    root: &Path,
+    changed: impl IntoIterator<Item = (EventKind, &'a Path)>,
+) -> Option<TreeChange> {
+    let root = resolved(root);
+    let mut content_paths = Vec::new();
+    for (kind, p) in changed {
+        if !is_relevant_tree_path(&root, p) {
+            continue;
+        }
+        if is_structural(&kind) {
+            return Some(TreeChange::Structural);
+        }
+        if matches!(
+            kind,
+            EventKind::Modify(ModifyKind::Data(_)) | EventKind::Modify(ModifyKind::Metadata(_))
+        ) {
+            content_paths.push(p.to_path_buf());
+        }
+    }
+    content_paths.sort();
+    content_paths.dedup();
+    if content_paths.is_empty() {
+        None
+    } else {
+        Some(TreeChange::Content(content_paths))
+    }
+}
+
 /// Does a batch of changes warrant rebuilding the sidebar tree under `root`?
-///
-/// True only for events that change the tree's *shape*: a markdown file or a
-/// directory under `root` (outside the ignored directories) being created,
-/// removed or renamed. Editing a file's content must not match — the sidebar
-/// shows names, not content, so rebuilding on every save only makes it flicker.
+/// True only for a shape change (create/remove/rename); see
+/// [`classify_tree_change`] for content-only changes. why: `watch_tree_until`
+/// now calls `classify_tree_change` directly, so this is test-only — kept as a
+/// readable bool predicate for the existing structural-change test suite.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn tree_affected<'a>(
     root: &Path,
     changed: impl IntoIterator<Item = (EventKind, &'a Path)>,
 ) -> bool {
-    let root = resolved(root);
-    changed
-        .into_iter()
-        .any(|(kind, p)| is_structural(&kind) && is_relevant_tree_path(&root, p))
+    matches!(
+        classify_tree_change(root, changed),
+        Some(TreeChange::Structural)
+    )
 }
 
 /// Creates, deletes and renames reshape the tree; `Modify(Data)` (a save) and
@@ -220,7 +259,7 @@ where
 /// halves together, and either half already means "the tree changed".
 pub fn watch_tree_until<F>(root: &Path, stop: &Receiver<()>, mut on_change: F) -> Result<()>
 where
-    F: FnMut() -> bool,
+    F: FnMut(TreeChange) -> bool,
 {
     let root_buf = root.to_path_buf();
     let (tx, rx) = std::sync::mpsc::channel();
@@ -239,8 +278,10 @@ where
         }
         match rx.recv_timeout(STOP_POLL) {
             Ok(Ok(events)) => {
-                if tree_affected(&root_buf, changes_of(&events)) && !on_change() {
-                    break;
+                if let Some(change) = classify_tree_change(&root_buf, changes_of(&events)) {
+                    if !on_change(change) {
+                        break;
+                    }
                 }
             }
             Ok(Err(_)) => {}
@@ -325,6 +366,41 @@ mod tests {
         let touched = EventKind::Modify(ModifyKind::Metadata(MetadataKind::Any));
         assert!(!tree_affected(dir.path(), [(saved, file.as_path())]));
         assert!(!tree_affected(dir.path(), [(touched, file.as_path())]));
+    }
+
+    #[test]
+    fn mdの内容変更はcontentとして分類される() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.md");
+        std::fs::write(&file, "# a").unwrap();
+        let saved = EventKind::Modify(ModifyKind::Data(DataChange::Content));
+        match classify_tree_change(dir.path(), [(saved, file.as_path())]) {
+            Some(TreeChange::Content(paths)) => assert_eq!(paths, vec![file.clone()]),
+            _ => panic!("expected Content"),
+        }
+    }
+
+    #[test]
+    fn 構造変化があればcontentより優先してstructuralになる() {
+        let dir = tempfile::tempdir().unwrap();
+        let saved_file = dir.path().join("a.md");
+        std::fs::write(&saved_file, "# a").unwrap();
+        let gone = dir.path().join("b.md");
+        let saved = EventKind::Modify(ModifyKind::Data(DataChange::Content));
+        let changed = [(saved, saved_file.as_path()), (REMOVE_FILE, gone.as_path())];
+        assert!(matches!(
+            classify_tree_change(dir.path(), changed),
+            Some(TreeChange::Structural)
+        ));
+    }
+
+    #[test]
+    fn 無関係な変更はcontentとして分類しない() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("main.rs");
+        std::fs::write(&file, "x").unwrap();
+        let saved = EventKind::Modify(ModifyKind::Data(DataChange::Content));
+        assert!(classify_tree_change(dir.path(), [(saved, file.as_path())]).is_none());
     }
 
     #[test]
@@ -506,7 +582,7 @@ mod tests {
         let root = dir.path().to_path_buf();
 
         std::thread::spawn(move || {
-            let result = watch_tree_until(&root, &stop_rx, || true);
+            let result = watch_tree_until(&root, &stop_rx, |_| true);
             done_tx.send(result.is_ok()).unwrap();
         });
         stop_tx.send(()).unwrap();
