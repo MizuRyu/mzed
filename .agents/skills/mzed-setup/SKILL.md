@@ -212,7 +212,7 @@ Orca の状態ファイル `~/Library/Application Support/orca/profiles/<profile
 | `task_view_toggle_scope` | Ctrl+Tab | Task View の This Project ⇄ All Projects をトグル（閉じているときは従来どおり次のタブへ） |
 | `copy_path` | Cmd+Shift+C | ファイルパスをコピー |
 | `add_note` | Cmd+Shift+M | 選択した本文にメモを追加（`~/.config/mzed/notes/` に保存。スキル `mzed-notes` 参照） |
-| `close_tab` | Cmd+W | タブを閉じる |
+| `close_tab` | Cmd+W | タブを閉じる（最後のタブならウィンドウも画面から消える。アプリは終了しないので、戻すには `mzed file.md`、Zed / Orca のプロジェクト切替、Dock アイコンのクリックのいずれか。終了は Cmd+Q） |
 | `settings` | Cmd+, | 設定画面を開く |
 | `toggle_sync_pin` | Cmd+Shift+L | 連動モードを auto ⇄ self でトグル（トーストに追従元を表示） |
 

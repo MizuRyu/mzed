@@ -31,7 +31,10 @@ pub(crate) use settings::{Settings, SettingsTab};
 pub(crate) use sidebar::{file_icon, folder_closed_icon, TreeView};
 pub(crate) use task_view::TaskView;
 pub(crate) use toolbar::ContentToolbar;
-pub(crate) use window::{open_main_window, open_mermaid_window};
+pub(crate) use window::{
+    close_current_window, hide_current_window, open_main_window, open_mermaid_window,
+    show_current_window,
+};
 
 /// Unread green, dark enough to read on white and light enough on #0d1117.
 pub(crate) fn unread_color(dark: bool) -> &'static str {

@@ -11,6 +11,28 @@ pub(crate) fn open_main_window() {
     );
 }
 
+/// Take the current window off screen without destroying it.
+///
+/// why: the base window owns the IPC receiver and the Zed / Orca subscription,
+/// and dioxus-desktop can only build a window from an existing one — closing it
+/// for real would leave `mzed file.md` and an editor switch with nowhere to
+/// land (and, with the last window gone, would end the process).
+pub(crate) fn hide_current_window() {
+    dioxus::desktop::window().set_visible(false);
+}
+
+/// Bring a hidden window back on screen and focus it.
+pub(crate) fn show_current_window() {
+    let window = dioxus::desktop::window();
+    window.set_visible(true);
+    window.set_focus();
+}
+
+/// Close the current window for good.
+pub(crate) fn close_current_window() {
+    dioxus::desktop::window().close();
+}
+
 /// Open a mermaid diagram in its own desktop window, rendered at zoom 1.
 pub(crate) fn open_mermaid_window(src: String, dark: bool) {
     use dioxus::desktop::Config;

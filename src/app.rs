@@ -64,6 +64,27 @@ fn same_selection(
     old_root == Some(new_primary) && old_roots == new_roots
 }
 
+/// Whether closing the focused pane's active tab leaves the whole window empty.
+///
+/// In a split both panes have to run out: emptying only one collapses the split
+/// (see the collapse effect in `App`), which is what the user asked for. A
+/// window that already has no tabs counts too, so Cmd+W dismisses it as well.
+fn window_empties_on_close(focused_pane_tabs: usize, other_pane_tabs: usize) -> bool {
+    focused_pane_tabs <= 1 && other_pane_tabs == 0
+}
+
+/// The tab set a dismissed window persists: whichever pane still holds tabs.
+/// why: the session stores one tab list (the split itself is not persisted), so
+/// always taking the left pane would throw away the last file of a user who
+/// emptied the left pane and kept reading in the right one.
+fn surviving_tabs<'a>(left: &'a Tabs, right: &'a Tabs) -> &'a Tabs {
+    if left.paths().is_empty() {
+        right
+    } else {
+        left
+    }
+}
+
 /// Per-window message senders. The process-level IPC router forwards secondary
 /// instance requests to the latest live window, pruning closed windows lazily.
 static WINDOW_ROUTER: OnceLock<Mutex<WindowMessageRouter>> = OnceLock::new();
@@ -218,6 +239,36 @@ mod tests {
             &paths(&["/b"])
         ));
         assert!(!same_selection(None, &[], Path::new("/a"), &paths(&["/a"])));
+    }
+
+    #[test]
+    fn closing_the_last_tab_empties_the_window() {
+        // No split: the focused pane is the window.
+        assert!(window_empties_on_close(1, 0));
+        assert!(window_empties_on_close(0, 0));
+        assert!(!window_empties_on_close(2, 0));
+        // Split: the other pane still holds the window open.
+        assert!(!window_empties_on_close(1, 1));
+        assert!(!window_empties_on_close(2, 3));
+    }
+
+    #[test]
+    fn a_dismissed_window_persists_the_pane_that_still_has_tabs() {
+        let mut right = Tabs::default();
+        right.open(PathBuf::from("/r.md"), crate::tabs::TabInsert::End);
+        let empty = Tabs::default();
+
+        assert_eq!(
+            surviving_tabs(&empty, &right).paths(),
+            &[PathBuf::from("/r.md")]
+        );
+
+        let mut left = Tabs::default();
+        left.open(PathBuf::from("/l.md"), crate::tabs::TabInsert::End);
+        assert_eq!(
+            surviving_tabs(&left, &right).paths(),
+            &[PathBuf::from("/l.md")]
+        );
     }
 
     #[test]
@@ -657,6 +708,18 @@ pub(crate) fn App() -> Element {
     let mut win_x = use_signal(|| saved_config.window_x);
     let mut win_y = use_signal(|| saved_config.window_y);
 
+    // The roots this window had when its last tab was closed and it left the
+    // screen (the base window only hides — `hide_current_window`). `Some`
+    // freezes the reactive session save on the tab list written at that moment;
+    // the session effect clears it once a tab or the project comes back.
+    let mut dismissed_roots = use_signal(|| None::<Vec<PathBuf>>);
+    let show_window_if_dismissed = move || {
+        if dismissed_roots.peek().is_none() {
+            return;
+        }
+        show_current_window();
+    };
+
     // Capture Moved/Resized events to keep position & size signals current.
     // Guards filter out anomalous values produced by minimize/maximize.
     {
@@ -696,6 +759,16 @@ pub(crate) fn App() -> Element {
                     // regains focus, like most editors do. Cheap — one pruned
                     // walk of the current roots.
                     tree_refresh += 1;
+                }
+                Event::Reopen {
+                    has_visible_windows,
+                    ..
+                } => {
+                    // why: clicking the Dock icon is the user's way back, and a
+                    // window dismissed by closing its last tab is only hidden.
+                    if !*has_visible_windows {
+                        show_window_if_dismissed();
+                    }
                 }
                 _ => {}
             }
@@ -846,6 +919,44 @@ pub(crate) fn App() -> Element {
     let mut config_save_generation = use_signal(app_state::generation::Generation::default);
     let mut session_save_generation = use_signal(app_state::generation::Generation::default);
 
+    // Dismiss this window: its last tab is gone, so the window goes with it.
+    // The base window only hides (it owns the IPC receiver and the editor
+    // subscription); a Cmd+N window is closed for good.
+    let mut dismiss_window = move || {
+        let sess = {
+            let left = tabs.read();
+            let right = tabs_r.read();
+            session::Session::capture_full(
+                roots(),
+                surviving_tabs(&left, &right),
+                sidebar_width(),
+                &project_tabs.read(),
+                history(),
+            )
+        };
+        // why: advancing the generation drops any debounced save still waiting
+        // with a stale snapshot, so the write below (the tabs as they stand
+        // *before* the close) is the last word until the window comes back.
+        let generation = session_save_generation.write().advance();
+        dismissed_roots.set(Some(sess.roots.clone()));
+        if is_base_window {
+            spawn(async move {
+                if !session_save_generation.read().is_current(generation) {
+                    return;
+                }
+                if let Err(err) = session::save_queued(sess).await {
+                    show_toast(format!("Session save failed: {err}"));
+                }
+            });
+        }
+        act_tabs().write().close_active();
+        if is_base_window {
+            hide_current_window();
+        } else {
+            close_current_window();
+        }
+    };
+
     // Effective appearance (light/dark) resolved from the theme choice; drives
     // which stylesheets load and the frame's dark class.
     let appearance = use_memo(move || theme().resolve());
@@ -884,10 +995,14 @@ pub(crate) fn App() -> Element {
             // spurious reactive updates (tree rebuild, document reload, sidebar
             // flicker). Only honour an explicit additional file pick.
             if let Some(f) = open_pick {
+                show_window_if_dismissed();
                 tabs.write().open(f, tab_insert());
             }
             return;
         }
+        // why: a dismissed base window keeps following the editor, so it has to
+        // come back on screen rather than switch projects out of sight.
+        show_window_if_dismissed();
         if same_primary {
             // Same project, different root set — Zed adding or dropping a folder
             // in a multi-root workspace. The sidebar has to follow, but this is
@@ -1001,6 +1116,7 @@ pub(crate) fn App() -> Element {
         Msg::NewWindow => open_main_window(),
         Msg::Open { path } => {
             if path.is_file() && files::is_markdown(&path) {
+                show_window_if_dismissed();
                 // A file opened with no project yet establishes one (CLI
                 // `mzed file.md`); with a project open it stays standalone.
                 if root().is_none() {
@@ -1019,6 +1135,7 @@ pub(crate) fn App() -> Element {
         Msg::OpenMany { paths } => {
             for path in paths {
                 if path.is_file() && files::is_markdown(&path) {
+                    show_window_if_dismissed();
                     if root().is_none() {
                         if let Some(parent) = path.parent() {
                             let p = parent.to_path_buf();
@@ -1708,6 +1825,20 @@ pub(crate) fn App() -> Element {
             &project_tabs.read(),
             history(),
         );
+        // why: a dismissed window shows nothing, and saving that would drop the
+        // tab list `dismiss_window` wrote for the next launch. Staying frozen
+        // until a tab or the project comes back means merely putting the window
+        // back on screen (a Dock click) does not cost the user their tabs.
+        if dismissed_roots
+            .read()
+            .as_ref()
+            .is_some_and(|frozen| sess.tabs.is_empty() && &sess.roots == frozen)
+        {
+            return;
+        }
+        if dismissed_roots.peek().is_some() {
+            dismissed_roots.set(None);
+        }
         let generation = session_save_generation.write().advance();
         spawn(async move {
             // Coalesce a burst of rapid changes into one write: only the last
@@ -2030,7 +2161,19 @@ pub(crate) fn App() -> Element {
                             active_pane.set(0);
                         }
                     }
-                    AppCommand::CloseTab => act_tabs().write().close_active(),
+                    AppCommand::CloseTab => {
+                        let focused_pane_tabs = act_tabs().read().paths().len();
+                        let other_pane_tabs = match (split(), active_pane()) {
+                            (false, _) => 0,
+                            (true, 1) => tabs.read().paths().len(),
+                            (true, _) => tabs_r.read().paths().len(),
+                        };
+                        if window_empties_on_close(focused_pane_tabs, other_pane_tabs) {
+                            dismiss_window();
+                        } else {
+                            act_tabs().write().close_active();
+                        }
+                    }
                     AppCommand::NextTab => act_tabs().write().activate_next(),
                     AppCommand::PrevTab => act_tabs().write().activate_prev(),
                     AppCommand::RenameActive => {
