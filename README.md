@@ -18,7 +18,7 @@ English version: [README.en.md](README.en.md)
 - **ライブリロード** — ファイル保存を検知して即再描画
 - **快適なナビゲーション** — サイドバー、マルチタブ、左右分割、目次、コマンドパレット、ファジー検索、全文検索
 - **Task View（`Cmd+Shift+D`）** — `docs/memo/tasks/` のタスクフォルダを status 別に一覧し、task.md を即読みする専用ビュー。複数プロジェクト横断にも対応
-- **メモ（`Cmd+Shift+M`）** — 読みながら本文を選択して「ここを直して」を残す。`~/.config/mzed/notes/` に 1 メモ 1 JSON で溜まり、AI エージェントがスキル `mzed-notes` で読んで直す
+- **メモ** — 読みながら本文を選択すると終端にアイコンが浮き、その場で「ここを直して」を残せる（`Cmd+Shift+M` でも同じ）。`~/.config/mzed/notes/` に 1 メモ 1 JSON で溜まり、AI エージェントがスキル `mzed-notes` で読んで直す
 - **エクスポート** — self-contained な HTML / PDF
 - **CLI** — `mzed file.md` で単一インスタンスに転送。ドラッグ&ドロップ、セッション復元も対応
 

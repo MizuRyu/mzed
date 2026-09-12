@@ -13,7 +13,7 @@ pub(crate) use export::{export_capture_js, webview_action_error};
 pub(crate) use find::{find_highlight_js, find_step_js};
 pub(crate) use keyboard::{keydown_bridge_js, sidebar_resize_js};
 pub(crate) use mermaid::{helper_js as mermaid_helper_js, mermaid_window_js};
-pub(crate) use notes::{note_bridge_js, note_selection_js};
+pub(crate) use notes::{note_bridge_js, note_overlay_js, note_selection_js, NoteOverlay};
 pub(crate) use render::post_render_js;
 
 #[cfg(test)]
@@ -223,21 +223,107 @@ mod tests {
         assert!(js.contains("if (!cap || !document.contains(cap.node)) return null;"));
     }
 
-    /// Right-click outside the quoted pane must fall through to the WebView's
-    /// own menu, so `preventDefault` may only run once both checks passed.
+    /// The document's own menu (copy, look up) is never taken over: the note
+    /// entry moved to the floating icon.
     #[test]
-    fn note_bridge_leaves_the_native_menu_alone_outside_the_quoted_pane() {
+    fn note_bridge_never_touches_the_native_context_menu() {
+        let js = note_bridge_js();
+
+        assert!(!js.contains("contextmenu"));
+        assert!(js.contains("kind: 'note_icon'"));
+    }
+
+    /// Selecting the whole document is a rewrite request, not a note: no icon,
+    /// and the flag travels to Rust so the keybinding can say why.
+    #[test]
+    fn note_bridge_refuses_a_selection_covering_the_whole_pane() {
+        let js = note_bridge_js();
+
+        assert!(js.contains("dense(quote) >= whole * 0.9"));
+        assert!(js.contains("if (!cap || cap.tooBroad) return;"));
+    }
+
+    /// The overlay belongs to the pane's scroll container, so it scrolls with
+    /// the text and leaves the rendered document untouched.
+    #[test]
+    fn note_bridge_draws_the_overlay_outside_the_rendered_body() {
+        let js = note_bridge_js();
+
+        assert!(js.contains("const host = cap && cap.body && cap.body.parentElement;"));
+        assert!(js.contains("plan.host.appendChild(layer)"));
+        assert!(js.contains("className = 'mdo-note-mark'"));
+        assert!(js.contains("--mdo-note-x"));
+    }
+
+    /// The icon is only an affordance: what gets quoted is whatever is selected
+    /// when it is clicked, judged by the same Rust path as the keybinding.
+    #[test]
+    fn note_icon_click_re_reads_the_selection() {
         let js = note_bridge_js();
         let handler = js
-            .split_once("addEventListener('contextmenu'")
-            .expect("contextmenu handler")
+            .split_once("addEventListener('click'")
+            .expect("icon click handler")
             .1;
-        let guard = handler
-            .find("if (!cap || paneBody(e.target) !== cap.body) return;")
-            .expect("contextmenu guard");
 
-        assert!(guard < handler.find("preventDefault").unwrap());
-        assert!(handler.contains("kind: 'note_menu'"));
+        assert!(handler.contains("const now = window.__mdoNoteCurrent();"));
+        assert!(handler.contains("quote: now ? now.quote : ''"));
+        assert!(handler.contains("too_broad: now ? !!now.tooBroad : false"));
+        assert!(!handler.contains("cap.quote"));
+    }
+
+    /// While the popover is open the quoted range is frozen: the document's
+    /// selection may move, the highlight and the note may not.
+    #[test]
+    fn note_bridge_freezes_the_quote_while_the_popover_is_open() {
+        let js = note_bridge_js();
+        let handler = js
+            .split_once("addEventListener('selectionchange'")
+            .expect("selectionchange handler")
+            .1;
+
+        assert!(handler.starts_with(", () => {\n    // why: the popover quotes a fixed range."));
+        assert!(handler.contains("if (window.__mdoNoteMode === 'quote') return;"));
+        assert!(js.contains("window.__mdoNoteFreeze = () =>"));
+        assert!(note_overlay_js(NoteOverlay::Quote).contains("window.__mdoNoteFreeze()"));
+        // Closing it catches the memory up with whatever the document did while
+        // it was frozen — otherwise the icon returns for a dead selection.
+        assert!(note_overlay_js(NoteOverlay::Icon).contains("window.__mdoNoteThaw()"));
+    }
+
+    /// A click outside the popover abandons the note; the one inside it (and on
+    /// the icon) does not.
+    #[test]
+    fn note_bridge_dismisses_the_popover_on_an_outside_click() {
+        let js = note_bridge_js();
+        let handler = js
+            .split_once("addEventListener('mousedown'")
+            .expect("mousedown handler")
+            .1;
+
+        assert!(handler.contains("if (inside(e.target, '.mdo-note-layer') || inside(e.target, '.mdo-note-popover')) return;"));
+        assert!(handler.contains("kind: 'note_dismiss'"));
+    }
+
+    /// The split's other pane re-rendering (its own live reload) says nothing
+    /// about the selection this one holds.
+    #[test]
+    fn note_bridge_drops_a_selection_only_when_its_own_pane_re_renders() {
+        let js = note_bridge_js();
+
+        assert!(js.contains("if (!cap || cap.body === body) window.__mdoNoteForget();"));
+    }
+
+    /// A resize or a rewrap moves every rect the overlay was drawn from.
+    #[test]
+    fn note_bridge_repositions_the_overlay_on_scroll_and_resize() {
+        let js = note_bridge_js();
+
+        assert!(js.contains("document.addEventListener('scroll', schedule, true);"));
+        assert!(js.contains("window.addEventListener('resize', schedule);"));
+        assert!(js.contains("new ResizeObserver(() => schedule()).observe(body)"));
+        assert!(
+            js.contains("plan.items.forEach((box, index) => apply(layer.children[index], box));")
+        );
     }
 
     /// The probe answers even with nothing selected: Rust waits on one message.
@@ -247,7 +333,21 @@ mod tests {
 
         assert!(js.contains("kind: 'note_selection'"));
         assert!(js.contains("quote: cap ? cap.quote : ''"));
-        assert!(js.contains("window.__mdoNoteRemembered"));
+        assert!(js.contains("too_broad: cap ? !!cap.tooBroad : false"));
+        assert!(js.contains("window.__mdoNoteCurrent"));
+    }
+
+    /// Saving a note both clears the overlay and forgets what it quoted, so the
+    /// icon cannot come back for a note that is already on disk.
+    #[test]
+    fn note_overlay_js_switches_modes_and_forgets_on_save() {
+        assert!(note_overlay_js(NoteOverlay::Icon).contains("window.__mdoNoteMode = 'icon'"));
+        assert!(note_overlay_js(NoteOverlay::Quote).contains("window.__mdoNoteMode = 'quote'"));
+
+        let off = note_overlay_js(NoteOverlay::Off);
+
+        assert!(off.contains("window.__mdoNoteForget()"));
+        assert!(off.contains("if (!window.__mdoNoteRender) return;"));
     }
 
     #[test]

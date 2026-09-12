@@ -1,8 +1,8 @@
 use super::*;
 /// Vertical toolbar floating at the content pane's top-right (mo-style). Three
 /// icon buttons: toggle the table of contents, copy the active file's raw
-/// markdown, and toggle raw (source) view. Shifts down when the find bar or the
-/// note bar is open so they don't overlap.
+/// markdown, and toggle raw (source) view. Shifts down when the find bar is open
+/// so the two don't overlap.
 #[component]
 pub(crate) fn ContentToolbar(
     mut theme: Signal<theme::Theme>,
@@ -10,7 +10,6 @@ pub(crate) fn ContentToolbar(
     mut raw_view: Signal<bool>,
     has_toc: bool,
     find_open: bool,
-    note_open: bool,
     dark: bool,
     on_copy: EventHandler<()>,
 ) -> Element {
@@ -23,11 +22,7 @@ pub(crate) fn ContentToolbar(
     // further when the find bar is showing below it.
     const TABBAR_H: i32 = 38;
     const FINDBAR_H: i32 = 44;
-    const NOTEBAR_H: i32 = 78;
-    let top = TABBAR_H
-        + 8
-        + if find_open { FINDBAR_H } else { 0 }
-        + if note_open { NOTEBAR_H } else { 0 };
+    let top = TABBAR_H + 8 + if find_open { FINDBAR_H } else { 0 };
 
     let toc_on = toc_open() && has_toc;
     let raw_on = raw_view();

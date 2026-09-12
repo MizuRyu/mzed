@@ -813,12 +813,11 @@ pub(crate) fn App() -> Element {
     // Chunk7: in-document find bar (Cmd+F) and full-text search panel.
     let mut find_open = use_signal(|| false);
     let mut find_query = use_signal(String::new);
-    // Note bar (Cmd+Shift+M): the selection it quotes, its draft text, and the
-    // right-click menu that offers it (screen position of the click).
+    // Note popover (the floating icon, Cmd+Shift+M, the palette): the selection
+    // it quotes and its draft text.
     let mut note_open = use_signal(|| false);
     let mut note_text = use_signal(String::new);
     let mut note_target = use_signal(|| None::<NoteTarget>);
-    let mut note_menu = use_signal(|| None::<(i32, i32)>);
     let mut search_open = use_signal(|| false);
     let mut search_query = use_signal(String::new);
     let mut search_sel = use_signal(|| 0usize);
@@ -1334,12 +1333,18 @@ pub(crate) fn App() -> Element {
         }
     };
 
-    // Notes: the WebView reports what is selected, the note bar takes the text,
+    // Notes: the WebView reports what is selected, the popover takes the text,
     // and `services::notes` writes one JSON file per note for an agent to read.
-    let mut open_note_bar = move || {
-        // The bar sits where the in-document find bar sits; never show both.
+    let set_note_overlay = move |overlay: js::NoteOverlay| {
+        spawn(async move {
+            let _ = document::eval(&js::note_overlay_js(overlay))
+                .recv::<()>()
+                .await;
+        });
+    };
+    let mut open_note_popover = move || {
+        // Two floating inputs at once would fight over the keyboard.
         find_open.set(false);
-        note_menu.set(None);
         note_text.set(String::new());
         note_open.set(true);
     };
@@ -1353,22 +1358,40 @@ pub(crate) fn App() -> Element {
             selection,
         })
     };
+    // Open the popover for what the WebView reported, or say why not. Both the
+    // icon and the keybinding go through here, so a stale or over-wide
+    // selection is refused the same way whichever one sent it.
+    let mut open_note_for = move |payload: serde_json::Value| {
+        // `too_broad` rides alongside the selection rather than inside it: it
+        // says why mzed refuses, not what would be quoted.
+        let too_broad = payload
+            .get("too_broad")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or_default();
+        let selection = serde_json::from_value::<services::notes::Selection>(payload)
+            .ok()
+            .filter(|selection| !selection.quote.trim().is_empty());
+        let target = if too_broad {
+            None
+        } else {
+            selection.and_then(note_target_for)
+        };
+        match target {
+            Some(target) => {
+                note_target.set(Some(target));
+                open_note_popover();
+            }
+            None if too_broad => show_toast("全体を選択した状態ではメモを付けられません".into()),
+            None => show_toast("本文を選択してからメモを追加してください".into()),
+        }
+    };
     let request_note = move || {
         spawn(async move {
-            let target = document::eval(js::note_selection_js())
+            let payload = document::eval(js::note_selection_js())
                 .recv::<serde_json::Value>()
                 .await
-                .ok()
-                .and_then(|value| serde_json::from_value::<services::notes::Selection>(value).ok())
-                .filter(|selection| !selection.quote.trim().is_empty())
-                .and_then(note_target_for);
-            match target {
-                Some(target) => {
-                    note_target.set(Some(target));
-                    open_note_bar();
-                }
-                None => show_toast("本文を選択してからメモを追加してください".into()),
-            }
+                .unwrap_or_default();
+            open_note_for(payload);
         });
     };
     let save_note = move |text: String| {
@@ -1386,6 +1409,9 @@ pub(crate) fn App() -> Element {
         note_open.set(false);
         note_text.set(String::new());
         note_target.set(None);
+        // The quote is being written: drop the highlight and the selection the
+        // icon would otherwise come back for.
+        set_note_overlay(js::NoteOverlay::Off);
         spawn(async move {
             let result = tokio::task::spawn_blocking(move || services::notes::save(&note)).await;
             match result {
@@ -1896,8 +1922,6 @@ pub(crate) fn App() -> Element {
                             task_view_open.set(false);
                         } else if search_open() {
                             search_open.set(false);
-                        } else if note_menu().is_some() {
-                            note_menu.set(None);
                         } else if note_open() {
                             note_open.set(false);
                         } else if find_open() {
@@ -1910,27 +1934,30 @@ pub(crate) fn App() -> Element {
     });
 
     // Notes bridge: install one persistent listener that remembers the document
-    // selection (overlays steal it before Rust can read it) and reports a
-    // right-click on selected text as a note-menu request.
+    // selection (overlays steal it before Rust can read it), floats the note
+    // icon at the end of it, and reports a click on that icon.
     use_effect(move || {
         spawn(async move {
             let mut eval = document::eval(js::note_bridge_js());
             while let Ok(msg) = eval.recv::<serde_json::Value>().await {
-                let Ok(selection) =
-                    serde_json::from_value::<services::notes::Selection>(msg.clone())
-                else {
-                    continue;
-                };
-                if selection.quote.trim().is_empty() {
-                    continue;
+                match msg.get("kind").and_then(serde_json::Value::as_str) {
+                    // A click anywhere outside the popover abandons the note.
+                    Some("note_dismiss") => note_open.set(false),
+                    Some("note_icon") => open_note_for(msg),
+                    _ => {}
                 }
-                let Some(target) = note_target_for(selection) else {
-                    continue;
-                };
-                let coord = |key: &str| msg.get(key).and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-                note_target.set(Some(target));
-                note_menu.set(Some((coord("x"), coord("y"))));
             }
+        });
+    });
+
+    // The document draws the overlay for the selection it remembers: the icon
+    // while it is just sitting there, the quoted range while the popover has
+    // the keyboard (and the real selection with it).
+    use_effect(move || {
+        set_note_overlay(if note_open() {
+            js::NoteOverlay::Quote
+        } else {
+            js::NoteOverlay::Icon
         });
     });
 
@@ -2102,7 +2129,7 @@ pub(crate) fn App() -> Element {
             }
             AddNote => {
                 // Close first: the palette's input holds the focus, and the
-                // note bar needs it.
+                // popover needs it.
                 palette_open.set(false);
                 request_note();
                 return;
@@ -2435,7 +2462,6 @@ pub(crate) fn App() -> Element {
                                 raw_view,
                                 has_toc: !toc().is_empty(),
                                 find_open: find_open(),
-                                note_open: note_open(),
                                 dark,
                                 on_copy: move |_| {
                                     let md = if split() && active_pane() == 1 {
@@ -2492,10 +2518,9 @@ pub(crate) fn App() -> Element {
                                 }
                             }
                             if note_open() {
-                                NoteBar {
+                                NotePopover {
                                     text: note_text,
                                     open: note_open,
-                                    quote: note_target().map(|t| t.selection.quote).unwrap_or_default(),
                                     dark,
                                     on_save: save_note,
                                 }
@@ -2513,7 +2538,10 @@ pub(crate) fn App() -> Element {
                                             onmousedown: move |_| active_pane.set(0),
                                             TabBar { tabs, root: root(), dark }
                                             div {
-                                                style: "flex: 1 1 auto; width: 100%; overflow: auto; background: {body_bg};",
+                                                // `relative`: the note overlay is
+                                                // absolutely positioned in here so
+                                                // it scrolls with the text.
+                                                style: "flex: 1 1 auto; width: 100%; overflow: auto; position: relative; background: {body_bg};",
                                                 div { class: "markdown-body", "data-mdo-pane": "0", dangerous_inner_html: "{html}" }
                                             }
                                         }
@@ -2530,7 +2558,10 @@ pub(crate) fn App() -> Element {
                                                 onmousedown: move |_| active_pane.set(1),
                                                 TabBar { tabs: tabs_r, root: root(), dark }
                                                 div {
-                                                    style: "flex: 1 1 auto; width: 100%; overflow: auto; background: {body_bg};",
+                                                    // `relative`: the note overlay is
+                                                    // absolutely positioned in here so
+                                                    // it scrolls with the text.
+                                                    style: "flex: 1 1 auto; width: 100%; overflow: auto; position: relative; background: {body_bg};",
                                                     div { class: "markdown-body", "data-mdo-pane": "1", dangerous_inner_html: "{html_r}" }
                                                 }
                                             }
@@ -2780,30 +2811,6 @@ pub(crate) fn App() -> Element {
                                         ctx_menu.set(None);
                                     },
                                     "ゴミ箱へ移動" }
-                            }
-                        }
-                    }
-                }
-                // Right-click on selected document text: the one thing that can
-                // be done with a selection here. With nothing selected the
-                // WebView keeps its own menu (the bridge never intercepts).
-                if let Some((x, y)) = note_menu() {
-                    {
-                        let menu_bg = if dark { "#1c2128" } else { "#ffffff" };
-                        let menu_border = if dark { "#30363d" } else { "#d0d7de" };
-                        let item_fg = if dark { "#e6edf3" } else { "#1f2328" };
-                        let item = "display: block; width: 100%; text-align: left; padding: 6px 12px; border: none; background: transparent; color: inherit; cursor: pointer; border-radius: 5px; font: 13px -apple-system, sans-serif;";
-                        rsx! {
-                            div {
-                                style: "position: fixed; inset: 0; z-index: 1000;",
-                                onclick: move |_| note_menu.set(None),
-                                oncontextmenu: move |e| { e.prevent_default(); note_menu.set(None); },
-                            }
-                            div {
-                                style: "position: fixed; left: {x}px; top: {y}px; z-index: 1001; min-width: 160px; background: {menu_bg}; border: 1px solid {menu_border}; border-radius: 8px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.3); color: {item_fg};",
-                                button { class: "mdo-ctx-item", style: "{item}",
-                                    onclick: move |_| open_note_bar(),
-                                    "メモを追加" }
                             }
                         }
                     }

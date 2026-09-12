@@ -296,6 +296,47 @@ body {
   background: rgba(127, 127, 127, 0.16);
 }
 
+/* Note overlay: the "add a note" icon floating at the end of a selection, and
+   the quoted range's highlight while the note popover is open. Both sit in the
+   pane's scroll container (so they scroll with the text) and add nothing to the
+   rendered document itself. */
+.mdo-note-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+.mdo-note-icon {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  /* The toolbar's active-button blue: one accent that reads on both themes. */
+  background: #1f6feb;
+  color: #ffffff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  pointer-events: auto;
+}
+.mdo-note-icon:hover {
+  background: #388bfd;
+}
+.mdo-note-mark {
+  position: absolute;
+  /* The ::selection colour above: the popover's input takes the real selection
+     away, so this stands in for it while the note is being typed. */
+  background: rgba(56, 139, 253, 0.32);
+  border-radius: 2px;
+}
+
 /* Top-right toast: brief slide/fade in. */
 .mdo-toast {
   animation: mdo-toast-in 0.14s ease-out;
