@@ -34,6 +34,9 @@ pub(crate) fn ContentToolbar(
     let raw_on = raw_view();
     // Hover keeps working via CSS; this just lets a click pin the unread
     // popover open (and closes it again) independent of the mouse.
+    // CSS hover alone is not enough: on a trackpad the pointer drifts while
+    // moving toward the list, which drops the hover before an item can be
+    // picked, so a click is needed to hold the popover open.
     let mut pinned_open = use_signal(|| false);
 
     let btn_style = |active: bool| {

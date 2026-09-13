@@ -69,19 +69,15 @@ pub fn main_root_of(root: &Path) -> Option<PathBuf> {
 /// Rewrite a project switch target under `mode`, before the app acts on it.
 /// Under [`WorktreeSwitch::Main`] every root that is a linked worktree becomes
 /// its main checkout (duplicates collapse: `[main, wt-of-main]` is one root);
-/// the other modes pass the target through untouched. Roots with no main
-/// checkout — an ordinary clone, or a broken `gitdir` pointer — stay as they
-/// are, so this never leaves the app with a project that isn't there.
+/// the other modes pass `roots` through untouched. Roots with no main checkout
+/// — an ordinary clone, or a broken `gitdir` pointer — stay as they are, so
+/// this never leaves the app with a project that isn't there.
 ///
-/// `primary` is `roots[0]` at every call site, so the mapped head *is* the
-/// resolved primary; resolving it again would re-read the same `.git` file.
-/// It is still taken as an argument for the (unused) empty-roots case.
-pub fn redirect(
-    primary: PathBuf,
-    roots: Vec<PathBuf>,
-    mode: WorktreeSwitch,
-) -> (PathBuf, Vec<PathBuf>) {
+/// The primary is always `roots[0]`; when `roots` is empty there is nothing to
+/// derive it from, so it is returned unchanged (empty).
+pub fn redirect(roots: Vec<PathBuf>, mode: WorktreeSwitch) -> (PathBuf, Vec<PathBuf>) {
     if mode != WorktreeSwitch::Main {
+        let primary = roots.first().cloned().unwrap_or_default();
         return (primary, roots);
     }
     let mut mapped: Vec<PathBuf> = Vec::with_capacity(roots.len());
@@ -91,7 +87,7 @@ pub fn redirect(
             mapped.push(root);
         }
     }
-    let primary = mapped.first().cloned().unwrap_or(primary);
+    let primary = mapped.first().cloned().unwrap_or_default();
     (primary, mapped)
 }
 
@@ -284,20 +280,12 @@ mod tests {
         // Non-worktree head keeps the primary; the worktree in the middle is
         // the only root rewritten.
         assert_eq!(
-            redirect(
-                a.clone(),
-                vec![a.clone(), wt.clone(), b.clone()],
-                WorktreeSwitch::Main
-            ),
+            redirect(vec![a.clone(), wt.clone(), b.clone()], WorktreeSwitch::Main),
             (a.clone(), vec![a.clone(), main.clone(), b.clone()])
         );
         // Worktree head: the primary becomes its main checkout.
         assert_eq!(
-            redirect(
-                wt.clone(),
-                vec![wt.clone(), a.clone()],
-                WorktreeSwitch::Main
-            ),
+            redirect(vec![wt.clone(), a.clone()], WorktreeSwitch::Main),
             (main.clone(), vec![main.clone(), a.clone()])
         );
     }
@@ -307,21 +295,15 @@ mod tests {
         let (_dir, main, wt) = fixture();
         let wt2 = add_worktree(&main, "wt-other");
         let expected = (main.clone(), vec![main.clone()]);
-        assert_eq!(
-            redirect(wt.clone(), vec![wt], WorktreeSwitch::Main),
-            expected
-        );
-        assert_eq!(
-            redirect(wt2.clone(), vec![wt2], WorktreeSwitch::Main),
-            expected
-        );
+        assert_eq!(redirect(vec![wt], WorktreeSwitch::Main), expected);
+        assert_eq!(redirect(vec![wt2], WorktreeSwitch::Main), expected);
     }
 
     #[test]
     fn redirectはmainモードでworktreeを親に付け替える() {
         let (_dir, main, wt) = fixture();
         assert_eq!(
-            redirect(wt.clone(), vec![wt.clone()], WorktreeSwitch::Main),
+            redirect(vec![wt.clone()], WorktreeSwitch::Main),
             (main.clone(), vec![main.clone()])
         );
     }
@@ -331,7 +313,7 @@ mod tests {
         let (_dir, _main, wt) = fixture();
         for mode in [WorktreeSwitch::Skip, WorktreeSwitch::Follow] {
             assert_eq!(
-                redirect(wt.clone(), vec![wt.clone()], mode),
+                redirect(vec![wt.clone()], mode),
                 (wt.clone(), vec![wt.clone()])
             );
         }
@@ -347,11 +329,11 @@ mod tests {
             WorktreeSwitch::Follow,
         ] {
             assert_eq!(
-                redirect(main.clone(), vec![main.clone()], mode),
+                redirect(vec![main.clone()], mode),
                 (main.clone(), vec![main.clone()])
             );
             assert_eq!(
-                redirect(plain.clone(), vec![plain.clone()], mode),
+                redirect(vec![plain.clone()], mode),
                 (plain.clone(), vec![plain.clone()])
             );
         }
@@ -363,7 +345,6 @@ mod tests {
         let other = PathBuf::from("/nonexistent/other");
         assert_eq!(
             redirect(
-                wt.clone(),
                 vec![wt.clone(), main.clone(), other.clone()],
                 WorktreeSwitch::Main
             ),

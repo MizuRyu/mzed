@@ -980,9 +980,10 @@ pub(crate) fn App() -> Element {
 
     // Switch to `new_primary` (with `new_roots` as the full sidebar set),
     // retaining per-project tabs. Parks the current project's tabs, restores the
-    // target's (or starts empty + opens `open_pick`). A re-selection of the same
-    // primary root keeps the live tabs untouched. Centralised so Zed/Orca
-    // auto-switch, IPC OpenDir, and the manual dropdown all behave identically.
+    // target's (or starts empty + opens `open_pick`). The same-selection case
+    // is already filtered out by `open_project`'s own check before this runs.
+    // Centralised so Zed/Orca auto-switch, IPC OpenDir, and the manual dropdown
+    // all behave identically.
     let mut switch_project = move |new_primary: PathBuf,
                                    new_roots: Vec<PathBuf>,
                                    expanded_set: HashSet<PathBuf>,
@@ -990,16 +991,6 @@ pub(crate) fn App() -> Element {
                                    tab_policy: TabPolicy| {
         let old = root();
         let same_primary = old.as_deref() == Some(new_primary.as_path());
-        if same_selection(old.as_deref(), &roots.read(), &new_primary, &new_roots) {
-            // Exactly what is already on screen: skip the signal writes to avoid
-            // spurious reactive updates (tree rebuild, document reload, sidebar
-            // flicker). Only honour an explicit additional file pick.
-            if let Some(f) = open_pick {
-                show_window_if_dismissed();
-                tabs.write().open(f, tab_insert());
-            }
-            return;
-        }
         // why: a dismissed base window keeps following the editor, so it has to
         // come back on screen rather than switch projects out of sight.
         show_window_if_dismissed();
@@ -1074,8 +1065,8 @@ pub(crate) fn App() -> Element {
     // why: every switch (Zed, Orca, CLI, drop, Cmd+O, favourite) goes through
     // here, so `worktree_switch` applies once and the representative markdown
     // is picked on the roots the redirect left. Keep (SelfPinned) opens nothing.
-    let mut open_project = move |primary: PathBuf, roots_in: Vec<PathBuf>, policy: TabPolicy| {
-        let (primary, new_roots) = crate::worktrees::redirect(primary, roots_in, worktree_switch());
+    let mut open_project = move |_primary: PathBuf, roots_in: Vec<PathBuf>, policy: TabPolicy| {
+        let (primary, new_roots) = crate::worktrees::redirect(roots_in, worktree_switch());
         // why: two worktrees of one repository redirect to the same selection,
         // so moving between them must be a no-op. Picking a representative
         // markdown first would scan the disk and then steal the active tab.

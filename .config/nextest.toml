@@ -1,4 +1,8 @@
 # cargo nextest configuration. See https://nexte.st/docs/configuration/
+#
+# 削除条件: ウォッチャの起動を実 FSEvents ではなくフェイクにできたら、この
+# グループは不要。確認: `cargo nextest run` を並列既定で 3 回流して watch 系
+# が落ちなければ削除。
 
 [test-groups]
 # 実ファイルシステムを監視する notify (FSEvents) ウォッチャを起動するテスト専用の

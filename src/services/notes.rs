@@ -165,6 +165,9 @@ fn file_name(note: &Note) -> String {
     format!("{stamp}-{}.json", digest(note))
 }
 
+// The sequence guards against a same-second collision within this process,
+// the pid against another process writing at the same time, and the content
+// hash against a file name from which the note's contents could be guessed.
 fn digest(note: &Note) -> String {
     let mut hasher = std::hash::DefaultHasher::new();
     note.file.hash(&mut hasher);
