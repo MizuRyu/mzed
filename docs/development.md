@@ -69,6 +69,10 @@ just release
 
 Apple 署名 / notarization はしない（配布規模が小さいため意図的に未署名）。
 
+## 依存の更新（Renovate）
+
+`renovate.json` が毎週月曜の早朝に Cargo・npm・nix flake・GitHub Actions の更新 PR を作る。npm の依存（mermaid、KaTeX、highlight.js、github-markdown-css）は `assets/` に同梱したコピーが実体なので、package.json が上がった PR では `just assets` を実行してコピーし直し、差分を同じ PR に含める。mermaid を上げたときは `just verify`（同梱版の正規表現をテストが突き合わせる）と `tests/fixtures/showcase.md` の目視を行う。
+
 ## テスト
 
 - ユニット + 統合テスト: `cargo test`（単一インスタンス IPC は `tests/instance_integration.rs`）

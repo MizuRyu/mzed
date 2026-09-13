@@ -1,0 +1,42 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "timezone": "Asia/Tokyo",
+  "schedule": ["before 6am on monday"],
+  "labels": ["dependencies"],
+  "prConcurrentLimit": 3,
+  "nix": { "enabled": true },
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 6am on monday"],
+    "commitMessageAction": "Update lock files"
+  },
+  "packageRules": [
+    {
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions"
+    },
+    {
+      "matchManagers": ["cargo"],
+      "groupName": "Rust crates",
+      "prBodyNotes": [
+        "マージ前に `just verify` を通すこと。mermaid の描画に関わる crate（lol_html、pulldown-cmark）は `tests/fixtures/showcase.md` を実機で目視する。"
+      ]
+    },
+    {
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["dioxus"],
+      "groupName": "Dioxus",
+      "prBodyNotes": [
+        "UI 基盤。マージ前に `just bundle` した .app で起動・分割・設定画面・メモを目視すること。"
+      ]
+    },
+    {
+      "matchManagers": ["npm"],
+      "groupName": "WebView assets",
+      "prBodyNotes": [
+        "package.json の更新だけでは表示は変わらない。`assets/` に同梱したファイルは npm 版のコピーなので、この PR のブランチで `just assets` を実行してコピーし直し、差分をこの PR に含めること。mermaid を上げる場合は `just verify`（mindmap 判定の正規表現テストが同梱版と突き合わせる）と `tests/fixtures/showcase.md` の目視も行う。"
+      ]
+    }
+  ]
+}

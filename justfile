@@ -60,3 +60,19 @@ uninstall:
   rm -rf /Applications/mzed.app
   rm -f ~/.local/bin/mzed
   @echo "Uninstalled mzed"
+
+# Copy the WebView assets (mermaid, KaTeX, highlight.js, github-markdown-css) from
+# node_modules into assets/. Run after Renovate bumps package.json; the bundled
+# files are byte copies of the npm packages, so the diff shows exactly what changed.
+assets:
+  pnpm install --frozen-lockfile
+  cp node_modules/mermaid/dist/mermaid.min.js assets/mermaid.min.js
+  cp node_modules/katex/dist/katex.min.js assets/katex/katex.min.js
+  cp node_modules/katex/dist/katex.min.css assets/katex/katex.min.css
+  cp node_modules/katex/dist/contrib/auto-render.min.js assets/katex/auto-render.min.js
+  rm -r assets/katex/fonts && cp -R node_modules/katex/dist/fonts assets/katex/fonts
+  cp node_modules/@highlightjs/cdn-assets/highlight.min.js assets/highlight.min.js
+  cp node_modules/@highlightjs/cdn-assets/styles/github.min.css assets/highlight-github.css
+  cp node_modules/@highlightjs/cdn-assets/styles/github-dark.min.css assets/highlight-github-dark.css
+  cp node_modules/github-markdown-css/github-markdown-light.css assets/github-markdown.css
+  cp node_modules/github-markdown-css/github-markdown-dark.css assets/github-markdown-dark.css
