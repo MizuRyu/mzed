@@ -45,12 +45,13 @@ fn is_unread_in(hist: &PerProjectHistory, key: &str, mtime: u64) -> bool {
     )
 }
 
-/// Flag every file under `nodes` and roll the counts up into the directories.
+/// Flag every file under `nodes` and roll the counts up into the directories,
+/// then reorder each directory's children (see [`order_unread_first`]).
 /// Returns the total, for the toolbar badge. Pure: the mtimes come from the
 /// tree walk, so marking never stats.
 pub fn mark(nodes: &mut [TreeNode], root: &Path, hist: &PerProjectHistory) -> usize {
     let mut total = 0;
-    for node in nodes {
+    for node in nodes.iter_mut() {
         if node.is_dir {
             node.unread_count = mark(&mut node.children, root, hist);
             node.unread = false;
@@ -60,7 +61,34 @@ pub fn mark(nodes: &mut [TreeNode], root: &Path, hist: &PerProjectHistory) -> us
         }
         total += node.unread_count;
     }
+    order_unread_first(nodes);
     total
+}
+
+/// Reorder one directory's children the way the sidebar shows them:
+/// subdirectories first (name order), then unread files newest-first
+/// (mtime descending, ties by name), then read files in name order.
+/// Pure and non-recursive by itself — `mark` calls it at every level as it
+/// unwinds, so nested directories end up ordered too.
+pub fn order_unread_first(children: &mut [TreeNode]) {
+    children.sort_by(|a, b| {
+        let rank = |n: &TreeNode| -> u8 {
+            if n.is_dir {
+                0
+            } else if n.unread {
+                1
+            } else {
+                2
+            }
+        };
+        rank(a).cmp(&rank(b)).then_with(|| {
+            if !a.is_dir && a.unread && !b.is_dir && b.unread {
+                b.mtime.cmp(&a.mtime).then_with(|| a.name.cmp(&b.name))
+            } else {
+                a.name.cmp(&b.name)
+            }
+        })
+    });
 }
 
 /// Record that `path` was read at the mtime it carries now. Redundant records
@@ -255,6 +283,58 @@ mod tests {
         assert!(tree[0].children[0].unread);
         assert!(!tree[0].children[1].unread);
         assert!(tree[1].unread);
+    }
+
+    #[test]
+    fn markは未読ファイルを先頭にmtime降順でまとめる() {
+        let mut tree = vec![
+            file_node("/p/old-read.md", 50),  // 既読（初回オープンより前）
+            file_node("/p/z-unread.md", 300), // 未読、最新
+            file_node("/p/a-unread.md", 200), // 未読
+            file_node("/p/m-read.md", 60),    // 既読
+        ];
+        mark(&mut tree, Path::new("/p"), &hist(100, 0, &[]));
+        let names: Vec<&str> = tree.iter().map(|n| n.name.as_str()).collect();
+        // 未読(mtime降順) → 既読(名前順)。
+        assert_eq!(
+            names,
+            vec!["z-unread.md", "a-unread.md", "m-read.md", "old-read.md"]
+        );
+    }
+
+    #[test]
+    fn markは未読の同mtimeを名前順にする() {
+        let mut tree = vec![file_node("/p/b.md", 200), file_node("/p/a.md", 200)];
+        mark(&mut tree, Path::new("/p"), &hist(100, 0, &[]));
+        let names: Vec<&str> = tree.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, vec!["a.md", "b.md"]);
+    }
+
+    #[test]
+    fn markはディレクトリを常に未読ファイルより前に名前順で置く() {
+        let mut tree = vec![
+            file_node("/p/z-unread.md", 999), // 未読・最新mtimeでもディレクトリより後
+            dir_node("/p/zeta", vec![file_node("/p/zeta/x.md", 10)]),
+            dir_node("/p/alpha", vec![file_node("/p/alpha/x.md", 10)]),
+        ];
+        mark(&mut tree, Path::new("/p"), &hist(100, 0, &[]));
+        let names: Vec<&str> = tree.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "zeta", "z-unread.md"]);
+    }
+
+    #[test]
+    fn markはネストしたフォルダの中も並べ替える() {
+        let mut tree = vec![dir_node(
+            "/p/docs",
+            vec![
+                file_node("/p/docs/old.md", 50),
+                file_node("/p/docs/new.md", 300),
+                file_node("/p/docs/mid.md", 200),
+            ],
+        )];
+        mark(&mut tree, Path::new("/p"), &hist(100, 0, &[]));
+        let names: Vec<&str> = tree[0].children.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, vec!["new.md", "mid.md", "old.md"]);
     }
 
     #[test]

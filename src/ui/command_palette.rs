@@ -36,8 +36,9 @@ pub(crate) fn Palette(
     let file_rows: Vec<files::PaletteFile> = if file_mode() {
         let mut ranked = fuzzy::rank_tiered(&q, &files, |f| f.keys(), |f| f.mtime);
         // Unread outranks every tier; the sort is stable, so the tiered order
-        // survives inside each group.
+        // survives inside the read group.
         ranked.sort_by_key(|f| !f.unread);
+        sort_unread_by_recency(&mut ranked);
         ranked.into_iter().cloned().collect()
     } else {
         Vec::new()
@@ -216,5 +217,53 @@ pub(crate) fn Palette(
                 }
             }
         }
+    }
+}
+
+/// Re-sort the unread prefix of an already `!f.unread`-partitioned list by
+/// mtime descending, leaving the read suffix (still in match-tier order) and
+/// tie order (stable) untouched.
+fn sort_unread_by_recency(ranked: &mut [&files::PaletteFile]) {
+    let unread_len = ranked.iter().take_while(|f| f.unread).count();
+    ranked[..unread_len].sort_by_key(|f| std::cmp::Reverse(f.mtime));
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)] // Japanese test names may embed ASCII.
+mod tests {
+    use super::*;
+
+    fn file(name: &str, mtime: u64, unread: bool) -> files::PaletteFile {
+        files::PaletteFile {
+            path: PathBuf::from(name),
+            rel: name.to_string(),
+            name: name.to_string(),
+            mtime,
+            unread,
+        }
+    }
+
+    #[test]
+    fn 未読グループだけmtime降順に並び既読は元の順を保つ() {
+        let a = file("a.md", 100, true);
+        let b = file("b.md", 300, true);
+        let c = file("c.md", 200, true);
+        let d = file("d.md", 999, false);
+        let e = file("e.md", 1, false);
+        // 既読グループ(d, e)は一致順(呼び出し前の順)のまま、mtimeでは並ばない。
+        let mut ranked = vec![&a, &b, &c, &d, &e];
+        sort_unread_by_recency(&mut ranked);
+        let names: Vec<&str> = ranked.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["b.md", "c.md", "a.md", "d.md", "e.md"]);
+    }
+
+    #[test]
+    fn 未読が無ければ何もしない() {
+        let d = file("d.md", 999, false);
+        let e = file("e.md", 1, false);
+        let mut ranked = vec![&d, &e];
+        sort_unread_by_recency(&mut ranked);
+        let names: Vec<&str> = ranked.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["d.md", "e.md"]);
     }
 }
