@@ -3354,7 +3354,7 @@ dependencies = [
 
 [[package]]
 name = "mzed"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "anyhow",
  "base64",
