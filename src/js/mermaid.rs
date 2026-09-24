@@ -126,6 +126,8 @@ const MDO_MERMAID = {
     const mindmaps = [];
     const others = [];
     for (const pre of pres) {
+      // mermaid.run skips these itself; the stage below would not.
+      if (pre.getAttribute('data-processed')) continue;
       const src = pre.dataset.mdoSrc ?? pre.textContent;
       if (this.isMindmap(src)) {
         pre.textContent = this.stripSourceConfig(src);
@@ -134,11 +136,134 @@ const MDO_MERMAID = {
         others.push(pre);
       }
     }
-    for (const [nodes, mindmap] of [[others, false], [mindmaps, true]]) {
-      if (!nodes.length) continue;
-      mermaid.initialize(this.config(dark, mindmap));
-      try { await mermaid.run({ nodes }); } catch (e) { console.error('mzed mermaid', e); }
+    if (!others.length && !mindmaps.length) return;
+    const frame = await this.frame().catch((e) => {
+      console.error('mzed mermaid frame', e);
+      return null;
+    });
+    if (frame) {
+      try {
+        await this.draw(frame, others, mindmaps, dark);
+        return;
+      } catch (e) {
+        console.error('mzed mermaid frame', e);
+        this.dropFrame();
+      }
     }
+    await this.draw(window, others, mindmaps, dark);
+  },
+
+  // The first few diagrams go into the page as soon as they are drawn, so the
+  // top of a long document does not wait for the whole batch.
+  firstBatch: 3,
+
+  // Draws in `win` (the frame, or this page as the fallback) and moves each
+  // finished SVG into its <pre>. A diagram mermaid rejects keeps its source and
+  // stays unprocessed. Throws only when `win`'s mermaid itself is unusable;
+  // diagrams already moved stay, and the rest are left for the caller.
+  async draw(win, others, mindmaps, dark) {
+    const pending = (nodes) => nodes.filter((pre) => !pre.getAttribute('data-processed'));
+    const stages = this.stage(win.document, pending([...others, ...mindmaps]));
+    const drawn = [];
+    const settle = () => {
+      for (const [pre, stage] of drawn.splice(0)) {
+        if (win !== window) this.localMarkers(stage);
+        pre.setAttribute('data-processed', 'true');
+        pre.replaceChildren(...stage.childNodes);
+      }
+    };
+    try {
+      let count = 0;
+      for (const [nodes, mindmap] of [[others, false], [mindmaps, true]]) {
+        const todo = pending(nodes);
+        if (!todo.length) continue;
+        win.mermaid.initialize(win.JSON.parse(JSON.stringify(this.config(dark, mindmap))));
+        for (const pre of todo) {
+          const stage = stages.get(pre);
+          try {
+            await win.mermaid.run({ nodes: [stage] });
+            drawn.push([pre, stage]);
+          } catch (e) { console.error('mzed mermaid', e); }
+          if (!mindmap && ++count === this.firstBatch) settle();
+        }
+      }
+    } finally {
+      settle();
+      for (const stage of stages.values()) stage.remove();
+    }
+  },
+
+  // why: with arrowMarkerAbsolute, mermaid writes marker references as
+  // `url(<its document's URL>#id)`. Drawn in the frame that URL is about:blank,
+  // so the arrowheads would vanish once moved here. `#id` is what the absolute
+  // URL of this page resolves to anyway.
+  localMarkers(root) {
+    for (const attr of ['marker-start', 'marker-mid', 'marker-end']) {
+      for (const el of root.querySelectorAll(`[${attr}]`)) {
+        el.setAttribute(attr, el.getAttribute(attr).replace(/^url\([^#)]*#/, 'url(#'));
+      }
+    }
+  },
+
+  // why: mermaid removes its scratch <div> (and the <style> in it) after every
+  // diagram. In this document that re-lays out the whole page: 2.2s per diagram
+  // in a 5MB file. A hidden same-origin frame with its own mermaid takes that
+  // churn, and only the finished SVG nodes are moved over. A frame that failed
+  // is dropped, so the next render builds a new one instead of reusing it.
+  frame() {
+    const cached = window.__mdoMermaidFrame;
+    if (cached && cached.el.isConnected) return cached.ready;
+    const el = document.createElement('iframe');
+    el.setAttribute('aria-hidden', 'true');
+    el.tabIndex = -1;
+    el.style.cssText = 'position:absolute; left:-99999px; top:0; width:1px; height:1px; border:0; visibility:hidden;';
+    const ready = new Promise((resolve, reject) => {
+      const src = document.querySelector('script[src*="mermaid"]')?.src;
+      if (!src) { reject(new Error('mermaid script not found')); return; }
+      document.body.appendChild(el);
+      const script = el.contentDocument.createElement('script');
+      script.src = src;
+      // A script that loads but throws while running still fires onload.
+      script.onload = () => el.contentWindow.mermaid
+        ? resolve(el.contentWindow)
+        : reject(new Error('mermaid did not start in frame'));
+      script.onerror = () => reject(new Error('mermaid failed to load in frame'));
+      el.contentDocument.head.appendChild(script);
+    }).catch((e) => {
+      this.dropFrame();
+      throw e;
+    });
+    window.__mdoMermaidFrame = { el, ready };
+    return ready;
+  },
+
+  dropFrame() {
+    window.__mdoMermaidFrame?.el.remove();
+    window.__mdoMermaidFrame = null;
+  },
+
+  // One stage per diagram with the <pre>'s content width, layout and text
+  // properties, so mermaid measures what it would have measured in place (gantt
+  // sizes itself from its parent, and the card's <pre> is a centring flexbox).
+  stageProps: ['display', 'flexDirection', 'justifyContent', 'alignItems', 'fontFamily', 'fontSize',
+    'fontWeight', 'fontStyle', 'fontStretch', 'fontKerning', 'fontVariantLigatures', 'fontFeatureSettings',
+    'lineHeight', 'letterSpacing', 'wordSpacing', 'whiteSpace', 'textRendering', 'textTransform'],
+
+  stage(doc, pres) {
+    const looks = pres.map((pre) => {
+      const cs = getComputedStyle(pre);
+      const look = { width: Math.max(0, pre.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)) + 'px' };
+      for (const prop of this.stageProps) look[prop] = cs[prop];
+      return look;
+    });
+    return new Map(pres.map((pre, i) => {
+      const stage = doc.createElement('pre');
+      stage.style.cssText = 'position:absolute; left:-99999px; top:0; margin:0; padding:0; border:0;';
+      Object.assign(stage.style, looks[i]);
+      stage.textContent = pre.textContent;
+      doc.body.appendChild(stage);
+      return [pre, stage];
+    }));
   },
 };
 "#;
@@ -486,6 +611,93 @@ mod tests {
         let js = helper_js();
         assert!(js.contains("window.__mdoMermaidQueue"));
         assert!(js.contains("window.__mdoMermaidQueue = next"));
+    }
+
+    /// 図は隠した同一オリジンの iframe 内の mermaid で描き、完成した SVG ノードだけを
+    /// 元の `pre` に移す。本文側に innerHTML の入口を足さない。
+    #[test]
+    fn ヘルパーJSは別文書で描いて結果のノードだけ移す() {
+        let js = helper_js();
+        assert!(js.contains("document.createElement('iframe')"));
+        assert!(js.contains("script[src*=\"mermaid\"]"));
+        assert!(js.contains("await win.mermaid.run({ nodes: [stage] })"));
+        assert!(js.contains("pre.replaceChildren(...stage.childNodes)"));
+        assert!(!js.contains("innerHTML"));
+        // iframe が使えないときは本文の文書で描く。
+        assert!(js.contains("await this.draw(window, others, mindmaps, dark)"));
+    }
+
+    /// 読み込み失敗・実行失敗の iframe は捨て、次の描画で作り直す。
+    /// 描画途中で iframe 側の mermaid が壊れたら本文で描き直す。
+    #[test]
+    fn ヘルパーJSは失敗したiframeを捨てて本文で描く() {
+        let js = helper_js();
+        assert!(js.contains("el.contentWindow.mermaid"));
+        assert!(js.contains("mermaid did not start in frame"));
+        let frame = js.split_once("  frame() {").unwrap().1;
+        assert!(frame.contains("this.dropFrame();"));
+        let render = js.split_once("async render(pres, dark)").unwrap().1;
+        let fallback = render.find("this.dropFrame();").unwrap();
+        let in_page = render.find("await this.draw(window,").unwrap();
+        assert!(fallback < in_page);
+        // stage は成否にかかわらず片付ける。
+        let draw = js
+            .split_once("async draw(win, others, mindmaps, dark)")
+            .unwrap()
+            .1;
+        let fin = draw.find("} finally {").unwrap();
+        assert!(fin < draw.find("stage.remove()").unwrap());
+    }
+
+    /// mermaid が描けなかった図は SVG を移さず、ソースのまま未処理で残す。
+    #[test]
+    fn ヘルパーJSは成功した図だけを本文へ移す() {
+        let js = helper_js();
+        let draw = js
+            .split_once("async draw(win, others, mindmaps, dark)")
+            .unwrap()
+            .1;
+        let run = draw
+            .find("await win.mermaid.run({ nodes: [stage] });")
+            .unwrap();
+        let keep = draw.find("drawn.push([pre, stage]);").unwrap();
+        let catch = draw
+            .find("catch (e) { console.error('mzed mermaid', e); }")
+            .unwrap();
+        assert!(run < keep && keep < catch);
+        assert!(js.contains("pre.setAttribute('data-processed', 'true');"));
+    }
+
+    /// 通常図の最初の 3 枚は、残りを待たずに本文へ反映する。
+    #[test]
+    fn ヘルパーJSは最初の3枚を先に反映する() {
+        let js = helper_js();
+        assert!(js.contains("firstBatch: 3,"));
+        assert!(js.contains("if (!mindmap && ++count === this.firstBatch) settle();"));
+    }
+
+    /// iframe で描いた図のマーカー参照（arrowMarkerAbsolute で about:blank 基準の絶対 URL）を
+    /// 本文内の `#id` 参照に直す。
+    #[test]
+    fn ヘルパーJSはiframeで描いた矢印マーカーをローカル参照に直す() {
+        let js = helper_js();
+        assert!(js.contains("if (win !== window) this.localMarkers(stage);"));
+        assert!(js.contains(r"replace(/^url\([^#)]*#/, 'url(#')"));
+        for attr in ["marker-start", "marker-mid", "marker-end"] {
+            assert!(js.contains(&format!("'{attr}'")), "{attr}");
+        }
+    }
+
+    /// 描画済みの図は mermaid.run と同じく飛ばす（stage 経由でも二重描画しない）。
+    #[test]
+    fn ヘルパーJSは描画済みの図を飛ばす() {
+        let js = helper_js();
+        let render = js.split_once("async render(pres, dark)").unwrap().1;
+        let skip = render
+            .find("if (pre.getAttribute('data-processed')) continue;")
+            .unwrap();
+        let classify = render.find("this.isMindmap(src)").unwrap();
+        assert!(skip < classify);
     }
 
     /// mindmap は専用パスで描画され、ソースの色指定は取り除かれる。

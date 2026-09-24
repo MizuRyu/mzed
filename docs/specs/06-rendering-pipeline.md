@@ -165,6 +165,21 @@ ToC は pulldown-cmark event から見出しを拾って構築する。WebView �
 
 `mermaid.initialize` はグローバル設定を書き換えるため、`initialize` → `run` の 1 組は次の 1 組が始まる前に終わる必要がある。`serve` の連続ロードなどで描画要求が重なっても混ざらないよう、描画全体を `window.__mdoMermaidQueue` の 1 本の Promise チェーンで直列化する。
 
+**描画は別文書で行う:** mermaid は図を 1 枚描くたびに、寸法計測用の作業 `<div>`（中に図の `<style>` を含む）を文書から取り除く。本文と同じ文書でこれが起きると、WebKit はスタイルを組み直して文書全体をレイアウトし直す。5MB の文書では 1 回 2.2 秒かかり、図の枚数だけ繰り返していた（Mermaid 30 図で初回描画 72 秒）。`contain: strict` の囲いを使っても止まらない（組み直しは文書全体のスタイルに及ぶため）。
+
+そこで `MDO_MERMAID` は、隠した同一オリジンの `<iframe>`（ウィンドウごとに 1 つ、初回に本文と同じ `mermaid.min.js` を読み込む）の中の mermaid で描く。iframe は描画する文書を分けるためのもので、権限は分けていない（同一オリジンで `sandbox` 属性なし。安全性は従来どおり `securityLevel: 'strict'` と mermaid のサニタイズに依る）。
+
+- 図ごとに iframe 内へ作業用の `<pre>`（stage）を置く。stage には元の `pre.mermaid` の内容幅と、表示・フレックス配置・文字関係の計算済みスタイルを写す。gantt は親の幅から、カード内の `pre` は中央寄せのフレックスとして寸法を決めるので、元の場所で描いたときと同じ計測になる。
+- 描画に成功した図だけ、stage の子ノード（mermaid がサニタイズ済みの SVG）を元の `pre` へ `replaceChildren` で移し、`data-processed` を付ける。mermaid が例外を出した図は何も移さず、元の `pre` がソースのまま残る（`data-processed` も付かず、キャッシュにも入らない。次の再描画で再試行）。本文側に HTML 文字列の差し込み口は増やさない。`securityLevel: 'strict'` もそのまま。
+- `data-processed` 付きの `pre` は、`mermaid.run` と同じく描かずに飛ばす。
+- 通常の図は最初の 3 枚が描けた時点でいったん本文へ移し、残り（mindmap を含む）はまとめて移す。長い文書の先頭の図が全体を待たずに出る（`big.md` で最初の 3 枚が約 0.5 秒、30 枚で約 1.3 秒）。
+- `arrowMarkerAbsolute` を有効にした図は、矢印マーカーの参照が「描いた文書の URL + `#id`」になる。iframe の URL は `about:blank` なので、移す前に `marker-start` / `marker-mid` / `marker-end` の参照を `url(#id)` に直す（本文の URL の絶対参照と同じ要素を指す）。
+- iframe を用意できないとき（mermaid の `<script>` が見つからない、読み込みに失敗した、読み込めたが `mermaid` が定義されない）と、iframe 側の mermaid が描画中に使えなくなったとき（`initialize` が例外を出す）は、その iframe を捨て、本文の文書に stage を置いて同じ手順で描く（速くはならないが表示は同じ）。捨てた iframe は再利用せず、次の描画で作り直す。
+
+既知の差: `arrowMarkerAbsolute` を有効にした flowchart だけ、SVG の表示高さが viewBox より約 9px 高くなり、カードの下の余白が増える（矢印と図の中身は同じ。WebKit で、移した SVG の高さが再レイアウトされるまで古い値のまま残る。原因は未特定）。
+
+実測（`big.md`: 5.2MB、コード 300・Mermaid 30、`just bundle` した .app、ダーク）: 初回描画の後処理は 72.3 秒 → 1.5 秒。50KB に同じ 30 図だけを置いた文書では 1.8 秒 → 0.9 秒。
+
 **mindmap ラベルの中央寄せ:** `htmlLabels: false` では、mermaid 11 は図形側が要求したときだけノードラベルを水平中央に寄せる。mindmap が流用する汎用シェイプ（circle / rect / rounded / hexagon）はこれを要求しないため、ラベル group が `translate(0, -h/2)` のまま残り、テキストがノードの右にはみ出す（`root((…))` で最も目立つ）。この transform を選択する `themeCSS` で `text-anchor: middle` を当てて補正する。自前で中央寄せするシェイプ（bang / cloud / 装飾なしノード）は `-w/2` を書くため、この選択子には当たらない。
 
 **インライン図のズーム / パン:** インラインカード（`.mdo-mermaid`）は ⌘+ホイール（トラックパッドのピンチを含む）でカーソル基準ズーム、ドラッグでパン、ダブルクリックで等倍に戻る。修飾キーなしのホイールはページスクロールのまま通す。ズーム状態は図ごとに持ち、再描画（テーマ切替・ライブリロード）で等倍に戻る。ズーム / パンの実装 `mdoZoomPan` はポップアウト窓と共有する（ポップアウトは修飾キーなしでズームし、ダブルクリックは全体表示）。
@@ -203,7 +218,7 @@ ToC は pulldown-cmark event から見出しを拾って構築する。WebView �
 - ウィンドウが非表示（`document.hidden`）のとき、または SVG の表示寸法の幅か高さが 0 のときに描いた図も覚えない（寸法を誤ったまま残さないため）。
 - KaTeX は毎回 `renderMathInElement` を掛け直す（計測で主因ではなかった）。
 
-実測（`big.md`: 5.2MB、コード 300・Mermaid 30、`just bundle` した .app、ダーク・KaTeX 有効）: 保存後の後処理は修正前 65.4 秒 → 修正後 0.1〜0.3 秒。初回表示（キャッシュが空）は変わらず約 69 秒。
+実測（`big.md`: 5.2MB、コード 300・Mermaid 30、`just bundle` した .app、ダーク・KaTeX 有効）: 保存後の後処理は修正前 65.4 秒 → 修正後 0.1〜0.3 秒。初回表示（キャッシュが空）は、上の「描画は別文書で行う」で約 69 秒 → 1.5 秒。
 
 ### ファイル内検索（Cmd+F）
 

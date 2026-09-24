@@ -30,7 +30,7 @@ __MDO_MERMAID_HELPER__
     document.body.removeChild(host); // detach but keep `clone` reference
   }
 
-  // Restore the live view's Mermaid theme (we changed the global config above).
+  // Only a fallback to drawing in this page changes its config; restore it then.
   if (window.mermaid) {
     mermaid.initialize(MDO_MERMAID.config(__MDO_LIVE_DARK__, false));
   }
