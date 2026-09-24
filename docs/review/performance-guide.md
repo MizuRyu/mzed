@@ -116,8 +116,9 @@ let hits = files
 
 ## 測定
 
-性能改善では、変更前後の少なくとも1つを記録する。
-具体的な測定手順と初回 baseline は [performance/measurement-methods.md](performance/measurement-methods.md) と [performance/prototype-baseline-2026-06-28.md](performance/prototype-baseline-2026-06-28.md) に置く。
+性能改善では、変更前後の少なくとも 1 つを記録する。初回 baseline と手順の記録はローカルの `docs/memo/archive/` に移動済み。
+
+`MZED_PERF=1` を付けて起動すると、`src/perf.rs` の `measure` で囲んだ区間（`file.read_markdown`、`markdown.render` / `markdown.wikilinks` / `markdown.post_process`、`files.build_tree` / `files.merge_trees` / `files.update_mtimes`、`webview.post_render`）の所要 ms がログに出る。`mzed serve` でも同じ計装が効くので、GUI を介さずに Rust 側の描画経路を測れる。
 
 候補:
 
@@ -128,6 +129,24 @@ let hits = files
 - search 時間
 - memory usage
 - watcher 数
+
+### 計測記録 2026-09-24（release、中央値）
+
+計算量レビューを受けて計測・修正した。再現フィクスチャと手順はローカルの `z-ai/2026-09-24-perf/`（`gen_fixtures.py` で生成、`mzed serve` + `MZED_PERF=1` と jsdom）。
+
+| 経路 | 入力 | 修正前 | 修正後 |
+|---|---|---|---|
+| wikilink の basename 解決 | 未解決 100 件、md 2 万 / dir 2,800 | 9,658ms（1 件 97ms） | 109ms（索引 1 回、件数によらず一定） |
+| wikilink 前処理 | 未閉鎖 `[` 20 万個 | 9,761ms（二乗） | 1.3ms |
+| autolink | 裸 URL 1 万個 | 2,552ms（二乗） | 6.5ms |
+| autolink | メール 1 万個 + 長い URL | 114ms（二乗） | 4.6ms |
+| worktree 合成 `merge_trees` | 兄弟 2,000 × worktree 10 | 未計測 | 32ms（テスト経由） |
+| ライブリロード後の WebView 再処理 | 5MB、コード 300、Mermaid 30 | 65,403ms | 112〜311ms（ブロック単位キャッシュ） |
+| Find | 5MB、1 文字クエリ | Range 32,766、81ms（jsdom） | Range 最大 1,001、22ms |
+| メモの選択監視 | 5MB、1 イベント | 50ms（jsdom） | 0.17ms（2 回目以降） |
+| 連続保存の滞留 | 250ms × 20 回 | 465ms で安定、再計算 2 回、RSS 増なし | 変更なし |
+
+既知で未対応: 5MB 文書の初回描画が約 70 秒（WebView 側。内訳を計測中）。
 
 簡易ログ例:
 
