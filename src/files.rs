@@ -148,7 +148,14 @@ pub fn build_tree_overlay(root: &Path, worktree_roots: &[&Path]) -> Vec<TreeNode
     let mut tree = build_tree(root);
     for wt in worktree_roots {
         let overlaid = remap_tree(build_tree(wt), wt, root);
-        tree = merge_trees(tree, overlaid);
+        tree = crate::perf::measure(
+            "files.merge_trees",
+            &[
+                ("root", root.display().to_string()),
+                ("worktree", wt.display().to_string()),
+            ],
+            || merge_trees(tree, overlaid),
+        );
     }
     tree
 }
@@ -172,10 +179,15 @@ fn remap_tree(nodes: Vec<TreeNode>, from: &Path, to: &Path) -> Vec<TreeNode> {
 /// duplicate files collapse to one node (paths are equal after remapping).
 fn merge_trees(a: Vec<TreeNode>, b: Vec<TreeNode>) -> Vec<TreeNode> {
     let mut merged = a;
+    // why: a keyed lookup keeps the merge linear in the number of siblings.
+    let mut index: HashMap<(String, bool), usize> = HashMap::with_capacity(merged.len());
+    for (i, m) in merged.iter().enumerate() {
+        index.entry((m.name.clone(), m.is_dir)).or_insert(i);
+    }
     for node in b {
-        match merged
-            .iter_mut()
-            .find(|m| m.name == node.name && m.is_dir == node.is_dir)
+        match index
+            .get(&(node.name.clone(), node.is_dir))
+            .map(|&i| &mut merged[i])
         {
             Some(existing) if existing.is_dir => {
                 let children = merge_trees(std::mem::take(&mut existing.children), node.children);
@@ -186,7 +198,10 @@ fn merge_trees(a: Vec<TreeNode>, b: Vec<TreeNode>) -> Vec<TreeNode> {
             // Same file in both checkouts → one logical node, carrying the
             // mtime of the copy `Overlay::resolve` will display (the freshest).
             Some(existing) => existing.mtime = existing.mtime.max(node.mtime),
-            None => merged.push(node),
+            None => {
+                index.insert((node.name.clone(), node.is_dir), merged.len());
+                merged.push(node);
+            }
         }
     }
     // Restore the sidebar order: directories first, then files, by name.
@@ -234,10 +249,18 @@ pub fn find_mtime(nodes: &[TreeNode], path: &Path) -> Option<u64> {
 /// a full rescan would be a full re-stat of the project for one saved file.
 /// Returns whether anything actually changed.
 pub fn update_mtimes(nodes: &mut [TreeNode], updates: &HashMap<PathBuf, u64>) -> bool {
+    crate::perf::measure(
+        "files.update_mtimes",
+        &[("updates", updates.len().to_string())],
+        || apply_mtimes(nodes, updates),
+    )
+}
+
+fn apply_mtimes(nodes: &mut [TreeNode], updates: &HashMap<PathBuf, u64>) -> bool {
     let mut changed = false;
     for n in nodes {
         if n.is_dir {
-            if update_mtimes(&mut n.children, updates) {
+            if apply_mtimes(&mut n.children, updates) {
                 n.mtime = n.children.iter().map(|c| c.mtime).max().unwrap_or(0);
                 changed = true;
             }
@@ -534,6 +557,48 @@ mod tests {
                 .path,
             main.join("docs/guide.md")
         );
+    }
+
+    #[test]
+    fn merge_treesは広い兄弟を並び規則どおりに合成する() {
+        fn file(name: String, mtime: u64) -> TreeNode {
+            TreeNode {
+                path: PathBuf::from(format!("/p/{name}")),
+                name,
+                is_dir: false,
+                md_count: 1,
+                mtime,
+                unread: false,
+                unread_count: 0,
+                children: vec![],
+            }
+        }
+        let side = |wt: u64| -> Vec<TreeNode> {
+            // 半分は main と同名、半分は worktree 固有。
+            (0..2_000)
+                .map(|i| {
+                    let name = if i % 2 == 0 {
+                        format!("{i:04}.md")
+                    } else {
+                        format!("wt{wt}-{i:04}.md")
+                    };
+                    file(name, wt)
+                })
+                .collect()
+        };
+        let mut tree: Vec<TreeNode> = (0..2_000).map(|i| file(format!("{i:04}.md"), 0)).collect();
+        for wt in 1..=10 {
+            tree = merge_trees(tree, side(wt));
+        }
+
+        assert_eq!(tree.len(), 2_000 + 10 * 1_000);
+        let names: Vec<&str> = tree.iter().map(|n| n.name.as_str()).collect();
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        assert_eq!(names, sorted);
+        // 同名ファイルは 1 つにまとまり、最新の mtime を持つ。
+        assert_eq!(tree.iter().find(|n| n.name == "0000.md").unwrap().mtime, 10);
+        assert_eq!(tree.iter().find(|n| n.name == "0001.md").unwrap().mtime, 0);
     }
 
     #[test]

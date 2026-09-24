@@ -1,7 +1,9 @@
 //! Markdown -> HTML pipeline.
 
 use pulldown_cmark::{html, CodeBlockKind, CowStr, Event, LinkType, Options, Parser, Tag, TagEnd};
+use std::cell::OnceCell;
 use std::collections::HashMap;
+use std::ops::Range;
 
 use super::toc::{slugify, unique_anchor};
 use super::{alerts, frontmatter, security};
@@ -274,111 +276,119 @@ fn linkify_bare_urls(text: &str) -> Vec<Event<'static>> {
             )
     }
     fn trim_trailing(mut url: &str) -> &str {
-        while let Some(last) = url.chars().last() {
+        // why: counted once up front; trimming a `)` only lowers the close count.
+        let opens = url.matches('(').count();
+        let mut closes = url.matches(')').count();
+        while let Some(last) = url.chars().next_back() {
             let trim = match last {
                 '.' | ',' | ':' | ';' | '!' | '?' | '\'' | '*' | '_' | '~' => true,
-                ')' => url.matches('(').count() < url.matches(')').count(),
+                ')' => opens < closes,
                 _ => false,
             };
             if !trim {
                 break;
             }
+            if last == ')' {
+                closes -= 1;
+            }
             url = &url[..url.len() - last.len_utf8()];
         }
         url
     }
-    // Word boundary before a scheme/www match.
-    fn boundary_before(s: &str, i: usize) -> bool {
-        match s[..i].chars().last() {
+    // Word boundary before `i`. A match right at the scan floor (just after an
+    // earlier link) counts as bounded too; callers check that case themselves.
+    fn bounded_at(s: &str, i: usize) -> bool {
+        match s[..i].chars().next_back() {
             None => true,
             Some(prev) => !prev.is_alphanumeric() && !matches!(prev, '/' | '.' | '-' | '_' | '@'),
         }
     }
-    // The earliest valid http(s):// or www. match in `s`: (start, literal, dest).
-    fn find_url(s: &str) -> Option<(usize, &str, String)> {
-        let mut starts: Vec<usize> = s
-            .match_indices("http")
-            .filter(|(i, _)| {
-                let tail = &s[*i..];
-                (tail.starts_with("http://") || tail.starts_with("https://"))
-                    && boundary_before(s, *i)
-            })
-            .map(|(i, _)| i)
-            .collect();
-        starts.extend(
-            s.match_indices("www.")
-                .filter(|(i, _)| boundary_before(s, *i))
-                .map(|(i, _)| i),
-        );
-        starts.sort_unstable();
-        for start in starts {
-            let tail = &s[start..];
-            let end = tail.find(|c: char| !is_url_char(c)).unwrap_or(tail.len());
-            let url = trim_trailing(&tail[..end]);
-            // A bare scheme / bare "www." with no host is not a link.
-            if url.is_empty() || url == "http://" || url == "https://" || url == "www." {
-                continue;
-            }
-            let dest = if url.starts_with("www.") {
-                // GFM www autolinks assume http.
-                format!("http://{url}")
-            } else {
-                url.to_string()
-            };
-            return Some((start, url, dest));
+    // Length of the http(s):// or www. link starting at `start`, if any.
+    fn url_len(s: &str, start: usize) -> Option<usize> {
+        let tail = &s[start..];
+        let end = tail.find(|c: char| !is_url_char(c)).unwrap_or(tail.len());
+        #[cfg(test)]
+        SCANNED.with(|n| n.set(n.get() + end));
+        let url = trim_trailing(&tail[..end]);
+        // A bare scheme / bare "www." with no host is not a link.
+        if url.is_empty() || url == "http://" || url == "https://" || url == "www." {
+            return None;
         }
-        None
+        Some(url.len())
     }
-    // The earliest bare e-mail in `s` (GFM-flavoured, simplified).
-    fn find_email(s: &str) -> Option<(usize, &str, String)> {
+    // For the `@` at `at` (GFM-flavoured, simplified e-mail): where its local
+    // part starts (`at` when empty) and the domain length, if the domain is valid.
+    fn email_facts(s: &str, at: usize) -> (usize, Option<usize>) {
         fn is_local(c: char) -> bool {
             c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '%' | '+' | '-')
         }
         fn is_domain(c: char) -> bool {
             c.is_ascii_alphanumeric() || matches!(c, '.' | '-')
         }
-        for (at, _) in s.match_indices('@') {
-            let local_start = s[..at]
-                .char_indices()
-                .rev()
-                .take_while(|(_, c)| is_local(*c))
-                .last()
-                .map(|(i, _)| i);
-            let Some(local_start) = local_start else {
-                continue;
-            };
-            if !boundary_before(s, local_start) {
-                continue;
-            }
-            let after = &s[at + 1..];
-            let dom_end = after.find(|c: char| !is_domain(c)).unwrap_or(after.len());
-            let mut domain = &after[..dom_end];
-            while domain.ends_with('.') || domain.ends_with('-') {
-                domain = &domain[..domain.len() - 1];
-            }
-            if domain.is_empty() || !domain.contains('.') {
-                continue;
-            }
-            let literal = &s[local_start..at + 1 + domain.len()];
-            return Some((local_start, literal, format!("mailto:{literal}")));
+        let local_start = s[..at]
+            .char_indices()
+            .rev()
+            .take_while(|(_, c)| is_local(*c))
+            .last()
+            .map_or(at, |(i, _)| i);
+        let after = &s[at + 1..];
+        let dom_end = after.find(|c: char| !is_domain(c)).unwrap_or(after.len());
+        #[cfg(test)]
+        SCANNED.with(|n| n.set(n.get() + (at - local_start) + dom_end));
+        let mut domain = &after[..dom_end];
+        while domain.ends_with('.') || domain.ends_with('-') {
+            domain = &domain[..domain.len() - 1];
         }
-        None
+        let valid = !domain.is_empty() && domain.contains('.');
+        (local_start, valid.then_some(domain.len()))
     }
 
+    let mut url_starts: Vec<usize> = text
+        .match_indices("http")
+        .map(|(i, _)| i)
+        .filter(|&i| text[i..].starts_with("http://") || text[i..].starts_with("https://"))
+        .chain(text.match_indices("www.").map(|(i, _)| i))
+        .collect();
+    url_starts.sort_unstable();
+    let mut urls = Candidates::new(url_starts);
+    let mut emails = Candidates::new(text.match_indices('@').map(|(i, _)| i).collect());
+
     let mut out = Vec::new();
-    let mut rest = text;
+    let mut floor = 0;
     loop {
-        let url = find_url(rest);
-        let email = find_email(rest);
-        let m = match (url, email) {
-            (Some(u), Some(e)) => Some(if u.0 <= e.0 { u } else { e }),
-            (u, e) => u.or(e),
+        let url = urls.next(floor, |start, len| {
+            if start != floor && !bounded_at(text, start) {
+                return None;
+            }
+            let len = (*len.get_or_init(|| url_len(text, start)))?;
+            Some(start..start + len)
+        });
+        // The local part never reaches back past the floor.
+        let email = emails.next(floor, |at, facts| {
+            let (local_start, domain_len) = *facts.get_or_init(|| email_facts(text, at));
+            let start = local_start.max(floor);
+            if start == at || (start != floor && !bounded_at(text, start)) {
+                return None;
+            }
+            Some(start..at + 1 + domain_len?)
+        });
+        let (range, is_email) = match (url, email) {
+            (Some(u), Some(e)) if e.start < u.start => (e, true),
+            (Some(u), _) => (u, false),
+            (None, Some(e)) => (e, true),
+            (None, None) => break,
         };
-        let Some((start, literal, dest)) = m else {
-            break;
+        let literal = &text[range.clone()];
+        let dest = if is_email {
+            format!("mailto:{literal}")
+        } else if literal.starts_with("www.") {
+            // GFM www autolinks assume http.
+            format!("http://{literal}")
+        } else {
+            literal.to_string()
         };
-        if start > 0 {
-            out.push(Event::Text(rest[..start].to_string().into()));
+        if range.start > floor {
+            out.push(Event::Text(text[floor..range.start].to_string().into()));
         }
         out.push(Event::Start(Tag::Link {
             link_type: LinkType::Autolink,
@@ -388,12 +398,69 @@ fn linkify_bare_urls(text: &str) -> Vec<Event<'static>> {
         }));
         out.push(Event::Text(literal.to_string().into()));
         out.push(Event::End(TagEnd::Link));
-        rest = &rest[start + literal.len()..];
+        floor = range.end;
     }
-    if !rest.is_empty() {
-        out.push(Event::Text(rest.to_string().into()));
+    if floor < text.len() {
+        out.push(Event::Text(text[floor..].to_string().into()));
     }
     out
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Bytes read while measuring URL / e-mail extents in `linkify_bare_urls`.
+    static SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Sorted candidate positions of one kind of autolink, consumed as the scan
+/// floor moves forward. Each candidate's floor-independent facts are computed
+/// at most once, so a text run is linkified in linear time.
+struct Candidates<M> {
+    pos: Vec<usize>,
+    facts: Vec<OnceCell<M>>,
+    /// First candidate at or after the floor.
+    cursor: usize,
+    /// Index of the last match found (`pos.len()` when none was left).
+    hit: Option<usize>,
+}
+
+impl<M> Candidates<M> {
+    fn new(pos: Vec<usize>) -> Self {
+        Self {
+            facts: pos.iter().map(|_| OnceCell::new()).collect(),
+            pos,
+            cursor: 0,
+            hit: None,
+        }
+    }
+
+    /// The first candidate at or after `floor` that `eval` accepts.
+    fn next(
+        &mut self,
+        floor: usize,
+        eval: impl Fn(usize, &OnceCell<M>) -> Option<Range<usize>>,
+    ) -> Option<Range<usize>> {
+        while self.pos.get(self.cursor).is_some_and(|&p| p < floor) {
+            self.cursor += 1;
+        }
+        let known = self.hit.filter(|&h| h >= self.cursor);
+        let mut i = self.cursor;
+        while i < self.pos.len() {
+            if let Some(m) = eval(self.pos[i], &self.facts[i]) {
+                self.hit = Some(i);
+                return Some(m);
+            }
+            // why: those between the cursor and a known hit were rejected at
+            // a lower floor, and raising the floor can only change the verdict
+            // on the candidate at the cursor.
+            i = match known {
+                Some(h) if i < h => h,
+                _ => i + 1,
+            };
+        }
+        self.hit = Some(self.pos.len());
+        None
+    }
 }
 
 #[cfg(test)]
@@ -589,6 +656,50 @@ mod tests {
     fn 単語に埋め込まれたhttpはリンク化しない() {
         let html = render("xhttps://example.com は境界がないのでリンクにしない");
         assert!(!html.contains("<a href="));
+    }
+
+    /// Links produced and bytes scanned for extents while linkifying `text`.
+    fn linkify_cost(text: &str) -> (usize, usize) {
+        let before = SCANNED.with(|n| n.get());
+        let links = linkify_bare_urls(text)
+            .iter()
+            .filter(|e| matches!(e, Event::Start(Tag::Link { .. })))
+            .count();
+        (links, SCANNED.with(|n| n.get()) - before)
+    }
+
+    #[test]
+    fn 大量の裸URLとメールは各候補を1回だけ走査する() {
+        let text: String = (0..10_000)
+            .map(|i| format!("https://example.com/{i} a{i}@example.com "))
+            .collect();
+        let (links, scanned) = linkify_cost(&text);
+        assert_eq!(links, 20_000);
+        assert!(scanned <= text.len(), "scanned {scanned} of {}", text.len());
+    }
+
+    #[test]
+    fn メールの後ろの長いURLは1回だけ走査する() {
+        for n in [1_000, 2_000, 4_000] {
+            let text = format!(
+                "{}https://example.com/{}",
+                "a@b.co ".repeat(n),
+                "x".repeat(n)
+            );
+            let (links, scanned) = linkify_cost(&text);
+            assert_eq!(links, n + 1);
+            assert!(
+                scanned <= text.len(),
+                "n={n}: scanned {scanned} of {}",
+                text.len()
+            );
+        }
+    }
+
+    #[test]
+    fn 閉じ括弧が続くURLは対応する分だけ残す() {
+        let html = render("https://example.com/a_(b)_(c))))");
+        assert!(html.contains(r#"<a href="https://example.com/a_(b)_(c)">"#));
     }
 
     #[test]

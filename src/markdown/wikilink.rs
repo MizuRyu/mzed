@@ -11,6 +11,8 @@
 //! `![alt](path)` so they ride the existing `post_process` data-URL pipeline;
 //! non-image embeds (e.g. `![[note.md]]`) are left unchanged.
 
+use std::cell::OnceCell;
+use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
 /// Sentinel href placed in unresolved wikilinks so `post_process` can
@@ -96,14 +98,41 @@ const SKIP_DIRS: &[&str] = &[
     ".cache",
 ];
 
-/// Walk `dir` recursively (depth-limited to `max_depth`) looking for the first
-/// file whose name equals `basename`. Skips common noise directories.
-fn find_by_basename(dir: &Path, basename: &str, max_depth: u8) -> Option<PathBuf> {
-    if max_depth == 0 || !dir.is_dir() {
-        return None;
+/// File name → the first file of that name under each root, in root order.
+/// why: one walk serves every basename lookup of a document.
+type BasenameIndex = HashMap<String, Vec<PathBuf>>;
+
+#[cfg(test)]
+thread_local! {
+    static INDEX_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn build_basename_index(canon_roots: &[PathBuf]) -> BasenameIndex {
+    #[cfg(test)]
+    INDEX_BUILDS.with(|n| n.set(n.get() + 1));
+    let mut index = BasenameIndex::new();
+    for root in canon_roots {
+        let mut first = HashMap::new();
+        index_dir(root, 20, &mut first);
+        for (name, path) in first {
+            index.entry(name).or_default().push(path);
+        }
     }
+    index
+}
+
+/// Walk `dir` depth-first (depth-limited to `max_depth`), keeping the first
+/// file seen per name: a directory's own files, then its subdirectories in
+/// `read_dir` order. Skips noise directories.
+fn index_dir(dir: &Path, max_depth: u8, first: &mut HashMap<String, PathBuf>) {
+    if max_depth == 0 || !dir.is_dir() {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     let mut sub_dirs = Vec::new();
-    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+    for entry in entries.flatten() {
         let ft = match entry.file_type() {
             Ok(ft) => ft,
             Err(_) => continue,
@@ -114,25 +143,40 @@ fn find_by_basename(dir: &Path, basename: &str, max_depth: u8) -> Option<PathBuf
             if !SKIP_DIRS.contains(&name_str.as_ref()) {
                 sub_dirs.push(entry.path());
             }
-        } else if ft.is_file() && name_str == basename {
-            return Some(entry.path());
+        } else if ft.is_file() {
+            first
+                .entry(name_str.into_owned())
+                .or_insert_with(|| entry.path());
         }
     }
     for sub in sub_dirs {
-        if let Some(found) = find_by_basename(&sub, basename, max_depth - 1) {
-            return Some(found);
-        }
+        index_dir(&sub, max_depth - 1, first);
     }
-    None
 }
 
-/// Resolve a wikilink `target` to a canonical absolute path inside `roots`.
+/// The roots of one `preprocess_wikilinks` call, resolved once, and the
+/// basename index built from exactly those roots.
+struct Resolver {
+    canon_roots: Vec<PathBuf>,
+    index: OnceCell<BasenameIndex>,
+}
+
+impl Resolver {
+    fn new(roots: &[PathBuf]) -> Self {
+        Self {
+            canon_roots: roots.iter().filter_map(|r| r.canonicalize().ok()).collect(),
+            index: OnceCell::new(),
+        }
+    }
+}
+
+/// Resolve a wikilink `target` to a canonical absolute path inside the roots.
 ///
 /// Resolution order (Obsidian-compatible):
 ///   (a) Relative from `base_dir`.
 ///   (b) Relative from each root.
-///   (c) Basename match anywhere inside roots.
-fn resolve_wikilink_path(target: &str, base_dir: &Path, roots: &[PathBuf]) -> Option<PathBuf> {
+///   (c) Basename match anywhere inside roots (skipped when no root resolved).
+fn resolve_wikilink_path(target: &str, base_dir: &Path, resolver: &Resolver) -> Option<PathBuf> {
     if target.is_empty() {
         return None;
     }
@@ -142,7 +186,7 @@ fn resolve_wikilink_path(target: &str, base_dir: &Path, roots: &[PathBuf]) -> Op
         return None;
     }
 
-    let canon_roots: Vec<PathBuf> = roots.iter().filter_map(|r| r.canonicalize().ok()).collect();
+    let canon_roots = &resolver.canon_roots;
 
     let inside_roots = |p: &Path| -> bool {
         canon_roots.is_empty() || canon_roots.iter().any(|r| p.starts_with(r))
@@ -158,7 +202,7 @@ fn resolve_wikilink_path(target: &str, base_dir: &Path, roots: &[PathBuf]) -> Op
     }
 
     // (b) Relative from each root.
-    for root in &canon_roots {
+    for root in canon_roots {
         if let Ok(canon) = root.join(&with_ext).canonicalize() {
             if inside_roots(&canon) && canon.is_file() {
                 return Some(canon);
@@ -167,13 +211,17 @@ fn resolve_wikilink_path(target: &str, base_dir: &Path, roots: &[PathBuf]) -> Op
     }
 
     // (c) Basename search.
-    let basename = Path::new(&with_ext).file_name()?.to_str()?.to_string();
-    for root in &canon_roots {
-        if let Some(found) = find_by_basename(root, &basename, 20) {
-            if let Ok(canon) = found.canonicalize() {
-                if inside_roots(&canon) {
-                    return Some(canon);
-                }
+    if canon_roots.is_empty() {
+        return None;
+    }
+    let basename = Path::new(&with_ext).file_name()?.to_str()?;
+    let index = resolver
+        .index
+        .get_or_init(|| build_basename_index(canon_roots));
+    for found in index.get(basename).into_iter().flatten() {
+        if let Ok(canon) = found.canonicalize() {
+            if inside_roots(&canon) {
+                return Some(canon);
             }
         }
     }
@@ -246,6 +294,8 @@ pub fn preprocess_wikilinks(source: &str, base_dir: &Path, roots: &[PathBuf]) ->
 
     let mut out = String::with_capacity(source.len() + 64);
     let mut rest = source;
+    let mut closes = CloseScanner::new(source);
+    let resolver = Resolver::new(roots);
 
     while !rest.is_empty() {
         // Advance to the next `[` or `!`.
@@ -263,16 +313,17 @@ pub fn preprocess_wikilinks(source: &str, base_dir: &Path, roots: &[PathBuf]) ->
 
         // ── Embed `![[…]]`. Image embeds become standard Markdown images;
         //    everything else (e.g. `![[note.md]]`) passes through unchanged. ──
+        let pos = source.len() - rest.len();
         if rest.starts_with("![[") {
-            if let Some(close) = rest[3..].find("]]") {
+            if let Some((close_at, has_bracket)) = closes.find(pos + 3) {
+                let close = close_at - pos - 3;
                 let end = 3 + close + 2;
                 let inner = &rest[3..3 + close];
                 // Reject nested-bracket content; only rewrite image embeds.
-                let is_image = !inner.contains('[')
-                    && !inner.contains(']')
+                let is_image = !has_bracket
                     && is_image_target(inner.split('|').next().unwrap_or(inner).trim());
                 if is_image {
-                    out.push_str(&build_embed_replacement(inner, base_dir, roots));
+                    out.push_str(&build_embed_replacement(inner, base_dir, &resolver));
                 } else {
                     out.push_str(&rest[..end]);
                 }
@@ -283,12 +334,13 @@ pub fn preprocess_wikilinks(source: &str, base_dir: &Path, roots: &[PathBuf]) ->
 
         // ── Wikilink `[[…]]`. ─────────────────────────────────────────────────
         if rest.starts_with("[[") {
-            if let Some(close) = rest[2..].find("]]") {
+            if let Some((close_at, has_bracket)) = closes.find(pos + 2) {
+                let close = close_at - pos - 2;
                 let inner = &rest[2..2 + close];
                 // Reject empty or nested-bracket content.
-                if !inner.is_empty() && !inner.contains('[') && !inner.contains(']') {
+                if !inner.is_empty() && !has_bracket {
                     let wl = parse_inner(inner);
-                    let replacement = build_replacement(&wl, base_dir, roots);
+                    let replacement = build_replacement(&wl, base_dir, &resolver);
                     out.push_str(&replacement);
                     rest = &rest[2 + close + 2..];
                     continue;
@@ -305,7 +357,55 @@ pub fn preprocess_wikilinks(source: &str, base_dir: &Path, roots: &[PathBuf]) ->
     out
 }
 
-fn build_replacement(wl: &Wikilink<'_>, base_dir: &Path, roots: &[PathBuf]) -> String {
+#[cfg(test)]
+thread_local! {
+    /// Bytes searched by `CloseScanner`.
+    static CLOSE_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Answers "first `]]` at or after `start`" for non-decreasing `start`,
+/// reusing the previous answer while it still applies, so the total search
+/// work stays linear in the source length.
+struct CloseScanner<'a> {
+    src: &'a str,
+    /// The last search start; `close` and `last_bracket` describe `src[from..]`.
+    from: usize,
+    close: Option<usize>,
+    /// Last `[` or `]` in `src[from..close]`.
+    last_bracket: Option<usize>,
+}
+
+impl<'a> CloseScanner<'a> {
+    fn new(src: &'a str) -> Self {
+        Self {
+            src,
+            from: usize::MAX,
+            close: None,
+            last_bracket: None,
+        }
+    }
+
+    /// Absolute offset of the first `]]` at or after `start`, and whether
+    /// `src[start..close]` contains `[` or `]`.
+    fn find(&mut self, start: usize) -> Option<(usize, bool)> {
+        let reusable = start >= self.from && self.close.is_none_or(|c| start <= c);
+        if !reusable {
+            self.from = start;
+            self.close = self.src[start..].find("]]").map(|i| start + i);
+            let end = self.close.unwrap_or(start);
+            #[cfg(test)]
+            CLOSE_SCANNED.with(|n| {
+                let found = self.close.map_or(self.src.len(), |c| c + 2);
+                n.set(n.get() + (found - start) + (end - start))
+            });
+            self.last_bracket = self.src[start..end].rfind(['[', ']']).map(|i| start + i);
+        }
+        let close = self.close?;
+        Some((close, self.last_bracket.is_some_and(|b| b >= start)))
+    }
+}
+
+fn build_replacement(wl: &Wikilink<'_>, base_dir: &Path, resolver: &Resolver) -> String {
     if wl.target.is_empty() {
         // Degenerate: leave as plain text.
         return format!(
@@ -320,7 +420,7 @@ fn build_replacement(wl: &Wikilink<'_>, base_dir: &Path, roots: &[PathBuf]) -> S
 
     let alias_escaped = escape_link_text(wl.alias);
 
-    match resolve_wikilink_path(wl.target, base_dir, roots) {
+    match resolve_wikilink_path(wl.target, base_dir, resolver) {
         Some(resolved) => {
             let base_canon = base_dir.canonicalize().ok();
             let file_path = base_canon
@@ -352,14 +452,14 @@ fn build_replacement(wl: &Wikilink<'_>, base_dir: &Path, roots: &[PathBuf]) -> S
 /// - Resolved → `![alt](relative-path)` (rides the data-URL pipeline).
 /// - Unresolved → demoted to a styled `.mdo-wikilink-unresolved` span (same as
 ///   an unresolved link) showing the alt or filename.
-fn build_embed_replacement(inner: &str, base_dir: &Path, roots: &[PathBuf]) -> String {
+fn build_embed_replacement(inner: &str, base_dir: &Path, resolver: &Resolver) -> String {
     let (target, spec) = match inner.find('|') {
         Some(pos) => (inner[..pos].trim(), inner[pos + 1..].trim()),
         None => (inner.trim(), ""),
     };
     let is_width = !spec.is_empty() && spec.bytes().all(|b| b.is_ascii_digit());
 
-    match resolve_wikilink_path(target, base_dir, roots) {
+    match resolve_wikilink_path(target, base_dir, resolver) {
         Some(resolved) => {
             let base_canon = base_dir.canonicalize().ok();
             let file_path = base_canon
@@ -589,6 +689,159 @@ mod tests {
         let out = pp("[[]]", dir.path());
         // Emitted char by char as `[[]]`.
         assert_eq!(out, "[[]]");
+    }
+
+    fn index_builds() -> usize {
+        INDEX_BUILDS.with(|n| n.get())
+    }
+
+    #[test]
+    fn 未解決が多数でもbasename索引の構築は1回() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("sub/deeper")).unwrap();
+        fs::write(dir.path().join("sub/deeper/found.md"), "").unwrap();
+        let source: String = (0..100)
+            .map(|i| format!("[[missing-{i}]] "))
+            .chain(["[[found]] ![[nope.png]]".to_string()])
+            .collect();
+
+        let before = index_builds();
+        let out = pp(&source, dir.path());
+        assert_eq!(index_builds() - before, 1);
+        assert_eq!(out.matches(UNRESOLVED_SENTINEL).count(), 101);
+        assert!(out.contains("sub/deeper/found.md"), "got: {out}");
+    }
+
+    #[test]
+    fn 相対とroot直下で解決できればbasename索引を作らない() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("sub")).unwrap();
+        fs::write(dir.path().join("a.md"), "").unwrap();
+        fs::write(dir.path().join("sub/b.md"), "").unwrap();
+
+        let before = index_builds();
+        let out = pp("[[a]] [[sub/b]]", dir.path());
+        assert_eq!(index_builds() - before, 0);
+        assert!(!out.contains(UNRESOLVED_SENTINEL), "got: {out}");
+    }
+
+    #[test]
+    fn basename同名は浅い階層のファイルを優先する() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("other")).unwrap();
+        fs::create_dir_all(dir.path().join("x/y")).unwrap();
+        fs::write(dir.path().join("x/y/dup.md"), "").unwrap();
+        fs::write(dir.path().join("x/dup.md"), "").unwrap();
+        // base_dir にも root 直下にも無いので basename 検索になる。
+        let out = preprocess_wikilinks(
+            "[[dup]]",
+            &dir.path().join("other"),
+            &[dir.path().to_path_buf()],
+        );
+        assert!(out.contains("(../x/dup.md)"), "got: {out}");
+    }
+
+    #[test]
+    fn 入れ子の角括弧は内側のwikilinkだけ変換する() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.md"), "").unwrap();
+        let out = pp("[[[[a]] x [[b]c]] ![[[[a]]", dir.path());
+        assert_eq!(out, "[[[a](a.md) x [[b]c]] ![[[[a]]");
+    }
+
+    #[test]
+    fn 閉じない角括弧の連続でも探索量は入力長に比例する() {
+        let dir = tempdir().unwrap();
+        for n in [50_000, 100_000, 200_000] {
+            let source = "[".repeat(n) + "[[a]]";
+            let before = CLOSE_SCANNED.with(|c| c.get());
+            let out = pp(&source, dir.path());
+            let scanned = CLOSE_SCANNED.with(|c| c.get()) - before;
+            assert!(
+                out.ends_with(&format!("[a]({UNRESOLVED_SENTINEL})")),
+                "n={n}"
+            );
+            assert!(scanned <= 2 * source.len(), "n={n}: scanned {scanned}");
+        }
+    }
+
+    #[test]
+    fn rootsが空ならbasename索引を使わない() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("sub")).unwrap();
+        fs::write(dir.path().join("sub/deep.md"), "").unwrap();
+        fs::write(dir.path().join("near.md"), "").unwrap();
+
+        let before = index_builds();
+        let out = preprocess_wikilinks("[[deep]] [[near]]", dir.path(), &[]);
+        assert_eq!(index_builds() - before, 0);
+        // base_dir からの相対解決は従来どおり効く。
+        assert!(out.contains("(near.md)"), "got: {out}");
+        assert!(
+            out.contains(&format!("[deep]({UNRESOLVED_SENTINEL})")),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn basename同名は先に渡したrootを優先する() {
+        let dir = tempdir().unwrap();
+        let (r1, r2) = (dir.path().join("r1"), dir.path().join("r2"));
+        fs::create_dir_all(r1.join("x/y")).unwrap();
+        fs::create_dir_all(r2.join("z")).unwrap();
+        fs::write(r1.join("x/y/dup.md"), "").unwrap(); // r1 側は深い
+        fs::write(r2.join("z/dup.md"), "").unwrap();
+
+        let out = preprocess_wikilinks("[[dup]]", dir.path(), &[r1.clone(), r2.clone()]);
+        assert!(out.contains("(r1/x/y/dup.md)"), "got: {out}");
+        let out = preprocess_wikilinks("[[dup]]", dir.path(), &[r2, r1]);
+        assert!(out.contains("(r2/z/dup.md)"), "got: {out}");
+    }
+
+    #[test]
+    fn basename同名の別枝は深さでなく走査順で決まる() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        fs::create_dir_all(root.join("a/x/y")).unwrap();
+        fs::create_dir_all(root.join("b")).unwrap();
+        fs::write(root.join("a/x/y/dup.md"), "").unwrap();
+        fs::write(root.join("b/dup.md"), "").unwrap();
+        fs::create_dir_all(root.join("other")).unwrap();
+
+        // 深さ優先: read_dir で先に出た枝の中を、浅い別枝より先に探す。
+        let first_branch = fs::read_dir(root)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .find(|n| n == "a" || n == "b")
+            .unwrap();
+        let expected = if first_branch == "a" {
+            "(../a/x/y/dup.md)"
+        } else {
+            "(../b/dup.md)"
+        };
+        let out = preprocess_wikilinks("[[dup]]", &root.join("other"), &[root.to_path_buf()]);
+        assert!(out.contains(expected), "got: {out}");
+    }
+
+    #[test]
+    fn basename候補のcanonicalizeに失敗したら次の候補へ進む() {
+        let dir = tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        fs::create_dir_all(root.join("sub")).unwrap();
+        fs::write(root.join("sub/dup.md"), "").unwrap();
+        let mut index = BasenameIndex::new();
+        index.insert(
+            "dup.md".into(),
+            vec![root.join("gone/dup.md"), root.join("sub/dup.md")],
+        );
+        let resolver = Resolver {
+            canon_roots: vec![root.clone()],
+            index: OnceCell::from(index),
+        };
+
+        let found = resolve_wikilink_path("dup", &root.join("sub/.."), &resolver);
+        assert_eq!(found, Some(root.join("sub/dup.md")));
     }
 
     #[test]
