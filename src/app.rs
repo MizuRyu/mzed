@@ -540,7 +540,9 @@ pub(crate) fn App() -> Element {
     // signal values before CLI/Zed apply. CLI args (handled later) take priority.
     let initial_intent = use_hook(|| INITIAL.get().and_then(|intent| intent.lock().ok()?.take()));
     let saved_config = use_hook(config::load);
-    let saved_session = use_hook(session::load);
+    // why: `use_hook` hands back a clone on every render; share one load instead
+    // of copying the whole session (history included) per render.
+    let saved_session = use_hook(|| std::rc::Rc::new(session::load()));
     use_hook(|| {
         perf::log_since_process_start("app.mounted", &[]);
     });
@@ -586,13 +588,13 @@ pub(crate) fn App() -> Element {
     // current project's live set; switching projects parks/restores via this map.
     // Seed from the persisted session so each project's last-active file survives
     // restarts.
-    let initial_pt = saved_session.restore_project_tabs();
-    let mut project_tabs = use_signal(move || initial_pt);
+    // why: restoring stats every saved tab; the init closure keeps it to once
+    // instead of every App render.
+    let mut project_tabs = use_signal(|| saved_session.restore_project_tabs());
     // Per-project reading history (B-9 unread markers), keyed by primary root.
     // Seeded from the persisted session; kept in memory and folded back into the
     // session save on any change.
-    let initial_history = saved_session.project_history.clone();
-    let mut history = use_signal(move || initial_history);
+    let mut history = use_signal(|| saved_session.project_history.clone());
     // Stamp every root of a (possibly multi-root) project as opened: bumps
     // `last_opened_at` (Cmd+O ordering) and, the first time, `first_opened_at`
     // (the unread floor for never-opened files) — for every root, not just the
@@ -944,7 +946,11 @@ pub(crate) fn App() -> Element {
                 if !session_save_generation.read().is_current(generation) {
                     return;
                 }
-                if let Err(err) = session::save_queued(sess).await {
+                if let Err(err) = session::save_queued(sess, move || {
+                    session_save_generation.read().is_current(generation)
+                })
+                .await
+                {
                     show_toast(format!("Session save failed: {err}"));
                 }
             });
@@ -1807,15 +1813,13 @@ pub(crate) fn App() -> Element {
     // on any change so the next launch restores it. Saving on every change avoids
     // relying on a desktop quit hook.
     use_effect(move || {
-        // `history` is kept pruned live (see the dedicated effect below), so it
-        // is saved as-is here.
-        let sess = session::Session::capture_full(
-            roots(),
-            &tabs.read(),
-            sidebar_width(),
-            &project_tabs.read(),
-            history(),
-        );
+        // why: copying the whole session (history included) on every change
+        // stalls the UI; subscribe by borrowing and snapshot once per burst.
+        let no_tabs = tabs.read().paths().is_empty();
+        let current_roots = roots.read();
+        let _ = sidebar_width();
+        let _ = project_tabs.read();
+        let _ = history.read();
         // why: a dismissed window shows nothing, and saving that would drop the
         // tab list `dismiss_window` wrote for the next launch. Staying frozen
         // until a tab or the project comes back means merely putting the window
@@ -1823,10 +1827,11 @@ pub(crate) fn App() -> Element {
         if dismissed_roots
             .read()
             .as_ref()
-            .is_some_and(|frozen| sess.tabs.is_empty() && &sess.roots == frozen)
+            .is_some_and(|frozen| no_tabs && *current_roots == *frozen)
         {
             return;
         }
+        drop(current_roots);
         if dismissed_roots.peek().is_some() {
             dismissed_roots.set(None);
         }
@@ -1838,7 +1843,22 @@ pub(crate) fn App() -> Element {
             if !session_save_generation.read().is_current(generation) {
                 return;
             }
-            match session::save_queued(sess).await {
+            // Any change since the effect ran would have advanced the
+            // generation, so this is the state that effect run saw.
+            // `history` is kept pruned live (see the dedicated effect below), so
+            // it is saved as-is here.
+            let sess = session::Session::capture_full(
+                roots(),
+                &tabs.read(),
+                sidebar_width(),
+                &project_tabs.read(),
+                history(),
+            );
+            match session::save_queued(sess, move || {
+                session_save_generation.read().is_current(generation)
+            })
+            .await
+            {
                 Ok(()) => {}
                 Err(err) => show_toast(format!("Session save failed: {err}")),
             }
@@ -1873,6 +1893,35 @@ pub(crate) fn App() -> Element {
     // Derived: project-switch candidates. Union of mzed-opened projects
     // (project_tabs keys), the current sidebar roots, and Zed's recent
     // workspaces — de-duplicated, current roots first so they stay near the top.
+    // why: opening Zed's DB (busy timeout 5 s) in a memo blocks the UI; read
+    // it in the background and keep the previous list until it lands.
+    let mut recent_projects = use_signal(Vec::<PathBuf>::new);
+    let mut recent_projects_generation = use_signal(app_state::generation::Generation::default);
+    use_effect(move || {
+        let _ = roots.read();
+        let _ = project_tabs.read();
+        let _ = project_aliases.read();
+        let _ = project_menu_hidden.read();
+        let generation = recent_projects_generation.write().advance();
+        spawn(async move {
+            let result = tokio::task::spawn_blocking(|| {
+                zed::default_zed_db_path()
+                    .map(|db| zed::recent_workspaces(&db))
+                    .unwrap_or_default()
+            })
+            .await;
+            if !recent_projects_generation.read().is_current(generation) {
+                return;
+            }
+            match result {
+                // An empty list can't be told apart from a failed DB read,
+                // so it never wipes a list we already have.
+                Ok(recent) if recent.is_empty() && !recent_projects.peek().is_empty() => {}
+                Ok(recent) => recent_projects.set(recent),
+                Err(err) => logging::app(format!("zed recent workspaces: {err}")),
+            }
+        });
+    });
     let proj_candidates = use_memo(move || {
         let mut out: Vec<PathBuf> = Vec::new();
         let mut push = |p: PathBuf| {
@@ -1886,10 +1935,8 @@ pub(crate) fn App() -> Element {
         for r in project_tabs.read().roots() {
             push(r.clone());
         }
-        if let Some(db) = zed::default_zed_db_path() {
-            for r in zed::recent_workspaces(&db) {
-                push(r);
-            }
+        for r in recent_projects() {
+            push(r);
         }
         // Aliased projects are always listed: naming a folder is an explicit
         // "I want to reach this", and it may not be in Zed's recents or in this
@@ -2338,17 +2385,17 @@ pub(crate) fn App() -> Element {
         }
 
         let query = search_query();
-        // Tree paths are logical; search the checkout copy actually shown.
-        let search_overlay = overlay();
-        let paths: Vec<PathBuf> = files::flatten_md(&tree())
-            .into_iter()
-            .map(|p| search_overlay.resolve(&p))
-            .collect();
         let generation = search_generation.write().advance();
+        // why: resolving every tree path stats each candidate. Bail out before
+        // reading `tree` / `overlay` so a closed panel neither pays for it nor
+        // re-runs on every tree update.
         if !search_open() || query.trim().is_empty() {
             search_hits.set(Vec::new());
             return;
         }
+        // Tree paths are logical; search the checkout copy actually shown.
+        let search_overlay = overlay();
+        let nodes = tree();
 
         let cancel = Arc::new(AtomicBool::new(false));
         search_cancel.set(Some(Arc::clone(&cancel)));
@@ -2358,7 +2405,12 @@ pub(crate) fn App() -> Element {
                 return;
             }
             let worker_cancel = Arc::clone(&cancel);
+            let worker_overlay = search_overlay.clone();
             let result = tokio::task::spawn_blocking(move || {
+                let paths: Vec<PathBuf> = files::flatten_md(&nodes)
+                    .into_iter()
+                    .map(|p| worker_overlay.resolve(&p))
+                    .collect();
                 search::search_paths_with_policy(
                     &paths,
                     &query,
@@ -2669,7 +2721,8 @@ pub(crate) fn App() -> Element {
                         if sidebar_visible() {
                             {
                                 let sw = sidebar_width();
-                                let multi = trees().len() > 1;
+                                // Borrow: `trees()` would clone every tree just to count roots.
+                                let multi = trees.read().len() > 1;
                                 rsx! {
                                 div {
                                     style: "width: {sw}px; flex: 0 0 auto; overflow: auto; border-right: 1px solid {panel_border}; background: {panel_bg}; padding: 6px 0;",

@@ -12,6 +12,29 @@ fn display_name(aliases: &[config::ProjectAlias], path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
+/// A menu item named by what it is rather than where it sits, so the
+/// selection stays on the same item when candidates arrive late (Zed's
+/// recents are read in the background) and shift the rows.
+#[derive(Clone, PartialEq)]
+enum Pick {
+    Project(PathBuf),
+    OpenFolder,
+}
+
+/// Row index of `sel` among `rows` + the trailing "Open Folder…"; an item no
+/// longer listed (or no selection yet) falls back to the first row.
+fn pick_index(sel: Option<&Pick>, rows: &[PathBuf]) -> usize {
+    match sel {
+        Some(Pick::Project(p)) => rows.iter().position(|r| r == p).unwrap_or(0),
+        Some(Pick::OpenFolder) => rows.len(),
+        None => 0,
+    }
+}
+
+fn pick_at(rows: &[PathBuf], i: usize) -> Pick {
+    rows.get(i).cloned().map_or(Pick::OpenFolder, Pick::Project)
+}
+
 /// Top-left project switcher dropdown (Zed-style). Lists known + recent
 /// projects (passed in as `candidates`), filterable via a search box, marks the
 /// current project with a check, and offers an "Open Folder…" escape hatch.
@@ -40,7 +63,9 @@ pub(crate) fn ProjectMenu(
     let hover_bg = if dark { "#1f6feb22" } else { "#0969da14" };
 
     // Hover and the keyboard drive the same `sel`; these two keep them apart.
-    let mut sel = use_signal(|| 0usize);
+    let mut sel = use_signal(|| None::<Pick>);
+    // Row index to scroll into view; `sel` itself carries no position.
+    let mut scroll_row = use_signal(|| 0usize);
     let mut sel_src = use_signal(|| SelChange::Keyboard);
     let mut last_key_at = use_signal(|| None::<Instant>);
 
@@ -69,14 +94,14 @@ pub(crate) fn ProjectMenu(
     // Selectable items = the filtered projects plus the trailing "Open Folder…".
     let open_folder_idx = rows.len();
     let total = rows.len() + 1;
-    let cur = sel().min(total - 1);
+    let cur = pick_index(sel.read().as_ref(), &rows);
     let sel_bg = if dark { "#1f6feb" } else { "#0969da" };
 
     // Keep the highlighted row scrolled into view as the selection moves — but
     // not when the mouse moved it, since scrolling under the cursor would hand
     // the selection straight to another row.
     use_effect(move || {
-        let i = sel();
+        let i = scroll_row();
         if sel_src() == SelChange::Hover {
             return;
         }
@@ -88,6 +113,7 @@ pub(crate) fn ProjectMenu(
 
     // Commit the current selection: open the project, or the folder picker.
     let rows_for_enter = rows.clone();
+    let rows_for_keys = rows.clone();
     let commit = move || {
         if cur < rows_for_enter.len() {
             on_pick.call(rows_for_enter[cur].clone());
@@ -122,7 +148,8 @@ pub(crate) fn ProjectMenu(
                     last_key_at.set(Some(Instant::now()));
                     query.set(e.value());
                     sel_src.set(SelChange::Keyboard);
-                    sel.set(0);
+                    sel.set(None);
+                    scroll_row.set(0);
                 },
                 // Escape is intentionally NOT handled here: the window-level
                 // keyboard bridge receives the same native keydown regardless
@@ -135,12 +162,16 @@ pub(crate) fn ProjectMenu(
                         Key::ArrowDown => {
                             e.prevent_default();
                             sel_src.set(SelChange::Keyboard);
-                            sel.set((cur + 1) % total);
+                            let next = (cur + 1) % total;
+                            sel.set(Some(pick_at(&rows_for_keys, next)));
+                            scroll_row.set(next);
                         }
                         Key::ArrowUp => {
                             e.prevent_default();
                             sel_src.set(SelChange::Keyboard);
-                            sel.set((cur + total - 1) % total);
+                            let prev = (cur + total - 1) % total;
+                            sel.set(Some(pick_at(&rows_for_keys, prev)));
+                            scroll_row.set(prev);
                         }
                         Key::Enter => {
                             e.prevent_default();
@@ -175,6 +206,7 @@ pub(crate) fn ProjectMenu(
                         let x_fg = if highlighted { "#ffffffcc" } else { muted };
                         let pick = p.clone();
                         let hide = p.clone();
+                        let hover = p.clone();
                         rsx! {
                             div {
                                 "data-mdo-prow": "{i}",
@@ -183,7 +215,8 @@ pub(crate) fn ProjectMenu(
                                 onmouseenter: move |_| {
                                     if hover_takes_selection(i, cur, (*last_key_at.peek()).map(|t| t.elapsed())) {
                                         sel_src.set(SelChange::Hover);
-                                        sel.set(i);
+                                        sel.set(Some(Pick::Project(hover.clone())));
+                                        scroll_row.set(i);
                                     }
                                 },
                                 onclick: move |_| on_pick.call(pick.clone()),
@@ -245,7 +278,8 @@ pub(crate) fn ProjectMenu(
                             onmouseenter: move |_| {
                                 if hover_takes_selection(open_folder_idx, cur, (*last_key_at.peek()).map(|t| t.elapsed())) {
                                     sel_src.set(SelChange::Hover);
-                                    sel.set(open_folder_idx);
+                                    sel.set(Some(Pick::OpenFolder));
+                                    scroll_row.set(open_folder_idx);
                                 }
                             },
                             onclick: move |_| on_open_folder.call(()),
@@ -255,5 +289,37 @@ pub(crate) fn ProjectMenu(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)] // Japanese test names may embed ASCII.
+mod tests {
+    use super::*;
+
+    fn rows(names: &[&str]) -> Vec<PathBuf> {
+        names.iter().map(PathBuf::from).collect()
+    }
+
+    #[test]
+    fn 候補が増えても選択は同じ項目を指す() {
+        let sel = Pick::Project(PathBuf::from("/b"));
+        assert_eq!(pick_index(Some(&sel), &rows(&["/a", "/b"])), 1);
+        assert_eq!(pick_index(Some(&sel), &rows(&["/a", "/z", "/y", "/b"])), 3);
+    }
+
+    #[test]
+    fn 候補から消えた項目と未選択は先頭() {
+        let sel = Pick::Project(PathBuf::from("/gone"));
+        assert_eq!(pick_index(Some(&sel), &rows(&["/a", "/b"])), 0);
+        assert_eq!(pick_index(None, &rows(&["/a", "/b"])), 0);
+    }
+
+    #[test]
+    fn OpenFolderは常に末尾() {
+        let r = rows(&["/a", "/b"]);
+        assert_eq!(pick_index(Some(&Pick::OpenFolder), &r), 2);
+        assert!(pick_at(&r, 2) == Pick::OpenFolder);
+        assert!(pick_at(&r, 1) == Pick::Project(PathBuf::from("/b")));
     }
 }

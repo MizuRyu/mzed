@@ -218,9 +218,11 @@ pub fn save(sess: &Session) -> Result<()> {
     save_to_path(sess, &path)
 }
 
-pub(crate) async fn save_queued(sess: Session) -> Result<()> {
+/// `still_current` is asked once serialization is done; `false` drops this
+/// write so a stale snapshot never lands after a newer one.
+pub(crate) async fn save_queued(sess: Session, still_current: impl FnOnce() -> bool) -> Result<()> {
     let path = state_path().context("failed to determine state.json target path")?;
-    save_to_path_queued(sess, path).await
+    save_to_path_queued(sess, path, still_current).await
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -231,10 +233,22 @@ pub(crate) fn save_to_path(sess: &Session, path: &Path) -> Result<()> {
     crate::services::persistence::atomic_write(path, &json)
 }
 
-pub(crate) async fn save_to_path_queued(sess: Session, path: PathBuf) -> Result<()> {
-    let json = sess
-        .to_json_bytes()
+pub(crate) async fn save_to_path_queued(
+    sess: Session,
+    path: PathBuf,
+    still_current: impl FnOnce() -> bool,
+) -> Result<()> {
+    // why: pretty-printing the whole session (history included) blocks the UI
+    // task that awaits this.
+    let json = tokio::task::spawn_blocking(move || sess.to_json_bytes())
+        .await
+        .context("session serialization task failed")?
         .context("failed to serialize session before saving")?;
+    // why: a newer save may have been queued while this one was serializing;
+    // enqueueing now would overwrite it with older state.
+    if !still_current() {
+        return Ok(());
+    }
     crate::services::persistence::atomic_write_queued(path, json).await
 }
 
@@ -497,5 +511,41 @@ mod tests {
 
         assert!(error.to_string().contains("session"));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), r#"{"tabs":[]}"#);
+    }
+
+    #[test]
+    fn 直列化中に世代が進んだ保存は書き込まない() {
+        use crate::app_state::generation::Generation;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("state.json");
+            let generation = std::cell::Cell::new(Generation::default());
+            let advance = || {
+                let mut g = generation.get();
+                let n = g.advance();
+                generation.set(g);
+                n
+            };
+            let stale = advance();
+            let save = save_to_path_queued(Session::default(), path.clone(), || {
+                generation.get().is_current(stale)
+            });
+            // `dismiss_window` advances the generation before the pending save
+            // reaches its post-serialization check.
+            let latest = advance();
+            save.await.unwrap();
+            assert!(!path.exists());
+
+            save_to_path_queued(Session::default(), path.clone(), || {
+                generation.get().is_current(latest)
+            })
+            .await
+            .unwrap();
+            assert!(path.exists());
+        });
     }
 }
