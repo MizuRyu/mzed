@@ -33,16 +33,18 @@ pub(crate) fn Palette(
             _ => true,
         })
         .collect();
-    let file_rows: Vec<files::PaletteFile> = if file_mode() {
-        let mut ranked = fuzzy::rank_tiered(&q, &files, |f| f.keys(), |f| f.mtime);
-        // Unread outranks every tier; the sort is stable, so the tiered order
-        // survives inside the read group.
-        ranked.sort_by_key(|f| !f.unread);
-        sort_unread_by_recency(&mut ranked);
-        ranked.into_iter().cloned().collect()
-    } else {
-        Vec::new()
-    };
+    // Ranking reads only the query and the candidate set, so moving the
+    // selection (arrow keys, hover) redraws without ranking every file again.
+    let ranked = use_memo(use_reactive((&files,), move |(files,)| {
+        if file_mode() {
+            rank_files(&query(), &files)
+        } else {
+            FileRows::default()
+        }
+    }));
+    let ranked = ranked.read();
+    let file_rows = &ranked.rows;
+    let hidden = ranked.hidden;
 
     let len = if file_mode() {
         file_rows.len()
@@ -75,16 +77,16 @@ pub(crate) fn Palette(
     let sel_bg = if dark { "#1f6feb" } else { "#0969da" };
 
     // Commit the current selection.
-    let file_rows_for_enter = file_rows.clone();
-    let cmd_rows_for_enter = cmd_rows.clone();
+    let file_for_enter = file_rows.get(cur).map(|f| f.path.clone());
+    let cmd_for_enter = cmd_rows.get(cur).map(|c| c.action);
     let mut commit = move || {
         if file_mode() {
-            if let Some(f) = file_rows_for_enter.get(cur) {
-                on_open.call(f.path.clone());
+            if let Some(path) = file_for_enter.clone() {
+                on_open.call(path);
                 open.set(false);
             }
-        } else if let Some(c) = cmd_rows_for_enter.get(cur) {
-            on_action.call(c.action);
+        } else if let Some(action) = cmd_for_enter {
+            on_action.call(action);
         }
     };
 
@@ -191,6 +193,12 @@ pub(crate) fn Palette(
                                 }
                             }
                         }
+                        if hidden > 0 {
+                            div {
+                                style: "padding: 8px 12px; color: {muted}; font: 12px -apple-system, sans-serif;",
+                                "他 {hidden} 件。絞り込んでください"
+                            }
+                        }
                     } else {
                         for (i, c) in cmd_rows.iter().enumerate() {
                             {
@@ -217,6 +225,54 @@ pub(crate) fn Palette(
                 }
             }
         }
+    }
+}
+
+/// File-search rows actually drawn. why: a DOM row per match stalls every
+/// keystroke on a large project, and past a couple hundred rows the query is too
+/// loose to scan by eye; arrow keys stay inside these rows too. An exact name
+/// match is always drawn: typing the whole name must reach the file even when
+/// unread partial matches fill the list ahead of it.
+const FILE_ROW_LIMIT: usize = 200;
+
+/// The drawn rows and how many matches were left out.
+#[derive(Clone, Default, PartialEq)]
+struct FileRows {
+    rows: Vec<files::PaletteFile>,
+    hidden: usize,
+}
+
+fn rank_files(query: &str, files: &[files::PaletteFile]) -> FileRows {
+    let mut ranked = fuzzy::rank_tiered(query, files, |f| f.keys(), |f| f.mtime);
+    // Unread outranks every tier; the sort is stable, so the tiered order
+    // survives inside the read group.
+    ranked.sort_by_key(|f| !f.unread);
+    sort_unread_by_recency(&mut ranked);
+
+    // Same test as `fuzzy`'s exact tier: some key equals the query, ignoring case.
+    let q = query.trim().to_lowercase();
+    let exact =
+        |f: &files::PaletteFile| !q.is_empty() && f.keys().iter().any(|k| k.to_lowercase() == q);
+    let exact_count = ranked.iter().filter(|f| exact(f)).count();
+    let mut exact_room = exact_count.min(FILE_ROW_LIMIT);
+    let mut other_room = FILE_ROW_LIMIT - exact_room;
+    let rows: Vec<files::PaletteFile> = ranked
+        .iter()
+        .filter(|f| {
+            let room = if exact(f) {
+                &mut exact_room
+            } else {
+                &mut other_room
+            };
+            let keep = *room > 0;
+            *room = room.saturating_sub(1);
+            keep
+        })
+        .map(|f| (*f).clone())
+        .collect();
+    FileRows {
+        hidden: ranked.len() - rows.len(),
+        rows,
     }
 }
 
@@ -255,6 +311,42 @@ mod tests {
         sort_unread_by_recency(&mut ranked);
         let names: Vec<&str> = ranked.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(names, vec!["b.md", "c.md", "a.md", "d.md", "e.md"]);
+    }
+
+    #[test]
+    fn 上限を超えた候補は描画せず件数だけ返す() {
+        let many: Vec<_> = (0..FILE_ROW_LIMIT as u64 + 50)
+            .map(|i| file(&format!("f{i}.md"), i, false))
+            .collect();
+        let ranked = rank_files("", &many);
+        assert_eq!(ranked.rows.len(), FILE_ROW_LIMIT);
+        assert_eq!(ranked.hidden, 50);
+        // 空クエリは新しい順なので、残すのは mtime の大きい側。
+        assert_eq!(ranked.rows[0].name, format!("f{}.md", FILE_ROW_LIMIT + 49));
+    }
+
+    #[test]
+    fn 上限の外に落ちる完全一致も描画に残す() {
+        // 未読の部分一致 200 件が既読の完全一致より上に並ぶ。
+        let mut all: Vec<_> = (0..FILE_ROW_LIMIT as u64)
+            .map(|i| file(&format!("plan-{i}.md"), i, true))
+            .collect();
+        all.push(file("plan.md", 0, false));
+        let ranked = rank_files("plan", &all);
+        assert_eq!(ranked.rows.len(), FILE_ROW_LIMIT);
+        assert_eq!(ranked.hidden, 1);
+        // 押し出されるのは末尾の部分一致で、完全一致は最後の行（↑ で選べる位置）に残る。
+        assert_eq!(ranked.rows.last().unwrap().name, "plan.md");
+        assert!(ranked.rows.iter().all(|f| f.name != "plan-0.md"));
+    }
+
+    #[test]
+    fn 上限以内なら全件描画し残りは0() {
+        let few = vec![file("a.md", 1, false), file("b.md", 2, true)];
+        let ranked = rank_files("", &few);
+        let names: Vec<&str> = ranked.rows.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["b.md", "a.md"]);
+        assert_eq!(ranked.hidden, 0);
     }
 
     #[test]

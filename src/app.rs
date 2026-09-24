@@ -99,6 +99,8 @@ const IPC_ROUTER_CAPACITY: usize = 128;
 const WINDOW_CHANNEL_CAPACITY: usize = 128;
 const WINDOW_ROUTER_PENDING_CAPACITY: usize = 128;
 const IPC_NEW_WINDOW_MIN_INTERVAL: Duration = Duration::from_millis(750);
+/// Typing pause before the find highlight and match count follow the query.
+const FIND_DEBOUNCE: Duration = Duration::from_millis(60);
 
 #[derive(Default)]
 struct WindowMessageRouter {
@@ -906,6 +908,13 @@ pub(crate) fn App() -> Element {
     // Chunk7: in-document find bar (Cmd+F) and full-text search panel.
     let mut find_open = use_signal(|| false);
     let mut find_query = use_signal(String::new);
+    // The query the highlight and the count use: `find_query` after the typing
+    // pause, so a burst of keystrokes scans the document once.
+    let mut find_applied = use_signal(String::new);
+    let mut find_debounce = use_signal(|| None::<Task>);
+    // A step asked for while the typed query was still waiting: it runs right
+    // after that query is applied, so it moves through the new matches.
+    let mut find_pending_step = use_signal(|| 0i32);
     // Note popover (the floating icon, Cmd+Shift+M, the palette): the selection
     // it quotes and its draft text.
     let mut note_open = use_signal(|| false);
@@ -2323,25 +2332,62 @@ pub(crate) fn App() -> Element {
         });
     });
 
+    use_effect(move || {
+        let q = if find_open() {
+            find_query()
+        } else {
+            String::new()
+        };
+        if let Some(task) = find_debounce.write().take() {
+            task.cancel();
+        }
+        // Clearing (an empty query, or the bar closing) is cheap and must not
+        // leave the previous query to flash back when the bar reopens.
+        if q.is_empty() {
+            find_applied.set(q);
+            return;
+        }
+        let task = spawn(async move {
+            tokio::time::sleep(FIND_DEBOUNCE).await;
+            find_applied.set(q);
+        });
+        find_debounce.set(Some(task));
+    });
+
     // In-document find: re-highlight whenever the query, the find bar's open
     // state, or the rendered HTML changes. Closing clears the highlight (empty
     // query). Also re-reads `html()` so highlights survive a content re-render.
     use_effect(move || {
         let _ = html();
         let q = if find_open() {
-            find_query()
+            find_applied()
         } else {
             String::new()
         };
+        let step = std::mem::take(&mut *find_pending_step.write());
         spawn(async move {
-            let _ = document::eval(&js::find_highlight_js(&q))
-                .recv::<()>()
-                .await;
+            let mut highlight = document::eval(&js::find_highlight_js(&q));
+            // Scripts run in the order they are sent, so the step lands on the
+            // matches the highlight above has just collected.
+            if step != 0 {
+                let _ = document::eval(&js::find_step_js(step));
+            }
+            let _ = highlight.recv::<()>().await;
         });
     });
 
-    // Step the current find match.
+    // Step the current find match. Enter right after typing must not step
+    // through the previous query's matches: apply the waiting one first.
     let find_step = move |dir: i32| {
+        let typed = find_query.peek().clone();
+        if *find_applied.peek() != typed {
+            if let Some(task) = find_debounce.write().take() {
+                task.cancel();
+            }
+            *find_pending_step.write() += dir;
+            find_applied.set(typed);
+            return;
+        }
         let script = js::find_step_js(dir);
         spawn(async move {
             let _ = document::eval(&script).recv::<()>().await;
@@ -2354,7 +2400,7 @@ pub(crate) fn App() -> Element {
         if !find_open() {
             return 0usize;
         }
-        let q = find_query();
+        let q = find_applied();
         if split() && active_pane() == 1 {
             let active_path = active_r();
             let snapshot = document_r.read();

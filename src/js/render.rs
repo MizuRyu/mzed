@@ -109,6 +109,51 @@ async function mdoCopySvgAsImage(svg) {
   ]);
 }
 
+// Live reload replaces the whole pane HTML (diffing the DOM is a separate
+// design), so unchanged code blocks and diagrams would be redone from source.
+// These keep their finished output by source, least recently used dropped first:
+// highlight.js up to 500 blocks, mermaid up to 50 diagrams (keyed with the theme,
+// so toggling it re-renders). Each cache also stays under 4M characters of keys
+// + values, and an entry over 1M characters is not kept at all.
+const MDO_HL_CACHE_MAX = 500;
+const MDO_MERMAID_CACHE_MAX = 50;
+const MDO_CACHE_MAX_CHARS = 4 * 1024 * 1024;
+const MDO_CACHE_ENTRY_MAX_CHARS = 1024 * 1024;
+window.__mdoHlCache ??= { entries: new Map(), chars: 0 };
+window.__mdoMermaidCache ??= { entries: new Map(), chars: 0 };
+function mdoCacheGet(cache, key) {
+  const hit = cache.entries.get(key);
+  if (hit !== undefined) { cache.entries.delete(key); cache.entries.set(key, hit); }
+  return hit && hit.value;
+}
+function mdoCachePut(cache, max, key, value, chars) {
+  const size = key.length + chars;
+  const old = cache.entries.get(key);
+  if (old) { cache.entries.delete(key); cache.chars -= old.size; }
+  if (size > MDO_CACHE_ENTRY_MAX_CHARS) return;
+  cache.entries.set(key, { value, size });
+  cache.chars += size;
+  while (cache.entries.size > max || cache.chars > MDO_CACHE_MAX_CHARS) {
+    const [oldest, entry] = cache.entries.entries().next().value;
+    cache.entries.delete(oldest);
+    cache.chars -= entry.size;
+  }
+}
+// Only a diagram mermaid finished is worth keeping. On success `mermaid.run`
+// replaces the <pre> contents with exactly one <svg> carrying the diagram type;
+// a failure leaves the source text next to mermaid's scratch <div> (with the
+// error drawing), whether or not the error SVG got its ARIA attributes. A hidden
+// window or a collapsed pane can lay a diagram out at zero size, so that one is
+// not kept either.
+function mdoMermaidDrawn(pre) {
+  const svg = pre.firstChild;
+  if (pre.childNodes.length !== 1 || !svg || svg.nodeName.toLowerCase() !== 'svg') return false;
+  const kind = svg.getAttribute('aria-roledescription');
+  if (!kind || kind === 'error' || document.hidden) return false;
+  const rect = svg.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
+}
+
 // Process one `.markdown-body` (there can be two when the view is split): syntax
 // highlight, code-copy buttons, mermaid, katex and link bridging — all scoped to
 // that body so each pane is independent.
@@ -117,7 +162,21 @@ async function mdoProcessBody(body) {
 
   if (window.hljs) {
     body.querySelectorAll('pre code').forEach((el) => {
-      try { hljs.highlightElement(el); } catch (e) { console.error(e); }
+      // Already highlighted (a theme toggle re-runs this without new HTML).
+      if (el.dataset.highlighted) return;
+      const key = el.className + '\n' + el.textContent;
+      const hit = mdoCacheGet(window.__mdoHlCache, key);
+      if (hit) {
+        el.innerHTML = hit.html;
+        el.className = hit.cls;
+        el.dataset.highlighted = 'yes';
+        return;
+      }
+      try {
+        hljs.highlightElement(el);
+        const html = el.innerHTML;
+        mdoCachePut(window.__mdoHlCache, MDO_HL_CACHE_MAX, key, { html, cls: el.className }, html.length);
+      } catch (e) { console.error(e); }
     });
   }
 
@@ -142,6 +201,7 @@ async function mdoProcessBody(body) {
 
   if (window.mermaid) {
     const pres = [...body.querySelectorAll('pre.mermaid')];
+    const toRender = [];
     pres.forEach((pre) => {
       // Stash the original source once so we can re-render on theme toggle.
       if (!pre.dataset.mdoSrc) pre.dataset.mdoSrc = pre.textContent;
@@ -205,11 +265,24 @@ async function mdoProcessBody(body) {
       // Theme the card to match the appearance (arto-style navy in dark).
       wrap.style.background = MDO_DARK ? '#161b22' : '#ffffff';
       wrap.style.border = '1px solid ' + (MDO_DARK ? '#30363d' : '#d8dee4');
+      const svg = mdoCacheGet(window.__mdoMermaidCache, MDO_DARK + '\n' + pre.dataset.mdoSrc);
+      if (svg) {
+        pre.innerHTML = svg;
+        pre.setAttribute('data-processed', 'true');
+        return;
+      }
       // Reset to source so mermaid re-renders with the active theme.
       pre.textContent = pre.dataset.mdoSrc;
       pre.removeAttribute('data-processed');
+      toRender.push(pre);
     });
-    await MDO_MERMAID.run(pres, MDO_DARK);
+    if (toRender.length) await MDO_MERMAID.run(toRender, MDO_DARK);
+    for (const pre of toRender) {
+      // A diagram mermaid could not draw is retried next time, not remembered.
+      if (!mdoMermaidDrawn(pre)) continue;
+      const svg = pre.innerHTML;
+      mdoCachePut(window.__mdoMermaidCache, MDO_MERMAID_CACHE_MAX, MDO_DARK + '\n' + pre.dataset.mdoSrc, svg, svg.length);
+    }
   }
 
   if (MDO_KATEX && window.renderMathInElement) {
@@ -476,6 +549,41 @@ mod tests {
             js.contains(r#"right: "\\]""#),
             r#"\\] delimiter が renderMathInElement に見つからない"#
         );
+    }
+
+    /// ライブリロードの全置換後、同じソースのコードブロックと図は描き直さない。
+    /// 上限付きで、図のキーにはテーマを含める（テーマ切替は再描画される）。
+    #[test]
+    fn 同じソースのコードブロックと図は再処理しない() {
+        let js = post_render_js(false, false);
+        assert!(js.contains("const MDO_HL_CACHE_MAX = 500;"));
+        assert!(js.contains("const MDO_MERMAID_CACHE_MAX = 50;"));
+
+        let hl = js
+            .split_once("mdoCacheGet(window.__mdoHlCache, key)")
+            .expect("highlight cache lookup")
+            .1;
+        let hit = hl.find("el.innerHTML = hit.html;").expect("cache hit");
+        let miss = hl.find("hljs.highlightElement(el)").expect("cache miss");
+        assert!(hit < miss);
+
+        assert!(js.contains(
+            "mdoCacheGet(window.__mdoMermaidCache, MDO_DARK + '\\n' + pre.dataset.mdoSrc)"
+        ));
+        assert!(js.contains("await MDO_MERMAID.run(toRender, MDO_DARK)"));
+    }
+
+    /// 失敗・寸法ゼロ・非表示の図は覚えず、キャッシュは件数に加えて総文字数でも縛る。
+    #[test]
+    fn キャッシュは成功した図だけを総量上限つきで覚える() {
+        let js = post_render_js(false, false);
+        assert!(js.contains("if (!mdoMermaidDrawn(pre)) continue;"));
+        assert!(js.contains("pre.childNodes.length !== 1"));
+        assert!(js.contains("if (!kind || kind === 'error' || document.hidden) return false;"));
+        assert!(js.contains("return rect.width > 0 && rect.height > 0;"));
+        assert!(js.contains("const MDO_CACHE_MAX_CHARS = 4 * 1024 * 1024;"));
+        assert!(js.contains("const MDO_CACHE_ENTRY_MAX_CHARS = 1024 * 1024;"));
+        assert!(js.contains("cache.chars > MDO_CACHE_MAX_CHARS"));
     }
 
     /// テーマ切替時も mermaid.initialize の theme 値が dark フラグに連動する。

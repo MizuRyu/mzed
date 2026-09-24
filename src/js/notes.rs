@@ -30,6 +30,39 @@ if (!window.__mdoNoteBound) {
   };
   const paneIndex = (body) => Number(body.dataset.mdoPane) || 0;
   const dense = (text) => text.replace(/\s+/g, '').length;
+  // why: measuring a large document on every selectionchange drops frames, so
+  // a pane's text length and heading list are kept until its DOM changes (see
+  // `watch`).
+  const measured = new WeakMap();
+  const measure = (body) => {
+    let m = measured.get(body);
+    if (!m) {
+      watch(body);
+      m = {
+        whole: dense(body.textContent),
+        headings: Array.from(body.querySelectorAll('h1,h2,h3,h4,h5,h6')),
+      };
+      measured.set(body, m);
+    }
+    return m;
+  };
+  // The last non-empty heading the selection follows (being inside one still
+  // counts). Headings are in document order, so the ones it follows form a
+  // prefix: binary-search its end, then step back over empty ones.
+  const headingBefore = (headings, node) => {
+    let lo = 0, hi = headings.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (headings[mid].compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) lo = mid + 1;
+      else hi = mid;
+    }
+    for (let k = lo - 1; k >= 0; k--) {
+      const h = headings[k];
+      const text = h.textContent.replace(/\s+/g, ' ').trim();
+      if (text) return '#'.repeat(Number(h.tagName.slice(1))) + ' ' + text;
+    }
+    return null;
+  };
   window.__mdoNoteCapture = () => {
     const sel = document.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
@@ -39,20 +72,13 @@ if (!window.__mdoNoteBound) {
     const body = paneBody(range.startContainer);
     // why: a selection dragged across the split belongs to no single file.
     if (!body || body !== paneBody(range.endContainer)) return null;
-    let heading = null;
-    for (const h of body.querySelectorAll('h1,h2,h3,h4,h5,h6')) {
-      // why: headings come in document order, so the first one the selection
-      // does not follow ends the search (being inside one still counts).
-      if (!(h.compareDocumentPosition(range.startContainer) & Node.DOCUMENT_POSITION_FOLLOWING)) break;
-      const text = h.textContent.replace(/\s+/g, ' ').trim();
-      if (text) heading = '#'.repeat(Number(h.tagName.slice(1))) + ' ' + text;
-    }
+    const m = measure(body);
+    const heading = headingBefore(m.headings, range.startContainer);
     // why: selecting (nearly) the whole document is a request to rewrite the
     // file, not a note on a passage — there is nothing for the quote to point
     // at. Compare without whitespace: toString() and textContent collapse it
     // differently.
-    const whole = dense(body.textContent);
-    const tooBroad = whole > 0 && dense(quote) >= whole * 0.9;
+    const tooBroad = m.whole > 0 && dense(quote) >= m.whole * 0.9;
     return {
       quote, heading, tooBroad,
       pane: paneIndex(body),
@@ -124,6 +150,10 @@ if (!window.__mdoNoteBound) {
   const watch = (body) => {
     if (watched.has(body)) return;
     watched.add(body);
+    // Any change below the body (a re-render, mermaid / KaTeX output) can change
+    // its text and headings, so the measurement goes.
+    new MutationObserver(() => measured.delete(body))
+      .observe(body, { childList: true, subtree: true, characterData: true });
     new MutationObserver(() => {
       const cap = window.__mdoNoteSel || window.__mdoNoteFrozen;
       // why: only the pane holding the quote invalidates it. The other pane
@@ -223,7 +253,7 @@ if (!window.__mdoNoteBound) {
   };
 
   const inside = (target, selector) => !!(target && target.closest && target.closest(selector));
-  document.addEventListener('selectionchange', () => {
+  const onSelection = () => {
     // why: the popover quotes a fixed range. Whatever the document does with
     // its selection now, the highlight and the note stay on that range.
     if (window.__mdoNoteMode === 'quote') return;
@@ -236,7 +266,21 @@ if (!window.__mdoNoteBound) {
       return;
     }
     settle();
+  };
+  // why: a drag fires selectionchange far more often than frames are drawn;
+  // one capture per frame is all the overlay can show.
+  let selFrame = 0;
+  document.addEventListener('selectionchange', () => {
+    if (!selFrame) selFrame = requestAnimationFrame(() => { selFrame = 0; onSelection(); });
   });
+  // why: mouseup / keyup draw the icon; a capture still waiting for its frame
+  // would run after that and drop the icon, so it runs first.
+  const flushSelection = () => {
+    if (!selFrame) return;
+    cancelAnimationFrame(selFrame);
+    selFrame = 0;
+    onSelection();
+  };
   document.addEventListener('mousedown', (e) => {
     if (inside(e.target, '.mdo-note-layer') || inside(e.target, '.mdo-note-popover')) return;
     // why: one rule for the open popover — a click anywhere else dismisses it
@@ -251,11 +295,15 @@ if (!window.__mdoNoteBound) {
   // dragging the selection out.
   document.addEventListener('mouseup', (e) => {
     if (window.__mdoNoteMode === 'quote' || inside(e.target, '.mdo-note-layer')) return;
+    flushSelection();
     window.__mdoNoteRender();
   });
   document.addEventListener('keyup', (e) => {
     if (window.__mdoNoteMode === 'quote') return;
-    if (e.shiftKey || e.key === 'Shift') window.__mdoNoteRender();
+    if (e.shiftKey || e.key === 'Shift') {
+      flushSelection();
+      window.__mdoNoteRender();
+    }
   });
   document.addEventListener('scroll', schedule, true);
   window.addEventListener('resize', schedule);

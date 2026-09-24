@@ -120,6 +120,23 @@ mod tests {
         assert!(!js.contains("__MDO_QUERY__"));
     }
 
+    /// A one-letter query on a large document matches tens of thousands of
+    /// times; only the current match ± 500 get a Range, on search and on step.
+    #[test]
+    fn find_paints_only_a_window_around_the_current_match() {
+        for js in [find_highlight_js("a"), find_step_js(1)] {
+            assert!(js.contains("const MDO_FIND_WINDOW = 500;"));
+            assert!(js.contains("mdoFindPaint(st)"));
+            assert!(!js.contains("__MDO_FIND_PAINT__"));
+        }
+        let search = find_highlight_js("a");
+        let scan = search
+            .split_once("walker.nextNode()")
+            .expect("match scan")
+            .1;
+        assert!(!scan.contains("createRange"));
+    }
+
     #[test]
     fn mermaid_window_replaces_dark_flag() {
         let js = mermaid_window_js(true);
@@ -232,7 +249,44 @@ mod tests {
 
         assert!(js.contains(".markdown-body[data-mdo-pane]"));
         assert!(js.contains("window.__mdoNoteBound"));
+    }
+
+    /// The heading is binary-searched in the pane's heading list, not found by
+    /// comparing the selection against every heading.
+    #[test]
+    fn note_bridge_binary_searches_the_heading() {
+        let js = note_bridge_js();
+
+        assert!(js.contains("const heading = headingBefore(m.headings, range.startContainer);"));
+        assert!(js.contains("const mid = (lo + hi) >> 1;"));
         assert!(js.contains("DOCUMENT_POSITION_FOLLOWING"));
+    }
+
+    /// The pane's length and headings are measured once per DOM change, not
+    /// per selectionchange.
+    #[test]
+    fn note_bridge_caches_the_pane_measurement_until_its_dom_changes() {
+        let js = note_bridge_js();
+
+        assert!(js.contains("const m = measure(body);"));
+        assert!(js.contains("dense(quote) >= m.whole * 0.9"));
+        assert!(js.contains("new MutationObserver(() => measured.delete(body))"));
+        assert!(js.contains("{ childList: true, subtree: true, characterData: true }"));
+    }
+
+    /// selectionchange is handled once per frame, and mouseup / keyup run a
+    /// pending one before drawing the icon so it cannot be dropped afterwards.
+    #[test]
+    fn note_bridge_throttles_selectionchange_to_one_per_frame() {
+        let js = note_bridge_js();
+
+        assert!(js.contains("if (!selFrame) selFrame = requestAnimationFrame("));
+        for event in ["addEventListener('mouseup'", "addEventListener('keyup'"] {
+            let handler = js.split_once(event).expect("handler").1;
+            let flush = handler.find("flushSelection();").expect("flush");
+            let render = handler.find("window.__mdoNoteRender();").expect("render");
+            assert!(flush < render, "{event}: flush must run before render");
+        }
     }
 
     /// A selection dragged across the split belongs to no single file.
@@ -268,7 +322,7 @@ mod tests {
     fn note_bridge_refuses_a_selection_covering_the_whole_pane() {
         let js = note_bridge_js();
 
-        assert!(js.contains("dense(quote) >= whole * 0.9"));
+        assert!(js.contains("dense(quote) >= m.whole * 0.9"));
         assert!(js.contains("if (!cap || cap.tooBroad) return;"));
     }
 
@@ -306,11 +360,11 @@ mod tests {
     fn note_bridge_freezes_the_quote_while_the_popover_is_open() {
         let js = note_bridge_js();
         let handler = js
-            .split_once("addEventListener('selectionchange'")
+            .split_once("const onSelection = ")
             .expect("selectionchange handler")
             .1;
 
-        assert!(handler.starts_with(", () => {\n    // why: the popover quotes a fixed range."));
+        assert!(handler.starts_with("() => {\n    // why: the popover quotes a fixed range."));
         assert!(handler.contains("if (window.__mdoNoteMode === 'quote') return;"));
         assert!(js.contains("window.__mdoNoteFreeze = () =>"));
         assert!(note_overlay_js(NoteOverlay::Quote).contains("window.__mdoNoteFreeze()"));
