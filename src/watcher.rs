@@ -67,10 +67,23 @@ fn compare_key(p: &Path) -> String {
 /// True when any changed path is `target` (its content changed, was re-created,
 /// or renamed into place), compared on the resolved path — see [`resolved`].
 pub fn active_file_affected(target: &Path, changed: &[PathBuf]) -> bool {
-    let target_key = compare_key(&resolved(target));
+    let target_key = path_key(target);
+    changed.iter().any(|p| path_key(p) == target_key)
+}
+
+/// The key two spellings of one file share: resolved (see [`resolved`]), then
+/// compared without case (see [`compare_key`]).
+pub fn path_key(p: &Path) -> String {
+    compare_key(&resolved(p))
+}
+
+/// Does a batch of changes add or remove a note in the inbox? Only `*.json`
+/// counts: a note is written as `.json.tmp` and renamed into place, and moving
+/// one into `done/` reports its old inbox path.
+pub fn notes_inbox_affected(changed: &[PathBuf]) -> bool {
     changed
         .iter()
-        .any(|p| compare_key(&resolved(p)) == target_key)
+        .any(|p| p.extension().and_then(|e| e.to_str()) == Some("json"))
 }
 
 /// How a batch of changes affects the tree under `root`: its shape changed
@@ -212,19 +225,43 @@ fn changes_of(events: &[DebouncedEvent]) -> impl Iterator<Item = (EventKind, &Pa
         .flat_map(|ev| ev.event.paths.iter().map(|p| (ev.event.kind, p.as_path())))
 }
 
-pub fn watch_file_until<F>(file: &Path, stop: &Receiver<()>, mut on_change: F) -> Result<()>
+pub fn watch_file_until<F>(file: &Path, stop: &Receiver<()>, on_change: F) -> Result<()>
 where
     F: FnMut() -> bool,
 {
-    let target = file.to_path_buf();
-    let dir = file
-        .parent()
-        .context("file has no parent dir")?
-        .to_path_buf();
+    let dir = file.parent().context("file has no parent dir")?;
+    watch_dir_until(
+        dir,
+        stop,
+        |paths| active_file_affected(file, paths),
+        on_change,
+    )
+}
 
+/// Watch the notes inbox for notes arriving (a save) or leaving (moved into
+/// `done/`). Non-recursive: `done/` is the agent's archive, not shown.
+pub fn watch_notes_until<F>(dir: &Path, stop: &Receiver<()>, on_change: F) -> Result<()>
+where
+    F: FnMut() -> bool,
+{
+    // why resolved: FSEvents reports the resolved path, and the non-recursive
+    // filter drops every event whose parent is spelt differently.
+    watch_dir_until(&resolved(dir), stop, notes_inbox_affected, on_change)
+}
+
+fn watch_dir_until<R, F>(
+    dir: &Path,
+    stop: &Receiver<()>,
+    relevant: R,
+    mut on_change: F,
+) -> Result<()>
+where
+    R: Fn(&[PathBuf]) -> bool,
+    F: FnMut() -> bool,
+{
     let (tx, rx) = std::sync::mpsc::channel();
     let mut debouncer = new_debouncer(DEBOUNCE, None, tx)?;
-    debouncer.watch(&dir, RecursiveMode::NonRecursive)?;
+    debouncer.watch(dir, RecursiveMode::NonRecursive)?;
 
     loop {
         if stop_requested(stop) {
@@ -232,8 +269,7 @@ where
         }
         match rx.recv_timeout(STOP_POLL) {
             Ok(Ok(events)) => {
-                let paths = paths_of(&events);
-                if active_file_affected(&target, &paths) && !on_change() {
+                if relevant(&paths_of(&events)) && !on_change() {
                     break;
                 }
             }
@@ -572,6 +608,50 @@ mod tests {
         assert!(done_rx
             .recv_timeout(Duration::from_secs(10))
             .expect("watcher did not stop"));
+    }
+
+    #[test]
+    fn 受信箱はjsonの出入りだけを拾う() {
+        assert!(notes_inbox_affected(&[p(
+            "/n/20260924T010203Z-0a1b2c3d.json"
+        )]));
+        assert!(!notes_inbox_affected(&[p(
+            "/n/20260924T010203Z-0a1b2c3d.json.tmp"
+        )]));
+        assert!(!notes_inbox_affected(&[p("/n/.DS_Store"), p("/n/done")]));
+    }
+
+    #[test]
+    fn 受信箱のメモ追加と移動を通知する() {
+        let dir = tempfile::tempdir().unwrap();
+        let inbox = dir.path().to_path_buf();
+        std::fs::create_dir_all(inbox.join("done")).unwrap();
+        let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+        let (hit_tx, hit_rx) = std::sync::mpsc::channel();
+        let watched = inbox.clone();
+        let worker = std::thread::spawn(move || {
+            let _ = watch_notes_until(&watched, &stop_rx, move || hit_tx.send(()).is_ok());
+        });
+
+        // FSEvents may take seconds to start reporting on a loaded machine, so
+        // keep adding notes until one is noticed instead of guessing a delay.
+        let mut added = Vec::new();
+        let noticed = (0..20).any(|i| {
+            let name = format!("{i}.json");
+            std::fs::write(inbox.join(&name), "{}").unwrap();
+            added.push(name);
+            hit_rx.recv_timeout(Duration::from_millis(500)).is_ok()
+        });
+        assert!(noticed, "adding a note was not reported");
+        while hit_rx.recv_timeout(Duration::from_millis(600)).is_ok() {}
+        std::fs::rename(inbox.join(&added[0]), inbox.join("done").join(&added[0])).unwrap();
+        assert!(
+            hit_rx.recv_timeout(Duration::from_secs(10)).is_ok(),
+            "moving a note to done/ was not reported"
+        );
+
+        stop_tx.send(()).unwrap();
+        worker.join().unwrap();
     }
 
     #[test]

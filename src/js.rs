@@ -14,7 +14,10 @@ pub(crate) use export::{export_capture_js, webview_action_error};
 pub(crate) use find::{find_highlight_js, find_step_js};
 pub(crate) use keyboard::{keydown_bridge_js, sidebar_resize_js};
 pub(crate) use mermaid::{helper_js as mermaid_helper_js, mermaid_window_js};
-pub(crate) use notes::{note_bridge_js, note_overlay_js, note_selection_js, NoteOverlay};
+pub(crate) use notes::{
+    note_bridge_js, note_marks_js, note_marks_pane_json, note_overlay_js, note_selection_js,
+    NoteOverlay,
+};
 pub(crate) use render::post_render_js;
 
 #[cfg(test)]
@@ -106,6 +109,22 @@ mod tests {
 
         assert!(js.contains(&format!("window.__mdoKeymap = {json};")));
         assert!(!js.contains("__MDO_KEYMAP__"));
+    }
+
+    #[test]
+    fn keydown_bridge_hides_ime_conversion_from_every_handler() {
+        let js = keydown_bridge_js(&[]);
+
+        // Capture phase on window: runs before Dioxus's root listener.
+        assert!(
+            js.contains("if (e.isComposing || e.keyCode === 229) e.stopImmediatePropagation();")
+        );
+        assert!(js.contains("if (composing || e.isComposing) {"));
+        assert!(js.contains("echo.value === e.target.value) e.stopImmediatePropagation();"));
+        assert!(js.contains("new InputEvent('input', { bubbles: true })"));
+        let guard = js.find("keyCode === 229").unwrap();
+        let shortcuts = js.find("window.__mdoKeymap ||").unwrap();
+        assert!(guard < shortcuts);
     }
 
     #[test]
@@ -270,7 +289,7 @@ mod tests {
 
         assert!(js.contains("const m = measure(body);"));
         assert!(js.contains("dense(quote) >= m.whole * 0.9"));
-        assert!(js.contains("new MutationObserver(() => measured.delete(body))"));
+        assert!(js.contains("new MutationObserver(() => {\n      measured.delete(body);"));
         assert!(js.contains("{ childList: true, subtree: true, characterData: true }"));
     }
 
@@ -396,6 +415,74 @@ mod tests {
         assert!(js.contains("if (!cap || cap.body === body) window.__mdoNoteForget();"));
     }
 
+    /// Inbox notes reach the WebView as JSON, and whatever the reader typed
+    /// is never parsed as HTML on the way to the tooltip.
+    #[test]
+    fn note_marks_js_passes_the_notes_as_json() {
+        let note = crate::services::notes::Note::new(
+            std::path::Path::new("/p/a.md"),
+            Some(std::path::Path::new("/p")),
+            &crate::services::notes::Selection {
+                quote: "引用 \"</script>".into(),
+                heading: Some("## 節".into()),
+                pane: 0,
+            },
+            "<img src=x onerror=alert(1)>",
+            "2026-09-24T01:02:03Z".into(),
+        );
+
+        let js = note_marks_js(true, [&note_marks_pane_json(&[note]), "[]"]);
+
+        let json = js
+            .strip_prefix("(() => { window.__mdoNoteMarkData = ")
+            .and_then(|rest| rest.split_once("; if (window.__mdoNoteMarksDraw)"))
+            .expect("assignment")
+            .0;
+        let value: serde_json::Value = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "dark": true,
+                "panes": [[{
+                    "quote": "引用 \"</script>",
+                    "heading": "## 節",
+                    "note": "<img src=x onerror=alert(1)>",
+                    "created_at": "2026-09-24T01:02:03Z",
+                }], []],
+            })
+        );
+    }
+
+    #[test]
+    fn note_bridge_underlines_beside_the_body_and_shows_notes_as_text() {
+        let js = note_bridge_js();
+        let marks = js.split_once("const indexed = new WeakMap();").unwrap().1;
+
+        assert!(marks.contains("host.appendChild(layer);"));
+        assert!(marks.contains("text.textContent = note.note;"));
+        assert!(!marks.contains("innerHTML"));
+        // The popover's quote wins over a note's hover, also when the popover
+        // was opened from the keyboard.
+        assert!(marks.contains("if (window.__mdoNoteMode === 'quote' || inside(e.target, '.mdo-note-layer')) return hideTip();"));
+        assert!(js.contains("if (window.__mdoNoteMode === 'quote') hideTip();"));
+    }
+
+    /// The underline must not take the clicks meant for the text (a link)
+    /// under it; hover is a hit test on the rects kept at layout time.
+    #[test]
+    fn note_underlines_take_no_pointer_events() {
+        let css = include_str!("../assets/mdo.css");
+        let rule = css
+            .split_once(".mdo-note-underline {")
+            .and_then(|(_, rest)| rest.split_once('}'))
+            .unwrap()
+            .0;
+        assert!(!rule.contains("pointer-events"));
+        let js = note_bridge_js();
+        assert!(js.contains("document.addEventListener('mousemove', showTip);"));
+        assert!(!js.contains("elementsFromPoint"));
+    }
+
     /// A resize or a rewrap moves every rect the overlay was drawn from.
     #[test]
     fn note_bridge_repositions_the_overlay_on_scroll_and_resize() {
@@ -403,7 +490,9 @@ mod tests {
 
         assert!(js.contains("document.addEventListener('scroll', schedule, true);"));
         assert!(js.contains("window.addEventListener('resize', schedule);"));
-        assert!(js.contains("new ResizeObserver(() => schedule()).observe(body)"));
+        assert!(js.contains(
+            "new ResizeObserver(() => { schedule(); refreshMarks(false); }).observe(body);"
+        ));
         assert!(
             js.contains("plan.items.forEach((box, index) => apply(layer.children[index], box));")
         );

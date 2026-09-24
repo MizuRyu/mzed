@@ -1,5 +1,7 @@
-//! Reader notes: read the selection the WebView holds, and float the "add a
-//! note" icon at the end of it.
+//! Reader notes: read the selection the WebView holds, float the "add a note"
+//! icon at the end of it, and underline the quotes of notes not yet handled.
+
+use crate::services::notes::Note;
 
 /// Installed once: remembers the last selection made inside a rendered pane,
 /// draws the note overlay (the icon, or the quoted range's highlight), and
@@ -152,8 +154,13 @@ if (!window.__mdoNoteBound) {
     watched.add(body);
     // Any change below the body (a re-render, mermaid / KaTeX output) can change
     // its text and headings, so the measurement goes.
-    new MutationObserver(() => measured.delete(body))
-      .observe(body, { childList: true, subtree: true, characterData: true });
+    new MutationObserver(() => {
+      measured.delete(body);
+      indexed.delete(body);
+      // why: highlighting, Mermaid and KaTeX replace text nodes after a
+      // render, which leaves the underlines' ranges pointing at nothing.
+      refreshMarks(true);
+    }).observe(body, { childList: true, subtree: true, characterData: true });
     new MutationObserver(() => {
       const cap = window.__mdoNoteSel || window.__mdoNoteFrozen;
       // why: only the pane holding the quote invalidates it. The other pane
@@ -162,7 +169,9 @@ if (!window.__mdoNoteBound) {
       if (!cap || cap.body === body) window.__mdoNoteForget();
     }).observe(body, { childList: true });
     // why: rewrapping the column moves every rect the overlay was drawn from.
-    if (window.ResizeObserver) new ResizeObserver(() => schedule()).observe(body);
+    if (window.ResizeObserver) {
+      new ResizeObserver(() => { schedule(); refreshMarks(false); }).observe(body);
+    }
   };
   window.__mdoNoteForget = () => {
     window.__mdoNoteSel = null;
@@ -189,6 +198,7 @@ if (!window.__mdoNoteBound) {
   };
   window.__mdoNoteRender = () => {
     drop();
+    if (window.__mdoNoteMode === 'quote') hideTip();
     const cap = shown();
     if (!cap || cap.tooBroad) return;
     watch(cap.body);
@@ -282,6 +292,7 @@ if (!window.__mdoNoteBound) {
     onSelection();
   };
   document.addEventListener('mousedown', (e) => {
+    hideTip();
     if (inside(e.target, '.mdo-note-layer') || inside(e.target, '.mdo-note-popover')) return;
     // why: one rule for the open popover — a click anywhere else dismisses it
     // without saving, including the click that starts the next selection.
@@ -307,6 +318,272 @@ if (!window.__mdoNoteBound) {
   });
   document.addEventListener('scroll', schedule, true);
   window.addEventListener('resize', schedule);
+
+  // Notes still in the inbox: a dashed underline under each quote, the note on
+  // hover. Drawn beside the body like the overlay above, never inside it.
+  const indexed = new WeakMap();
+  const isHeading = (el) => /^H[1-6]$/.test(el.tagName);
+  // The text from the walker's position up to `stop` (the end when null) with
+  // every whitespace run collapsed to one space (the rule the needle follows),
+  // where each text node starts in the raw text, and where each heading starts
+  // in the collapsed one. `normAt` / `origAt` are the points where the two
+  // offsets drift apart. Given a needle, it stops as soon as the needle is in,
+  // and gives up (null) past SECTION_WALK characters.
+  const SECTION_WALK = 65536;
+  const collect = (walker, stop, needle) => {
+    const nodes = [], starts = [], parts = [], heads = new Map();
+    const normAt = [0], origAt = [0];
+    let norm = 0, orig = 0, space = false, tail = '';
+    for (let n = walker.nextNode(); n && n !== stop; n = walker.nextNode()) {
+      if (n.nodeType !== 3) {
+        if (isHeading(n)) heads.set(n, norm);
+        continue;
+      }
+      const raw = n.nodeValue;
+      nodes.push(n);
+      starts.push(orig);
+      let piece = '', last = 0;
+      const runs = /\s+/g;
+      for (let m = runs.exec(raw); m; m = runs.exec(raw)) {
+        piece += raw.slice(last, m.index);
+        last = m.index + m[0].length;
+        if (space && m.index === 0) {
+          // Continues the previous node's run: nothing to add.
+          normAt.push(norm + piece.length);
+          origAt.push(orig + last);
+        } else {
+          piece += ' ';
+          if (m[0].length > 1) {
+            normAt.push(norm + piece.length);
+            origAt.push(orig + last);
+          }
+        }
+      }
+      piece += raw.slice(last);
+      if (piece) space = piece.endsWith(' ');
+      parts.push(piece);
+      norm += piece.length;
+      orig += raw.length;
+      if (needle) {
+        // Only the new text plus a needle's worth before it can hold a new hit.
+        tail = tail.slice(-needle.length) + piece;
+        if (tail.includes(needle)) break;
+        if (norm > SECTION_WALK) return null;
+      }
+    }
+    return { text: parts.join(''), nodes, starts, heads, normAt, origAt };
+  };
+  const walkFrom = (body, node) => {
+    const walker = document.createTreeWalker(body, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+    if (node) walker.currentNode = node;
+    return walker;
+  };
+  // A body's headings in the note format (`## title`), and its whole text once
+  // a note needs it. Kept until the body's DOM changes (see `watch`).
+  const indexOf = (body) => {
+    let ix = indexed.get(body);
+    if (!ix) {
+      // why a walker rather than querySelectorAll: the same result, and several
+      // times cheaper on a large document in the jsdom harness.
+      const heads = [];
+      const walker = document.createTreeWalker(body, NodeFilter.SHOW_ELEMENT);
+      for (let el = walker.nextNode(); el; el = walker.nextNode()) {
+        if (!isHeading(el)) continue;
+        const level = Number(el.tagName.slice(1));
+        heads.push({ el, level, title: '#'.repeat(level) + ' ' + el.textContent.replace(/\s+/g, ' ').trim() });
+      }
+      ix = { heads, whole: null };
+      indexed.set(body, ix);
+    }
+    return ix;
+  };
+  const wholeOf = (body, ix) => ix.whole || (ix.whole = collect(walkFrom(body, null), null, null));
+  // The last index of sorted `list` whose value is <= `value`.
+  const floorIndex = (list, value) => {
+    let lo = 0, hi = list.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (list[mid] <= value) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo;
+  };
+  // The first `needle` inside [from, to) of a collected text, as a Range.
+  const rangeIn = (part, needle, from, to) => {
+    const at = part.text.indexOf(needle, from);
+    if (at < 0 || at + needle.length > to) return null;
+    const toOrig = (i) => {
+      const k = floorIndex(part.normAt, i);
+      return part.origAt[k] + (i - part.normAt[k]);
+    };
+    const start = toOrig(at), end = toOrig(at + needle.length - 1) + 1;
+    const first = floorIndex(part.starts, start), last = floorIndex(part.starts, end - 1);
+    const range = new Range();
+    range.setStart(part.nodes[first], start - part.starts[first]);
+    range.setEnd(part.nodes[last], end - part.starts[last]);
+    return range;
+  };
+  // The quote's first line, first in the section under its heading, then
+  // anywhere. why the first line only: toString() puts line breaks between
+  // blocks that the text nodes do not have. why walk the section first: the
+  // quote sits near its heading, so most notes cost a few paragraphs; a long
+  // section (a headingless tail) falls back to the whole text, read once.
+  const findQuote = (body, note) => {
+    const line = String(note.quote || '').split('\n').find((l) => l.trim());
+    if (!line) return null;
+    const needle = line.trim().replace(/\s+/g, ' ');
+    const ix = indexOf(body);
+    for (let k = 0; k < ix.heads.length; k++) {
+      const h = ix.heads[k];
+      if (h.title !== note.heading) continue;
+      let next = null;
+      for (let j = k + 1; j < ix.heads.length && !next; j++) {
+        if (ix.heads[j].level <= h.level) next = ix.heads[j].el;
+      }
+      const part = ix.whole ? null : collect(walkFrom(body, h.el), next, needle);
+      const range = part
+        ? rangeIn(part, needle, 0, part.text.length)
+        : rangeIn(wholeOf(body, ix), needle, ix.whole.heads.get(h.el), next ? ix.whole.heads.get(next) : Infinity);
+      if (range) return range;
+    }
+    const whole = wholeOf(body, ix);
+    return rangeIn(whole, needle, 0, whole.text.length);
+  };
+  // Per pane with something to show: where, and which note each range is.
+  let marks = [];
+  // why clone rather than createElement: every document access rescans it for
+  // named elements after a DOM change in the jsdom harness; WebKit is
+  // indifferent.
+  const underline = document.createElement('div');
+  underline.className = 'mdo-note-underline';
+  // Lay the underlines out from the ranges (after a reflow, without searching),
+  // and keep where they are for the hover test.
+  const placeMarks = () => {
+    for (const mark of marks) {
+      const { host, layer, items } = mark;
+      const hostRect = host.getBoundingClientRect();
+      mark.originX = hostRect.left + host.clientLeft;
+      mark.originY = hostRect.top + host.clientTop;
+      const dx = host.scrollLeft - mark.originX;
+      const dy = host.scrollTop - mark.originY;
+      const lines = [];
+      mark.hits = [];
+      for (const { range, index } of items) {
+        for (const rect of range.getClientRects()) {
+          if (!rect.width) continue;
+          const left = rect.left + dx, top = rect.bottom + dy - 4;
+          const line = underline.cloneNode(false);
+          line.style.left = left + 'px';
+          line.style.top = top + 'px';
+          line.style.width = rect.width + 'px';
+          lines.push(line);
+          // The hit area is the underline plus a few pixels: the rest of the
+          // line is the text's, for selecting and clicking links.
+          mark.hits.push({ left, top, right: left + rect.width, bottom: top + 6, index });
+        }
+      }
+      layer.replaceChildren(...lines);
+    }
+  };
+  const drawMarks = () => {
+    hideTip();
+    const data = window.__mdoNoteMarkData;
+    // Search every pane before changing the DOM (see `underline`).
+    const next = [];
+    (data ? data.panes : []).forEach((list, pane) => {
+      if (!list || !list.length) return;
+      const body = document.querySelector('.markdown-body[data-mdo-pane="' + pane + '"]');
+      const host = body && body.parentElement;
+      if (!host) return;
+      watch(body);
+      const items = [];
+      list.forEach((note, index) => {
+        const range = findQuote(body, note);
+        if (range) items.push({ range, index });
+      });
+      if (items.length) next.push({ host, list, items });
+    });
+    marks.forEach(({ layer }) => layer.remove());
+    marks = next.map(({ host, list, items }) => {
+      const layer = underline.cloneNode(false);
+      layer.className = 'mdo-note-marks' + (data.dark ? ' mdo-dark' : '');
+      host.appendChild(layer);
+      return { host, list, layer, items, hits: [] };
+    });
+    placeMarks();
+  };
+  window.__mdoNoteMarksDraw = drawMarks;
+  let marksFrame = 0, marksSearch = false;
+  const refreshMarks = (search) => {
+    marksSearch = marksSearch || search;
+    if (marksFrame) return;
+    marksFrame = requestAnimationFrame(() => {
+      marksFrame = 0;
+      const again = marksSearch;
+      marksSearch = false;
+      if (again) drawMarks();
+      else placeMarks();
+    });
+  };
+  window.addEventListener('resize', () => refreshMarks(false));
+
+  let tip = null;
+  const hideTip = () => {
+    if (tip) tip.remove();
+    tip = null;
+  };
+  const two = (n) => String(n).padStart(2, '0');
+  const stamp = (iso) => {
+    const d = new Date(iso);
+    if (isNaN(d)) return '';
+    return two(d.getMonth() + 1) + '/' + two(d.getDate()) + ' ' + two(d.getHours()) + ':' + two(d.getMinutes());
+  };
+  // Every note underlined at the pointer, oldest first. why a hit test on the
+  // kept rects instead of hover on the underlines: an element there would take
+  // the clicks meant for the text under it (a link).
+  const showTip = (e) => {
+    if (!marks.length) return;
+    // why: the note being written owns this spot while its popover is open.
+    if (window.__mdoNoteMode === 'quote' || inside(e.target, '.mdo-note-layer')) return hideTip();
+    const mark = marks.find((m) => m.host.contains(e.target));
+    const notes = [];
+    if (mark) {
+      const x = e.clientX - mark.originX + mark.host.scrollLeft;
+      const y = e.clientY - mark.originY + mark.host.scrollTop;
+      for (const hit of mark.hits) {
+        if (x < hit.left || x >= hit.right || y < hit.top || y >= hit.bottom) continue;
+        const note = mark.list[hit.index];
+        if (!notes.includes(note)) notes.push(note);
+      }
+    }
+    if (!notes.length) return hideTip();
+    notes.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+    if (!tip) {
+      tip = document.createElement('div');
+      document.body.appendChild(tip);
+    }
+    const data = window.__mdoNoteMarkData;
+    tip.className = 'mdo-note-tip' + (data && data.dark ? ' mdo-dark' : '');
+    // why textContent: notes and quotes are whatever the reader typed.
+    tip.replaceChildren(...notes.map((note) => {
+      const item = document.createElement('div');
+      item.className = 'mdo-note-tip-item';
+      const text = document.createElement('div');
+      text.textContent = note.note;
+      const time = document.createElement('div');
+      time.className = 'mdo-note-tip-time';
+      time.textContent = stamp(note.created_at);
+      item.append(text, time);
+      return item;
+    }));
+    const below = e.clientY + 16;
+    const y = below + tip.offsetHeight > window.innerHeight - 8 ? e.clientY - tip.offsetHeight - 8 : below;
+    tip.style.left = Math.max(8, Math.min(e.clientX + 12, window.innerWidth - tip.offsetWidth - 8)) + 'px';
+    tip.style.top = Math.max(8, y) + 'px';
+  };
+  document.addEventListener('mousemove', showTip);
+  document.addEventListener('scroll', hideTip, true);
+  if (window.__mdoNoteMarkData) drawMarks();
 }
 "#;
 
@@ -323,6 +600,34 @@ const NOTE_SELECTION_JS: &str = r#"
   });
 })();
 "#;
+
+/// One pane's notes as the JSON array [`note_marks_js`] takes. Blocking in
+/// proportion to the notes: build it off the UI thread.
+pub(crate) fn note_marks_pane_json(notes: &[Note]) -> String {
+    let notes: Vec<serde_json::Value> = notes
+        .iter()
+        .map(|note| {
+            serde_json::json!({
+                "quote": note.quote,
+                "heading": note.heading,
+                "note": note.note,
+                "created_at": note.created_at,
+            })
+        })
+        .collect();
+    serde_json::Value::Array(notes).to_string()
+}
+
+/// Hand the document the inbox notes of each pane (`[left, right]`, each from
+/// [`note_marks_pane_json`]) to underline. The WebView keeps them and re-finds
+/// the quotes after every re-render; this is only needed when the notes, the
+/// files or the theme change.
+pub(crate) fn note_marks_js(dark: bool, panes: [&str; 2]) -> String {
+    let [left, right] = panes;
+    format!(
+        "(() => {{ window.__mdoNoteMarkData = {{\"dark\":{dark},\"panes\":[{left},{right}]}}; if (window.__mdoNoteMarksDraw) window.__mdoNoteMarksDraw(); }})();"
+    )
+}
 
 /// What the document should be showing for the selection it remembers.
 #[derive(Clone, Copy, PartialEq)]

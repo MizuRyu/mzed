@@ -11,6 +11,37 @@ const KEYDOWN_BRIDGE_TEMPLATE: &str = r#"
 window.__mdoKeymap = __MDO_KEYMAP__;
 if (!window.__mdoKeyBound) {
   window.__mdoKeyBound = true;
+  // IME conversion: nothing below and no Dioxus onkeydown / oninput may see it.
+  // Assumes the event order of macOS 26's WKWebView (checked by NOTE-19):
+  // why keyCode 229: the Enter that commits a conversion comes after
+  // compositionend with isComposing=false, and Dioxus does not expose keyCode.
+  // why hold input back: every oninput re-renders the controlled `value`, and
+  // that write lands after the next keystroke and breaks the conversion.
+  // Remove when Dioxus's KeyboardData exposes keyCode and WebKit sends the
+  // committing Enter with isComposing=true; check: without this block, NOTE-19
+  // must still not save on the committing Enter.
+  let composing = false;
+  // The committed value handed on at compositionend, so a native input that
+  // follows with the same value is not delivered twice.
+  let handedOn = null;
+  window.addEventListener('compositionstart', () => { composing = true; }, true);
+  window.addEventListener('compositionend', (e) => {
+    composing = false;
+    e.target.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    handedOn = { target: e.target, value: e.target.value };
+  }, true);
+  window.addEventListener('input', (e) => {
+    if (composing || e.isComposing) {
+      e.stopImmediatePropagation();
+      return;
+    }
+    const echo = handedOn;
+    handedOn = null;
+    if (echo && echo.target === e.target && echo.value === e.target.value) e.stopImmediatePropagation();
+  }, true);
+  window.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) e.stopImmediatePropagation();
+  }, true);
   window.addEventListener('keydown', (e) => {
     const meta = e.metaKey || e.ctrlKey;
     // Config-driven rebindable shortcuts (matched by physical `e.code`).

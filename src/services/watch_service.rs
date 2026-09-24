@@ -121,6 +121,27 @@ pub(crate) fn tree_changes(roots: Vec<PathBuf>) -> WatchSubscription<watcher::Tr
     }
 }
 
+/// Notes arriving in or leaving the inbox `dir` (which must exist): `Ok` per
+/// change, then `Err` once if the watcher could not start or broke off. The
+/// channel closes when the watcher ends either way.
+pub(crate) fn notes_inbox_changes(dir: PathBuf) -> WatchSubscription<Result<(), String>> {
+    let (tx, rx) = mpsc::unbounded_channel::<Result<(), String>>();
+    let (stop_tx, stop_rx) = std_mpsc::channel::<()>();
+    let join_handle = std::thread::spawn(move || {
+        let changes = tx.clone();
+        if let Err(err) =
+            watcher::watch_notes_until(&dir, &stop_rx, move || changes.send(Ok(())).is_ok())
+        {
+            let _ = tx.send(Err(format!("{err:#}")));
+        }
+    });
+    WatchSubscription {
+        rx,
+        stop_txs: vec![stop_tx],
+        join_handles: vec![join_handle],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

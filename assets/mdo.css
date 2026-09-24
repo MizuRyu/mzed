@@ -359,6 +359,56 @@ body {
   background: rgba(56, 139, 253, 0.32);
   border-radius: 2px;
 }
+/* Notes still in the inbox: a dashed underline under each quote. Below the
+   note overlay, so the icon and the quote being written stay on top. */
+.mdo-note-marks {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: 4;
+}
+.mdo-note-underline {
+  position: absolute;
+  box-sizing: border-box;
+  height: 6px;
+  border-bottom: 2px dashed #bf8700;
+}
+.mdo-note-marks.mdo-dark .mdo-note-underline {
+  border-bottom-color: #d29922;
+}
+.mdo-note-tip {
+  position: fixed;
+  z-index: 950;
+  max-width: 360px;
+  padding: 6px 8px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #1f2328;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  font: 12px -apple-system, sans-serif;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+.mdo-note-tip.mdo-dark {
+  border-color: #30363d;
+  background: #161b22;
+  color: #e6edf3;
+}
+.mdo-note-tip-item + .mdo-note-tip-item {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(127, 127, 127, 0.3);
+}
+.mdo-note-tip-time {
+  margin-top: 2px;
+  font-size: 11px;
+  opacity: 0.65;
+}
 
 /* Top-right toast: brief slide/fade in. */
 .mdo-toast {

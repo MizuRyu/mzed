@@ -920,6 +920,12 @@ pub(crate) fn App() -> Element {
     let mut note_open = use_signal(|| false);
     let mut note_text = use_signal(String::new);
     let mut note_target = use_signal(|| None::<NoteTarget>);
+    // Inbox notes about the file in each pane ([left, right]) as the JSON the
+    // WebView takes, with the file they were read for: a pane that has since
+    // moved to another file shows none until the re-read lands.
+    let mut pane_notes = use_signal(<[Option<(PathBuf, String)>; 2]>::default);
+    let mut notes_inbox_tick = use_signal(|| 0u64);
+    let mut pane_notes_generation = use_signal(app_state::generation::Generation::default);
     let mut search_open = use_signal(|| false);
     let mut search_query = use_signal(String::new);
     let mut search_sel = use_signal(|| 0usize);
@@ -1635,6 +1641,8 @@ pub(crate) fn App() -> Element {
             match result {
                 Ok(Ok(path)) => {
                     logging::app(format!("note: saved {}", path.display()));
+                    // Underline it now rather than after the watcher's debounce.
+                    notes_inbox_tick += 1;
                     show_toast(if cut {
                         "メモを保存しました（長すぎる部分は切りました）".into()
                     } else {
@@ -2318,6 +2326,72 @@ pub(crate) fn App() -> Element {
                     _ => {}
                 }
             }
+        });
+    });
+
+    // One inbox watcher per window: a note saved here or in another window, or
+    // moved to `done/` by an agent, re-reads the underlined notes.
+    // A watcher that fails to start or breaks off is retried every 30s, and a
+    // restart re-reads the inbox for what changed while nobody was watching.
+    use_effect(move || {
+        spawn(async move {
+            loop {
+                match tokio::task::spawn_blocking(services::notes::ensure_dir).await {
+                    Ok(Ok(dir)) => {
+                        let mut subscription = services::watch_service::notes_inbox_changes(dir);
+                        while let Some(change) = subscription.rx.recv().await {
+                            match change {
+                                Ok(()) => notes_inbox_tick += 1,
+                                Err(err) => {
+                                    logging::app(format!("notes: inbox watch failed: {err}"))
+                                }
+                            }
+                        }
+                    }
+                    Ok(Err(err)) => logging::app(format!("notes: inbox unavailable: {err:#}")),
+                    Err(err) => logging::app(format!("notes: inbox unavailable: {err}")),
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                notes_inbox_tick += 1;
+            }
+        });
+    });
+    use_effect(move || {
+        let _ = notes_inbox_tick();
+        let files = [active(), if split() { active_r() } else { None }];
+        let generation = pane_notes_generation.write().advance();
+        spawn(async move {
+            let found = tokio::task::spawn_blocking(move || {
+                files.map(|file| {
+                    file.map(|file| {
+                        let json = js::note_marks_pane_json(&services::notes::pending_for(&file));
+                        (file, json)
+                    })
+                })
+            })
+            .await;
+            if !pane_notes_generation.read().is_current(generation) {
+                return;
+            }
+            if let Ok(found) = found {
+                pane_notes.set(found);
+            }
+        });
+    });
+    // Re-sent with each render too: the WebView finds the quotes in whatever
+    // the panes show now.
+    use_effect(move || {
+        let _ = html();
+        let _ = html_r();
+        let shown = [active(), if split() { active_r() } else { None }];
+        let notes = pane_notes.read();
+        let pane = |i: usize| match (&notes[i], &shown[i]) {
+            (Some((file, json)), Some(showing)) if file == showing => json.as_str(),
+            _ => "[]",
+        };
+        let script = js::note_marks_js(appearance() == theme::Appearance::Dark, [pane(0), pane(1)]);
+        spawn(async move {
+            let _ = document::eval(&script).await;
         });
     });
 

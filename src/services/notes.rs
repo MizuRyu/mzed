@@ -88,6 +88,17 @@ impl Note {
     }
 }
 
+impl Note {
+    /// A note read back from disk, cut to the caps [`Note::new`] applies when
+    /// writing one (the file may have been edited by hand).
+    fn clamped(mut self) -> Self {
+        self.quote = cut(&self.quote, QUOTE_MAX_CHARS);
+        self.heading = self.heading.map(|heading| cut(&heading, HEADING_MAX_CHARS));
+        self.note = cut(&self.note, NOTE_MAX_CHARS);
+        self
+    }
+}
+
 /// Whether [`Note::new`] would have to cut something, so the caller can say so.
 pub(crate) fn over_limit(selection: &Selection, note: &str) -> bool {
     let longer_than = |text: &str, max: usize| text.trim().chars().count() > max;
@@ -152,6 +163,53 @@ pub(crate) fn save_in(dir: &Path, note: &Note) -> Result<PathBuf> {
         "failed to find a free note file name in {}",
         dir.display()
     ))
+}
+
+/// The notes in the inbox about `file`, oldest first. Notes already moved into
+/// `done/` are acted on, so they are not listed. Blocking: call off the UI thread.
+pub(crate) fn pending_for(file: &Path) -> Vec<Note> {
+    crate::config::config_dir()
+        .map(|dir| pending_for_in(&dir.join("notes"), file))
+        .unwrap_or_default()
+}
+
+/// why these caps: the inbox is read on every file switch and every inbox
+/// change, and anything can be dropped into it. A note mzed writes is at most
+/// ~12K characters (three 4,000-character fields), so a file past 64KB is not
+/// one of ours; 1,000 files is far more than anyone leaves unhandled; 200
+/// underlines is already more than a page can show legibly.
+const NOTE_FILE_MAX_BYTES: u64 = 64 * 1024;
+const INBOX_SCAN_MAX: usize = 1_000;
+const PANE_NOTES_MAX: usize = 200;
+
+/// [`pending_for`] against an explicit directory. A missing directory, and a
+/// note file that cannot be read or parsed, count as no note. Only the newest
+/// [`INBOX_SCAN_MAX`] files are read, and at most [`PANE_NOTES_MAX`] notes are
+/// returned (the oldest ones).
+pub(crate) fn pending_for_in(dir: &Path, file: &Path) -> Vec<Note> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("json"))
+        .collect();
+    // The file name starts with the UTC stamp, so it sorts by age.
+    paths.sort_unstable_by(|a, b| b.cmp(a));
+    paths.truncate(INBOX_SCAN_MAX);
+    let key = crate::watcher::path_key(file);
+    let mut notes: Vec<Note> = paths
+        .into_iter()
+        .filter(|path| std::fs::metadata(path).is_ok_and(|meta| meta.len() <= NOTE_FILE_MAX_BYTES))
+        .filter_map(|path| std::fs::read_to_string(path).ok())
+        .filter_map(|json| serde_json::from_str::<Note>(&json).ok())
+        .filter(|note| crate::watcher::path_key(&note.file) == key)
+        .map(Note::clamped)
+        .collect();
+    notes.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+    notes.truncate(PANE_NOTES_MAX);
+    notes
 }
 
 /// `<20260912T012205Z>-<8 hex>.json`: the UTC stamp sorts the directory in
@@ -364,6 +422,124 @@ mod tests {
 
         assert!(save_in(dir.path(), &blank).is_err());
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn 受信箱から指定ファイルのメモだけを古い順に返す() {
+        let dir = tempdir().unwrap();
+        let docs = dir.path().join("Docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        let plan = docs.join("plan.md");
+        std::fs::write(&plan, "# plan").unwrap();
+        let about = |file: &Path, note: &str, at: &str| {
+            Note::new(file, Some(dir.path()), &selection(), note, at.into())
+        };
+        let inbox = dir.path().join("notes");
+        save_in(&inbox, &about(&plan, "後", "2026-09-24T02:00:00Z")).unwrap();
+        save_in(&inbox, &about(&plan, "先", "2026-09-24T01:00:00Z")).unwrap();
+        save_in(
+            &inbox,
+            &about(&docs.join("other.md"), "別", "2026-09-24T01:30:00Z"),
+        )
+        .unwrap();
+        // Handled notes, a half-written one and a broken one are all skipped.
+        save_in(
+            &inbox.join("done"),
+            &about(&plan, "済", "2026-09-24T00:00:00Z"),
+        )
+        .unwrap();
+        std::fs::write(inbox.join("x.json.tmp"), "{").unwrap();
+        std::fs::write(inbox.join("broken.json"), "{").unwrap();
+
+        // The same file spelt differently (case) still matches.
+        let found = pending_for_in(&inbox, &dir.path().join("docs/PLAN.md"));
+
+        let texts: Vec<_> = found.iter().map(|note| note.note.as_str()).collect();
+        assert_eq!(texts, ["先", "後"]);
+    }
+
+    #[test]
+    fn 大きすぎるメモファイルは読まない() {
+        let dir = tempdir().unwrap();
+        let plan = dir.path().join("plan.md");
+        let inbox = dir.path().join("notes");
+        let small = Note::new(
+            &plan,
+            None,
+            &selection(),
+            "小",
+            "2026-09-24T01:00:00Z".into(),
+        );
+        save_in(&inbox, &small).unwrap();
+        let mut big = serde_json::to_value(&small).unwrap();
+        big["note"] = "大".repeat(NOTE_FILE_MAX_BYTES as usize).into();
+        std::fs::write(inbox.join("big.json"), big.to_string()).unwrap();
+
+        let found = pending_for_in(&inbox, &plan);
+
+        let texts: Vec<_> = found.iter().map(|note| note.note.as_str()).collect();
+        assert_eq!(texts, ["小"]);
+    }
+
+    #[test]
+    fn 読み込み時も各フィールドを上限で切る() {
+        let dir = tempdir().unwrap();
+        let plan = dir.path().join("plan.md");
+        let inbox = dir.path().join("notes");
+        std::fs::create_dir_all(&inbox).unwrap();
+        let mut edited = serde_json::to_value(Note::new(
+            &plan,
+            None,
+            &selection(),
+            "x",
+            "2026-09-24T01:00:00Z".into(),
+        ))
+        .unwrap();
+        edited["quote"] = "あ".repeat(QUOTE_MAX_CHARS + 10).into();
+        std::fs::write(inbox.join("edited.json"), edited.to_string()).unwrap();
+
+        let found = pending_for_in(&inbox, &plan);
+
+        assert_eq!(found[0].quote.chars().count(), QUOTE_MAX_CHARS);
+    }
+
+    #[test]
+    fn 走査は新しい順に上限件数まで_返すのは古い順に上限件数まで() {
+        let dir = tempdir().unwrap();
+        let plan = dir.path().join("plan.md");
+        let inbox = dir.path().join("notes");
+        std::fs::create_dir_all(&inbox).unwrap();
+        let json = |i: usize| {
+            serde_json::to_string(&Note::new(
+                &plan,
+                None,
+                &selection(),
+                &i.to_string(),
+                format!("2026-09-24T00:00:00.{i:04}Z"),
+            ))
+            .unwrap()
+        };
+        // Written directly: `save_in` would hash thousands of names for nothing.
+        for i in 0..INBOX_SCAN_MAX + 5 {
+            std::fs::write(inbox.join(format!("{i:05}.json")), json(i)).unwrap();
+        }
+
+        let found = pending_for_in(&inbox, &plan);
+
+        assert_eq!(found.len(), PANE_NOTES_MAX);
+        // The 5 oldest files are past the scan cap; the rest start at 5.
+        assert_eq!(found[0].note, "5");
+        assert_eq!(
+            found[PANE_NOTES_MAX - 1].note,
+            (PANE_NOTES_MAX + 4).to_string()
+        );
+    }
+
+    #[test]
+    fn 受信箱が無ければメモ無し() {
+        let dir = tempdir().unwrap();
+
+        assert!(pending_for_in(&dir.path().join("missing"), Path::new("/a.md")).is_empty());
     }
 
     #[test]
