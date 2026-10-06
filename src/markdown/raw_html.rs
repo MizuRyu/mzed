@@ -36,21 +36,62 @@ struct Tag {
 pub(super) fn reconstruct_allowed(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
     let mut i = 0;
+    // why: user HTML is always escaped, so a raw `<code>` / `<pre>` here was
+    // emitted by the renderer and cannot be forged; text inside it is code and
+    // must stay literal. An unclosed one keeps the rest of the document literal.
+    let mut code_depth = 0usize;
     while i < html.len() {
-        if let Some((rebuilt, len)) = allowed_tag_at(&html[i..], true) {
-            out.push_str(&rebuilt);
-            i += len;
-        } else if html[i..].starts_with("&lt;") {
-            // Not an allow-listed tag: emit the escaped `&lt;` verbatim.
-            out.push_str("&lt;");
-            i += 4;
-        } else {
-            let ch = html[i..].chars().next().unwrap();
-            out.push(ch);
-            i += ch.len_utf8();
+        let rest = &html[i..];
+        if rest.starts_with('<') {
+            if let Some(len) = code_tag_len(rest, &mut code_depth) {
+                out.push_str(&rest[..len]);
+                i += len;
+                continue;
+            }
+            // why: user `<` is always escaped, so a raw `<` starts a renderer tag;
+            // pulldown-cmark escapes `<` `>` `"` `&` in attribute values, so the
+            // next raw `>` ends it. Nothing inside (title, alt…) is rebuilt.
+            if let Some(end) = rest.find('>') {
+                out.push_str(&rest[..=end]);
+                i += end + 1;
+                continue;
+            }
         }
+        if code_depth == 0 {
+            if let Some((rebuilt, len)) = allowed_tag_at(rest, true) {
+                out.push_str(&rebuilt);
+                i += len;
+                continue;
+            }
+        }
+        let ch = rest.chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
     }
     out
+}
+
+/// If `s` starts with a raw `<code…>`, `<pre…>`, `</code>` or `</pre>`, adjust
+/// `depth` and return the tag's length up to its `>`.
+fn code_tag_len(s: &str, depth: &mut usize) -> Option<usize> {
+    let (name, closing) = match s.strip_prefix("</") {
+        Some(r) => (r, true),
+        None => (&s[1..], false),
+    };
+    let name_len = ["code", "pre"]
+        .iter()
+        .find(|n| name.starts_with(**n))
+        .map(|n| n.len())?;
+    if !name[name_len..].starts_with(['>', ' ']) {
+        return None;
+    }
+    let len = s.find('>')? + 1;
+    if closing {
+        *depth = depth.saturating_sub(1);
+    } else {
+        *depth += 1;
+    }
+    Some(len)
 }
 
 /// If `s` starts with an allow-listed tag, return its rebuilt form and the byte

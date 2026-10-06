@@ -43,7 +43,7 @@ pub fn render_with(input: &str, frontmatter_open: bool, line_breaks: LineBreaks)
     let (front, body) = frontmatter::split_frontmatter(input);
     let options = markdown_options();
     let body = security::escape_user_html(&body, options);
-    let body = alerts::preprocess_alerts(&body);
+    let (body, trusted_html) = alerts::preprocess_alerts(&body);
 
     let parser = Parser::new_ext(&body, options);
 
@@ -57,6 +57,17 @@ pub fn render_with(input: &str, frontmatter_open: bool, line_breaks: LineBreaks)
     let mut heading: Option<(pulldown_cmark::HeadingLevel, Vec<Event>, String)> = None;
 
     for event in parser {
+        // why: all user HTML was escaped above, so any HTML the re-parse yields
+        // is an artifact of a shifted delimiter; only the exact strings alerts
+        // generated are safe to pass, everything else becomes literal text.
+        let event = match event {
+            Event::Html(t) | Event::InlineHtml(t)
+                if !trusted_html.iter().any(|h| h == t.trim_end_matches('\n')) =>
+            {
+                Event::Text(t)
+            }
+            other => other,
+        };
         match event {
             Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(ref lang)))
                 if lang.as_ref() == "mermaid" =>
@@ -868,6 +879,200 @@ mod tests {
             assert!(!out.contains("<script"), "{lb:?} {out}");
             assert!(!out.contains("onerror"), "{lb:?} {out}");
             assert!(!out.contains("<a href=\"javascript"), "{lb:?} {out}");
+        }
+    }
+
+    fn both(input: &str) -> Vec<String> {
+        [LineBreaks::Newline, LineBreaks::Commonmark]
+            .into_iter()
+            .map(|lb| full(input, lb))
+            .collect()
+    }
+
+    #[test]
+    fn インラインコード内のhtmlは文字のまま() {
+        for (src, want) in [
+            ("`<br>`", "<code>&lt;br&gt;</code>"),
+            (
+                "`<p align=\"center\">`",
+                "<code>&lt;p align=\"center\"&gt;</code>",
+            ),
+            (
+                "`<img src=\"x.png\">`",
+                "<code>&lt;img src=\"x.png\"&gt;</code>",
+            ),
+            (
+                "`<img src=x onerror=alert(1)>`",
+                "<code>&lt;img src=x onerror=alert(1)&gt;</code>",
+            ),
+        ] {
+            for out in both(src) {
+                assert!(out.contains(want), "{src}: {out}");
+            }
+        }
+    }
+
+    #[test]
+    fn コードブロック内のhtmlは文字のまま() {
+        for fence in ["```", "```html"] {
+            let src = format!("{fence}\n<br>\n<p align=\"center\">\n<details>\n```\n");
+            for out in both(&src) {
+                assert!(!out.contains("<br") && !out.contains("<details"), "{out}");
+                assert!(!out.contains("<p align"), "{out}");
+                assert!(out.contains("&lt;details&gt;"), "{out}");
+            }
+        }
+    }
+
+    #[test]
+    fn コードの後の地の文のhtmlは復元される() {
+        let src = "`c` <br> x\n\n```\ncode\n```\n\n<p align=\"center\"><img src=\"x.png\"></p>\n";
+        for out in both(src) {
+            assert!(out.contains("<code>c</code> <br>"), "{out}");
+            assert!(out.contains("<p align=\"center\">"), "{out}");
+            assert!(out.contains("</p>"), "{out}");
+        }
+    }
+
+    #[test]
+    fn 閉じないpreはパニックせず以降を復元しない() {
+        let out = super::raw_html::reconstruct_allowed("<pre>&lt;br&gt; &lt;p&gt;");
+        assert_eq!(out, "<pre>&lt;br&gt; &lt;p&gt;");
+        let out = super::raw_html::reconstruct_allowed("</pre></code>&lt;br&gt;");
+        assert_eq!(out, "</pre></code><br>");
+    }
+
+    #[test]
+    fn mermaidのpre内は復元されずソースの形を保つ() {
+        let out = full("```mermaid\nA[a<br>b] --> B\n```\n", LineBreaks::Newline);
+        assert!(out.contains("A[a&lt;br&gt;b]"), "{out}");
+    }
+
+    const EXPLOITS: &[&str] = &[
+        "y <span title=\"`\"> `<script>alert(1)</script>`\n\nz <a title=\"`\"> `<img src=x onerror=alert(2)>` w\n",
+        "<a title=\"`\"> `<script>alert(1)</script>`\n",
+        "<b title=\"``\"> ``<script>alert(1)</script>``\n",
+        "<i a=\"``\" b=\"`\"> `<script>alert(1)</script>`\n",
+        "<span title=\"`\"> `<details open ontoggle=alert(1)>`\n",
+        "<div>\n```\n</div>\n\n```\n<script>alert(1)</script>\n```\n",
+        "<div>\n~~~\n</div>\n\n~~~\n<img src=x onerror=alert(1)>\n~~~\n",
+    ];
+
+    /// Escaped text never contains a literal `<`, so any `<script` or a real
+    /// tag carrying an `on*=` attribute is live HTML.
+    fn assert_no_live_html(out: &str, ctx: &str) {
+        assert!(!out.contains("<script"), "{ctx}: {out}");
+        for (i, _) in out.match_indices('<') {
+            let tag = &out[i..out[i..].find('>').map_or(out.len(), |e| i + e)];
+            assert!(
+                !tag.contains("onerror") && !tag.contains("ontoggle"),
+                "{ctx}: {out}"
+            );
+        }
+    }
+
+    #[test]
+    fn 再パースでraw_htmlが露出しない() {
+        for src in EXPLOITS {
+            for lb in [LineBreaks::Newline, LineBreaks::Commonmark] {
+                assert_no_live_html(&full(src, lb), &format!("{lb:?} {src}"));
+            }
+        }
+    }
+
+    #[test]
+    fn alertsは本文に強調やbrがあっても描画される() {
+        for kind in ["NOTE", "TIP", "IMPORTANT", "WARNING", "CAUTION"] {
+            let src = format!("> [!{kind}]\n> **b** and <br> x\n> line2\n");
+            for out in both(&src) {
+                let k = kind.to_lowercase();
+                assert!(out.contains(&format!("markdown-alert-{k}\"")), "{out}");
+                assert!(out.contains("<p class=\"markdown-alert-title\">"), "{out}");
+                assert!(!out.contains("&lt;div"), "{out}");
+            }
+        }
+    }
+
+    /// Names of every attribute on every element, parsed as HTML.
+    fn attribute_names(html: &str) -> Vec<String> {
+        use std::cell::RefCell;
+        let names = RefCell::new(Vec::new());
+        lol_html::rewrite_str(
+            html,
+            lol_html::RewriteStrSettings {
+                element_content_handlers: vec![lol_html::element!("*", |el| {
+                    names
+                        .borrow_mut()
+                        .extend(el.attributes().iter().map(|a| a.name()));
+                    Ok(())
+                })],
+                ..lol_html::RewriteStrSettings::new()
+            },
+        )
+        .unwrap();
+        names.into_inner()
+    }
+
+    fn assert_no_event_attrs(src: &str) {
+        for out in both(src) {
+            let bad: Vec<_> = attribute_names(&out)
+                .into_iter()
+                .filter(|n| n.starts_with("on"))
+                .collect();
+            assert!(bad.is_empty(), "{src}: {bad:?} in {out}");
+        }
+    }
+
+    #[test]
+    fn 属性値の中の許可タグはイベント属性を注入できない() {
+        assert_no_event_attrs(
+            "[x](https://example.com \"<img src=x&amp;#32;onmouseover=alert(1)&amp;#32;>\")",
+        );
+        assert_no_event_attrs("![<img src=x&amp;#32;onerror=alert(1)&amp;#32;>](x.png)");
+        assert_no_event_attrs(
+            "[x](https://example.com \"<img src=\\\"y\\\" onmouseover=alert(1)>\")",
+        );
+    }
+
+    #[test]
+    fn 属性値の中のタグは文字のまま残る() {
+        for tag in ["<p align='center'>", "<br>", "<details open>"] {
+            let src = format!("[x](https://example.com \"{tag}\")");
+            for out in both(&src) {
+                assert!(!out.contains(&format!("title=\"{tag}")), "{src}: {out}");
+                assert!(out.contains("title=\"&lt;"), "{src}: {out}");
+            }
+        }
+        for out in both("![<br>](x.png)") {
+            assert!(out.contains("alt=\"&lt;br&gt;\""), "{out}");
+        }
+    }
+
+    #[test]
+    fn pulldown_cmarkは属性値の山括弧を必ずescapeする() {
+        let mut out = String::new();
+        let md = "[x](u \"<a>&\\\"\")";
+        html::push_html(&mut out, Parser::new(md));
+        let title = out
+            .split("title=\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap();
+        assert!(!title.contains(['<', '>']), "{out}");
+    }
+
+    #[test]
+    fn 本文の許可タグ復元は属性値の対策後も効く() {
+        let src = "<p align=\"center\"><img src=\"x.png\"></p>\n\n<details><summary>s</summary>\n\nb\n</details>\n\na<br>b\n";
+        for out in both(src) {
+            assert!(out.contains("<p align=\"center\">"), "{out}");
+            assert!(
+                out.contains("<details>") && out.contains("<summary>"),
+                "{out}"
+            );
+            assert!(out.contains("a<br>"), "{out}");
         }
     }
 

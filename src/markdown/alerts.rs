@@ -7,7 +7,11 @@ const ALERT_TYPES: &[&str] = &["note", "tip", "important", "warning", "caution"]
 /// A blockquote that starts with `> [!NOTE]` (or TIP/IMPORTANT/WARNING/CAUTION,
 /// case-insensitive) becomes `<div class="markdown-alert markdown-alert-…">`.
 /// Plain blockquotes are left untouched.
-pub fn preprocess_alerts(input: &str) -> String {
+///
+/// Also returns every generated HTML line (without its newline) so the caller
+/// can tell this module's HTML apart from anything else the re-parse yields.
+pub fn preprocess_alerts(input: &str) -> (String, Vec<String>) {
+    let mut trusted = Vec::new();
     let lines: Vec<&str> = input.lines().collect();
     let mut out = String::new();
     let mut i = 0;
@@ -26,18 +30,21 @@ pub fn preprocess_alerts(input: &str) -> String {
             }
             let title = title_case(&kind);
             let body_html = body.join("<br>");
-            out.push_str(&format!(
+            let block = format!(
                 "<div class=\"markdown-alert markdown-alert-{kind}\">\
                  <p class=\"markdown-alert-title\">{title}</p>\
-                 <p>{body_html}</p></div>\n\n"
-            ));
+                 <p>{body_html}</p></div>"
+            );
+            out.push_str(&block);
+            out.push_str("\n\n");
+            trusted.push(block);
         } else {
             out.push_str(lines[i]);
             out.push('\n');
             i += 1;
         }
     }
-    out
+    (out, trusted)
 }
 
 /// Detect a `> [!TYPE]` alert header line, returning the lowercase type.
@@ -98,27 +105,27 @@ mod tests {
 
     #[test]
     fn NOTEアラートをスタイル付きdivに変換する() {
-        let html = preprocess_alerts("> [!NOTE]\n> これはノート\n");
+        let html = preprocess_alerts("> [!NOTE]\n> これはノート\n").0;
         assert!(html.contains(r#"class="markdown-alert markdown-alert-note""#));
         assert!(html.contains("これはノート"));
     }
 
     #[test]
     fn アラート種別は大文字小文字を問わず認識する() {
-        let html = preprocess_alerts("> [!warning]\n> 注意\n");
+        let html = preprocess_alerts("> [!warning]\n> 注意\n").0;
         assert!(html.contains("markdown-alert-warning"));
     }
 
     #[test]
     fn 通常の引用はアラートに変換しない() {
-        let html = preprocess_alerts("> ただの引用\n");
+        let html = preprocess_alerts("> ただの引用\n").0;
         assert!(!html.contains("markdown-alert"));
         assert!(html.contains("> ただの引用"));
     }
 
     #[test]
     fn alert本文は既存entityを二重escapeしない() {
-        let html = preprocess_alerts("> [!NOTE]\n> &lt;b&gt;x&lt;/b&gt; & raw\n");
+        let html = preprocess_alerts("> [!NOTE]\n> &lt;b&gt;x&lt;/b&gt; & raw\n").0;
         assert!(html.contains("&lt;b&gt;x&lt;/b&gt; &amp; raw"));
         assert!(!html.contains("&amp;lt;b"));
     }

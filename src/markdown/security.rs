@@ -11,7 +11,14 @@ pub(super) fn escape_user_html(input: &str, options: Options) -> String {
             continue;
         }
         out.push_str(&input[cursor..range.start]);
-        out.push_str(&super::escape_html(&input[range.clone()]));
+        // why: a backtick / tilde left in an escaped range could pair with one
+        // outside on the re-parse and move code in or out of a code span or
+        // fence; as character references they never delimit anything.
+        out.push_str(
+            &super::escape_html(&input[range.clone()])
+                .replace('`', "&#96;")
+                .replace('~', "&#126;"),
+        );
         cursor = range.end;
     }
     out.push_str(&input[cursor..]);

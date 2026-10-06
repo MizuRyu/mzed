@@ -106,6 +106,11 @@ pulldown-cmark のイベント列の上で `Event::SoftBreak` を扱う（HTML �
 
 生 HTML は原則許可しない。ユーザー由来の `Event::Html` / `Event::InlineHtml` は text として escape 表示する。この「全 escape → 再パース」は XSS 防御の要であり崩さない。
 
+再パースで区切りがずれて escape 済みの HTML が露出しないよう、2 段で守る（`src/markdown/security.rs` / `render.rs`）。
+
+1. escape した範囲内の `` ` `` と `~` は文字参照（`&#96;` / `&#126;`）にする。タグが飲み込んだバッククォートが、再パースで範囲外のものと対になってコードスパン / フェンスの内外を入れ替えるのを防ぐ。表示は変わらない。
+2. 再パース後にパーサが出した `Event::Html` / `Event::InlineHtml` は、alerts が生成した文字列（末尾の改行を除いて完全一致）だけを通し、それ以外は `Event::Text`（出力時に escape）にする。生成した安全な文字列しか通らないので、1 が破れても露出しない。mzed 自身がループ内で push する `Event::Html`（Mermaid の `<pre>`、見出しタグ）は対象外。
+
 #### 生 HTML 許可サブセット（allowlist 再構築）
 
 GitHub README 定番の `<p align="center"><img …></p>` 等を描画するため、**escape を解かず、検証済み属性から自前でタグを再構築する** allowlist 方式を採る（`src/markdown/raw_html.rs`）。
@@ -126,6 +131,9 @@ GitHub README 定番の `<p align="center"><img …></p>` 等を描画するた�
 - 閉じタグ（`</p>` 等）も対応。上記タグ同士の入れ子は可。
 - 許可タグでも未許可属性（`style`/`class`/`id`/`on*` 等）はすべて捨てる。
 - 検証に失敗した `img`（`src` 不正・欠落）はタグごと非描画（escape 表示のまま）。
+- 復元はタグの外の本文テキストだけ。レンダラが出した生の `<` から次の生の `>` まで（`<a title="…">` 等）は属性値を含めて復元せずそのまま出す。ユーザーの `<` は escape 済みで、pulldown-cmark も属性値の `<` `>` `"` `&` を escape するため、生の `>` はタグの終わりに限られる。属性値の中の `&lt;img …&gt;` からイベント属性を注入できない。
+- コード（`<code>` / `<pre>`）の中は復元しない。走査中にレンダラが出した生の `<code>` / `<pre>` の開閉を深さで数え、内側では `&lt;` を文字のまま出す。ユーザーの HTML は escape 済みなので生の `<code>` はレンダラ由来に限られ、ユーザー入力で騙せない。閉じタグが欠けた場合は文書末まで復元しない（安全側）。Mermaid の `<pre class="mermaid">` の中も同様に文字のまま。
+- 既知の制約: `\<br>`（バックスラッシュで escape した書き方）は、escape 後の段階で raw HTML と区別できず実タグになる。
 - 対応しない: 未許可タグ全般（`iframe`/`svg`/`style`/`a`/見出し等）、属性値中の生 `<`/`>`。
 
 Markdown URL は scheme を allowlist する。

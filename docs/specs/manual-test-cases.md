@@ -1719,3 +1719,33 @@ allowlist 方式で再構築する安全な生 HTML サブセット（`<img>` / 
 | **前提** | `newline` 設定。README の中央寄せ画像（`<p align="center">` + 改行 + `<img …>` + 改行 + `</p>`）、`<details>` + 改行 + `<summary>`、`<div>` + 改行 + 地の文 2 行 + 改行 + `</div>` を含む md |
 | **手順** | md を開く |
 | **期待結果** | 中央寄せ画像と `<details>` / `<summary>` の周りに空行や余計な改行が出ない。`<div>` 内の地の文 2 行の間だけ改行される |
+
+## コード内の HTML（RAW）
+
+自動化済み: `src/markdown/render.rs` の `インラインコード内のhtmlは文字のまま` / `コードブロック内のhtmlは文字のまま` / `コードの後の地の文のhtmlは復元される` / `閉じないpreはパニックせず以降を復元しない` / `mermaidのpre内は復元されずソースの形を保つ`（両 `line_breaks` 設定）。以下は表示の目視確認。
+
+### RAW-01 コード内の HTML が文字のまま表示される
+
+| 項目 | 内容 |
+|---|---|
+| **前提** | インラインコード `` `<br>` ``、`` `<img src=x onerror=alert(1)>` ``、言語指定なし / `html` のコードブロック内の `<p align="center">` `<details>` を含む md。その後ろの地の文に `<br>` と中央寄せ画像 |
+| **手順** | md を開く |
+| **期待結果** | コード内はタグの文字列がそのまま見え、改行や画像は出ない。コードの外の `<br>` と中央寄せ画像は従来どおり描画される。showcase.md の Mermaid 図が壊れない |
+
+### SEC-09 再パースで escape 済みの HTML が露出しない
+
+| 項目 | 内容 |
+|---|---|
+| **前提** | `y <span title="`"> `<script>alert(1)</script>`` と `z <a title="`"> `<img src=x onerror=alert(2)>` w` を別段落に書いた md（`<details open ontoggle=…>` をコードスパンに入れた版、HTML ブロック内に ```` ``` ```` / `~~~` 行を含み後続のフェンスに `<script>` を入れた版も） |
+| **手順** | md を開く（`newline` / `commonmark` の両方）。`mzed serve` でも開く |
+| **期待結果** | タグの文字列が文字として見えるだけで、スクリプトもイベント属性も働かない。GitHub Alerts（NOTE / TIP / IMPORTANT / WARNING / CAUTION）は従来どおり描画される |
+| **自動化済み** | `src/markdown/render.rs` の `再パースでraw_htmlが露出しない` / `alertsは本文に強調やbrがあっても描画される` |
+
+### SEC-10 リンクの title / 画像の alt の中のタグからイベント属性を注入できない
+
+| 項目 | 内容 |
+|---|---|
+| **前提** | `[x](https://example.com "<img src=x&#32;onmouseover=alert(1)&#32;>")` と `![<img src=x&#32;onerror=alert(1)&#32;>](x.png)` を書いた md。title に `<p align="center">` / `<br>` / `<details open>` を入れた版も |
+| **手順** | md を開く（`newline` / `commonmark` の両方）。リンクにホバーする |
+| **期待結果** | スクリプトは動かない。title のツールチップにはタグの文字列がそのまま出る。本文の中央寄せ画像・details・`<br>` は従来どおり描画される |
+| **自動化済み** | `src/markdown/render.rs` の `属性値の中の許可タグはイベント属性を注入できない` / `属性値の中のタグは文字のまま残る` / `pulldown_cmarkは属性値の山括弧を必ずescapeする` / `本文の許可タグ復元は属性値の対策後も効く` |
