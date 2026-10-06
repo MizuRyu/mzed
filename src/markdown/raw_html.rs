@@ -34,72 +34,79 @@ struct Tag {
 /// Scans for escaped tags (`&lt;…&gt;`) only; real tags (literal `<`) produced
 /// by the Markdown renderer are left untouched.
 pub(super) fn reconstruct_allowed(html: &str) -> String {
-    let bytes = html.as_bytes();
     let mut out = String::with_capacity(html.len());
     let mut i = 0;
-    while i < bytes.len() {
-        if html[i..].starts_with("&lt;") {
-            // Only treat as a tag when `&lt;` is immediately followed by a tag
-            // name or a closing slash; otherwise it is a literal `<` in text.
-            let after = &html[i + 4..];
-            let looks_like_tag = after
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_ascii_alphabetic() || c == '/');
-            if looks_like_tag {
-                if let Some(end_rel) = after.find("&gt;") {
-                    let inner = &after[..end_rel];
-                    // The inner text is still escaped by the render pipeline
-                    // (`&amp;` for `&`). Undo exactly that one level to recover
-                    // the original raw tag contents.
-                    let raw = undo_render_escape(inner);
-                    if let Some(rebuilt) = parse_tag(&raw).and_then(rebuild) {
-                        out.push_str(&rebuilt);
-                        i = i + 4 + end_rel + 4; // skip `&lt;` … `&gt;`
-                        continue;
-                    }
-                }
-            }
+    while i < html.len() {
+        if let Some((rebuilt, len)) = allowed_tag_at(&html[i..], true) {
+            out.push_str(&rebuilt);
+            i += len;
+        } else if html[i..].starts_with("&lt;") {
             // Not an allow-listed tag: emit the escaped `&lt;` verbatim.
             out.push_str("&lt;");
             i += 4;
-            continue;
+        } else {
+            let ch = html[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
         }
-        let ch = html[i..].chars().next().unwrap();
-        out.push(ch);
-        i += ch.len_utf8();
     }
     out
 }
 
-/// True when the text (trailing whitespace ignored) ends with an allow-listed
-/// tag that `reconstruct_allowed` would rebuild. `text` is decoded (`<`, not `&lt;`).
-pub(super) fn ends_with_allowed_tag(text: &str) -> bool {
-    let text = text.trim_end();
-    let Some(body) = text.strip_suffix('>') else {
-        return false;
+/// If `s` starts with an allow-listed tag, return its rebuilt form and the byte
+/// length it spans in `s`. The single place that decides where a tag starts
+/// (`<` followed by a name or `/`) and ends (the first `>`), shared by
+/// reconstruction (`escaped`: `&lt;…&gt;` as the render pipeline emits it) and
+/// the line-break judgement (decoded text events).
+fn allowed_tag_at(s: &str, escaped: bool) -> Option<(String, usize)> {
+    let (open, close) = if escaped {
+        ("&lt;", "&gt;")
+    } else {
+        ("<", ">")
     };
-    body.rfind('<')
-        .is_some_and(|lt| is_allowed_tag_inner(&body[lt + 1..]))
-}
-
-/// True when the text (leading whitespace ignored) starts with an allow-listed tag.
-pub(super) fn starts_with_allowed_tag(text: &str) -> bool {
-    let Some(rest) = text.trim_start().strip_prefix('<') else {
-        return false;
-    };
-    rest.find('>')
-        .is_some_and(|gt| is_allowed_tag_inner(&rest[..gt]))
-}
-
-/// Same gate as `reconstruct_allowed`: a tag name or `/` first, and the tag
-/// parses and rebuilds.
-fn is_allowed_tag_inner(inner: &str) -> bool {
-    inner
+    let after = s.strip_prefix(open)?;
+    if !after
         .chars()
         .next()
         .is_some_and(|c| c.is_ascii_alphabetic() || c == '/')
-        && parse_tag(inner).and_then(rebuild).is_some()
+    {
+        return None;
+    }
+    let end = after.find(close)?;
+    let inner = &after[..end];
+    // Escaped inner text still carries one level of render escaping (`&amp;`
+    // for `&`); undo exactly that to recover the original tag contents.
+    let raw = if escaped {
+        undo_render_escape(inner)
+    } else {
+        inner.to_string()
+    };
+    let rebuilt = parse_tag(&raw).and_then(rebuild)?;
+    Some((rebuilt, open.len() + end + close.len()))
+}
+
+/// True when the decoded text (trailing whitespace ignored) ends with an
+/// allow-listed tag that `reconstruct_allowed` would rebuild.
+pub(super) fn ends_with_allowed_tag(text: &str) -> bool {
+    let text = text.trim_end();
+    let mut i = 0;
+    while i < text.len() {
+        if let Some((_, len)) = allowed_tag_at(&text[i..], false) {
+            i += len;
+            if i == text.len() {
+                return true;
+            }
+        } else {
+            i += text[i..].chars().next().map_or(1, char::len_utf8);
+        }
+    }
+    false
+}
+
+/// True when the decoded text (leading whitespace ignored) starts with an
+/// allow-listed tag.
+pub(super) fn starts_with_allowed_tag(text: &str) -> bool {
+    allowed_tag_at(text.trim_start(), false).is_some()
 }
 
 /// Reverse the render pipeline's text escaping (`html::push_html`), which only

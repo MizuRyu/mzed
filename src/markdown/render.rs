@@ -127,14 +127,23 @@ fn soft_breaks_to_hard(mut events: Vec<Event<'static>>) -> Vec<Event<'static>> {
         if !matches!(events[i], Event::SoftBreak) {
             continue;
         }
-        let prev_tag = matches!(
-            i.checked_sub(1).map(|j| &events[j]),
-            Some(Event::Text(t)) if raw_html::ends_with_allowed_tag(t)
-        );
-        let next_tag = matches!(
-            events.get(i + 1),
-            Some(Event::Text(t)) if raw_html::starts_with_allowed_tag(t)
-        );
+        // Adjacent Text events (split at `<`, `_`, link labels…) read as one run.
+        let mut before = String::new();
+        for e in events[..i].iter().rev() {
+            match e {
+                Event::Text(t) => before.insert_str(0, t),
+                _ => break,
+            }
+        }
+        let after: String = events[i + 1..]
+            .iter()
+            .map_while(|e| match e {
+                Event::Text(t) => Some(t.as_ref()),
+                _ => None,
+            })
+            .collect();
+        let prev_tag = raw_html::ends_with_allowed_tag(&before);
+        let next_tag = raw_html::starts_with_allowed_tag(&after);
         if !prev_tag && !next_tag {
             events[i] = Event::HardBreak;
         }
@@ -513,9 +522,10 @@ mod tests {
     use super::*;
     use indoc::indoc;
 
-    /// Test shorthand: render with the default (collapsed) frontmatter state.
+    /// Test shorthand: render with the default (collapsed) frontmatter state
+    /// and the default line-break mode.
     fn render(input: &str) -> String {
-        render_with(input, false, LineBreaks::Commonmark)
+        render_with(input, false, LineBreaks::default())
     }
 
     #[test]
@@ -820,6 +830,44 @@ mod tests {
         ] {
             let out = full(src, LineBreaks::Newline);
             assert_eq!(br_count(&out), 1, "{src}: {out}");
+        }
+    }
+
+    #[test]
+    fn タグ切り出しは判定と再構築で一致する() {
+        // `<` inside an attribute value: still one `<br>`.
+        let out = full("a<br title=\"<\">\nb", LineBreaks::Newline);
+        assert_eq!(br_count(&out), 1, "{out}");
+        // `>` inside an attribute value cuts the tag early: not rebuilt, so the
+        // line break is kept.
+        let out = full("a<img alt=\">\" src=\"x.png\">\nb", LineBreaks::Newline);
+        assert!(!out.contains("<img"), "{out}");
+        assert_eq!(br_count(&out), 1, "{out}");
+    }
+
+    #[test]
+    fn リンクラベル内のタグに接した改行は変換しない() {
+        for src in ["[a<br>\nb](x.md)", "[a\n<br>b](x.md)"] {
+            let out = full(src, LineBreaks::Newline);
+            assert_eq!(br_count(&out), 1, "{src}: {out}");
+        }
+    }
+
+    #[test]
+    fn コメントは文字なのでその前後の改行は変換する() {
+        let out = full("a<br><!-- c -->\nb", LineBreaks::Newline);
+        assert_eq!(br_count(&out), 2, "{out}");
+    }
+
+    #[test]
+    fn 危険な入力は単一改行付きでも両設定で無害() {
+        let md = "<script>alert(1)</script>\nx\n<img src=x onerror=alert(1)>\ny\n\
+                  [l](javascript:alert(1))\nz\n<a href=\"javascript:alert(1)\">h</a>\nw\n";
+        for lb in [LineBreaks::Newline, LineBreaks::Commonmark] {
+            let out = full(md, lb);
+            assert!(!out.contains("<script"), "{lb:?} {out}");
+            assert!(!out.contains("onerror"), "{lb:?} {out}");
+            assert!(!out.contains("<a href=\"javascript"), "{lb:?} {out}");
         }
     }
 

@@ -1662,7 +1662,7 @@ allowlist 方式で再構築する安全な生 HTML サブセット（`<img>` / 
 
 ## 1 回の改行（LB）
 
-自動化済み: `src/markdown/render.rs` の改行テスト群（`a\nb` → `<br />`、`commonmark` で改行文字、行末スペース / `\`、raw `<br>` 直後、段落・コード・表・見出し、リスト・引用）、`src/config.rs` の `line_breaksは既定newlineで文字列とround_tripする`。以下は表示と経路の目視確認。
+自動化済み: `src/markdown/render.rs` の改行テスト群（`a\nb` の両設定、行末スペース / `\`、raw `<br>` 変種、タグ切り出しの一致、リンクラベル内、コメント前後、タグに接した改行、リスト・引用、危険入力 + 単一改行の両設定）、`src/markdown/post_process.rs` の XSS 2 件（両設定）、`src/config.rs` の `line_breaksは既定newlineで文字列とround_tripする`。以下は表示と経路の目視確認。
 
 ### LB-01 既定で 1 回の改行が改行になる
 
