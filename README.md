@@ -16,6 +16,7 @@ English version: [README.en.md](README.en.md)
 - **Zed / Orca 連動** — Zed / Orca のプロジェクト切替に追従して表示中の docs を丸ごと入れ替える。追従元は `sync_source`（auto / zed / orca、既定 auto）または `--sync-source` で選べる。`Cmd+Shift+L` で追従の固定/解除
 - **worktree を親リポジトリに集約** — git worktree を開いても親（main checkout）を表示し、各 worktree の md を親のツリーに合成して見せる。切替ごとにフォルダを追いかけなくてよい（`worktree_switch`: main / skip / follow、既定 main）
 - **リッチなレンダリング** — GitHub スタイル、シンタックスハイライト、Mermaid、KaTeX、GitHub Alerts、frontmatter、画像 lightbox
+- **1 回の改行をそのまま改行** — 段落内の 1 回の改行を改行として表示する（`line_breaks`: newline / commonmark、既定 newline）。`<br>` やタグに接した改行は変換しない
 - **ライブリロード** — ファイル保存を検知して即再描画
 - **快適なナビゲーション** — サイドバー、マルチタブ、左右分割、目次、コマンドパレット、ファジー検索、全文検索
 - **Task View（`Cmd+Shift+D`）** — `docs/memo/tasks/` のタスクフォルダを status 別に一覧し、task.md を即読みする専用ビュー。複数プロジェクト横断にも対応

@@ -72,6 +72,36 @@ pub(super) fn reconstruct_allowed(html: &str) -> String {
     out
 }
 
+/// True when the text (trailing whitespace ignored) ends with an allow-listed
+/// tag that `reconstruct_allowed` would rebuild. `text` is decoded (`<`, not `&lt;`).
+pub(super) fn ends_with_allowed_tag(text: &str) -> bool {
+    let text = text.trim_end();
+    let Some(body) = text.strip_suffix('>') else {
+        return false;
+    };
+    body.rfind('<')
+        .is_some_and(|lt| is_allowed_tag_inner(&body[lt + 1..]))
+}
+
+/// True when the text (leading whitespace ignored) starts with an allow-listed tag.
+pub(super) fn starts_with_allowed_tag(text: &str) -> bool {
+    let Some(rest) = text.trim_start().strip_prefix('<') else {
+        return false;
+    };
+    rest.find('>')
+        .is_some_and(|gt| is_allowed_tag_inner(&rest[..gt]))
+}
+
+/// Same gate as `reconstruct_allowed`: a tag name or `/` first, and the tag
+/// parses and rebuilds.
+fn is_allowed_tag_inner(inner: &str) -> bool {
+    inner
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '/')
+        && parse_tag(inner).and_then(rebuild).is_some()
+}
+
 /// Reverse the render pipeline's text escaping (`html::push_html`), which only
 /// emits `&amp;`, `&lt;`, `&gt;`. `&amp;` is decoded last so it cannot manufacture
 /// a spurious `&lt;`/`&gt;`.

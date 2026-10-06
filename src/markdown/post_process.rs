@@ -256,6 +256,7 @@ pub fn post_process(html: &str, base_dir: &Path, allowed_roots: &[PathBuf]) -> S
 #[cfg(test)]
 #[allow(non_snake_case)] // Japanese test names may embed ASCII.
 mod tests {
+    use super::super::LineBreaks;
     use super::*;
     use std::fs;
     use tempfile::tempdir;
@@ -280,16 +281,21 @@ mod tests {
         fs::write(dir.path().join("icon.png"), PNG).unwrap();
 
         let md = r#"<p align="center"><img src="icon.png" width="128"></p>"#;
-        let rendered = super::super::render::render_with(md, false);
-        // After render the raw HTML is escaped text, not a real tag.
-        assert!(rendered.contains("&lt;img"), "render leaked a raw tag");
+        for lb in [LineBreaks::Newline, LineBreaks::Commonmark] {
+            let rendered = super::super::render::render_with(md, false, lb);
+            // After render the raw HTML is escaped text, not a real tag.
+            assert!(rendered.contains("&lt;img"), "render leaked a raw tag");
 
-        let out = post_process_in_root(&rendered, dir.path());
-        assert!(out.contains(r#"align="center""#), "got: {out}");
-        assert!(out.contains("src=\"data:image/png;base64,"), "got: {out}");
-        assert!(out.contains(r#"width="128""#), "got: {out}");
-        assert!(!out.contains("&lt;img"), "img was not reconstructed: {out}");
-        assert!(!out.contains("onerror"));
+            let out = post_process_in_root(&rendered, dir.path());
+            assert!(out.contains(r#"align="center""#), "{lb:?} got: {out}");
+            assert!(
+                out.contains("src=\"data:image/png;base64,"),
+                "{lb:?} got: {out}"
+            );
+            assert!(out.contains(r#"width="128""#), "{lb:?} got: {out}");
+            assert!(!out.contains("&lt;img"), "img was not reconstructed: {out}");
+            assert!(!out.contains("onerror"));
+        }
     }
 
     // End-to-end adversarial: script / unsafe src / unknown tags stay escaped.
@@ -302,21 +308,26 @@ mod tests {
             r#"<img src="javascript:alert(1)">"#,
             "\n\n<iframe src=x></iframe>",
         );
-        let rendered = super::super::render::render_with(md, false);
-        let out = post_process_in_root(&rendered, dir.path());
-        assert!(!out.contains("onerror"), "got: {out}");
-        assert!(!out.contains("<script"), "got: {out}");
-        assert!(!out.contains("<iframe"), "got: {out}");
-        // The javascript: img is never emitted as a real tag; it stays as inert
-        // escaped text (so the literal string is present, but harmless).
-        assert!(!out.contains(r#"<img src="javascript:"#), "got: {out}");
-        assert!(
-            out.contains(r#"&lt;img src="javascript:alert(1)"&gt;"#),
-            "got: {out}"
-        );
-        // script / iframe remain escaped text.
-        assert!(out.contains("&lt;script&gt;"), "got: {out}");
-        assert!(out.contains("&lt;iframe"), "got: {out}");
+        for lb in [LineBreaks::Newline, LineBreaks::Commonmark] {
+            let rendered = super::super::render::render_with(md, false, lb);
+            let out = post_process_in_root(&rendered, dir.path());
+            assert!(!out.contains("onerror"), "{lb:?} got: {out}");
+            assert!(!out.contains("<script"), "{lb:?} got: {out}");
+            assert!(!out.contains("<iframe"), "{lb:?} got: {out}");
+            // The javascript: img is never emitted as a real tag; it stays as
+            // inert escaped text (so the literal string is present, but harmless).
+            assert!(
+                !out.contains(r#"<img src="javascript:"#),
+                "{lb:?} got: {out}"
+            );
+            assert!(
+                out.contains(r#"&lt;img src="javascript:alert(1)"&gt;"#),
+                "{lb:?} got: {out}"
+            );
+            // script / iframe remain escaped text.
+            assert!(out.contains("&lt;script&gt;"), "{lb:?} got: {out}");
+            assert!(out.contains("&lt;iframe"), "{lb:?} got: {out}");
+        }
     }
 
     #[test]

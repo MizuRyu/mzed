@@ -15,6 +15,7 @@ A Markdown viewer that follows Zed (the editor) and Orca (a worktree manager). I
 
 - **Zed / Orca integration** — swaps the displayed docs as you switch projects in Zed / Orca. Which app to follow is `sync_source` (auto / zed / orca, default auto) or `--sync-source`; pin/unpin with `Cmd+Shift+L`
 - **Rich rendering** — GitHub styling, syntax highlighting, Mermaid, KaTeX, GitHub Alerts, frontmatter, image lightbox
+- **Single newline as a line break** — a single newline inside a paragraph renders as a line break (`line_breaks`: newline / commonmark, default newline); newlines next to a raw `<br>` or allow-listed tag are left alone
 - **Live reload** — re-renders on file save
 - **Comfortable navigation** — sidebar, multi-tab, split pane, table of contents, command palette, fuzzy finder, full-text search
 - **Task View (`Cmd+Shift+D`)** — a dedicated view that lists `docs/memo/tasks/` task folders by status and opens each task.md instantly, across multiple projects

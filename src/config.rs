@@ -5,6 +5,7 @@
 //! partial or older file still loads. FS read/write is split into thin helpers
 //! ([`load`]/[`save`]) that the unit tests skip.
 
+pub use crate::markdown::LineBreaks;
 use crate::sync::{SyncSource, WorktreeSwitch};
 use crate::tabs::TabInsert;
 use crate::theme::{SyncMode, Theme};
@@ -151,6 +152,9 @@ pub struct Config {
     /// collapsed). Toggle in Settings > General.
     #[serde(default)]
     pub frontmatter_default_open: bool,
+    /// How a single newline inside a paragraph renders. Toggle in Settings > Appearance.
+    #[serde(default)]
+    pub line_breaks: LineBreaks,
     /// Body line-height (1.2–2.4). Injected as `!important` CSS so it overrides
     /// the static `line-height: 1.7` in mdo.css.
     #[serde(default = "default_line_height")]
@@ -297,6 +301,7 @@ impl Default for Config {
             feature_pdf_export: true,
             open_latest_on_project_open: false,
             frontmatter_default_open: false,
+            line_breaks: LineBreaks::default(),
             line_height: default_line_height(),
             feature_task_view: true,
             task_view_tasks_subpath: default_task_view_tasks_subpath(),
@@ -473,6 +478,15 @@ mod tests {
         assert_eq!(c.sync_source, SyncSource::Auto);
         assert_eq!(c.tab_insert, TabInsert::Start);
         assert_eq!(c.worktree_switch, WorktreeSwitch::Main);
+    }
+
+    #[test]
+    fn line_breaksは既定newlineで文字列とround_tripする() {
+        let c = Config::from_json("{}").unwrap();
+        assert_eq!(c.line_breaks, LineBreaks::Newline);
+        let c = Config::from_json(r#"{"line_breaks":"commonmark"}"#).unwrap();
+        assert_eq!(c.line_breaks, LineBreaks::Commonmark);
+        assert!(c.to_json().contains(r#""line_breaks": "commonmark""#));
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
+use crate::config::LineBreaks;
 use crate::{export, markdown};
 
 #[derive(Debug, Clone)]
@@ -167,6 +168,7 @@ pub(crate) fn load_document(
     file: Option<PathBuf>,
     roots: &[PathBuf],
     frontmatter_open: bool,
+    line_breaks: LineBreaks,
 ) -> DocumentSnapshot {
     let Some(path) = file else {
         return DocumentSnapshot::empty();
@@ -207,7 +209,7 @@ pub(crate) fn load_document(
     let rendered = crate::perf::measure(
         "markdown.render",
         &[("input_bytes", source_for_render.len().to_string())],
-        || markdown::render_with(&source_for_render, frontmatter_open),
+        || markdown::render_with(&source_for_render, frontmatter_open, line_breaks),
     );
     let rendered_html = crate::perf::measure(
         "markdown.post_process",
@@ -511,7 +513,12 @@ mod tests {
         let file = dir.path().join("a.md");
         fs::write(&file, "<script>alert(1)</script>").unwrap();
 
-        let snapshot = load_document(Some(file), &[dir.path().to_path_buf()], false);
+        let snapshot = load_document(
+            Some(file),
+            &[dir.path().to_path_buf()],
+            false,
+            LineBreaks::default(),
+        );
         let html = snapshot.raw_html();
 
         assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
@@ -524,7 +531,12 @@ mod tests {
         let file = dir.path().join("a.md");
         fs::write(&file, "# Title\n\nneedle <script>x</script>").unwrap();
 
-        let snapshot = load_document(Some(file.clone()), &[dir.path().to_path_buf()], false);
+        let snapshot = load_document(
+            Some(file.clone()),
+            &[dir.path().to_path_buf()],
+            false,
+            LineBreaks::default(),
+        );
 
         assert_eq!(snapshot.path(), Some(file.as_path()));
         assert!(snapshot.rendered_html().contains(r#"<h1 id="title">"#));
@@ -554,7 +566,7 @@ mod tests {
         assert!(empty.raw_html().contains("Select a markdown file"));
 
         let missing = PathBuf::from("/definitely/missing.md");
-        let failed = load_document(Some(missing), &[], false);
+        let failed = load_document(Some(missing), &[], false, LineBreaks::default());
         assert!(failed.raw_html().contains("Failed to read"));
     }
 

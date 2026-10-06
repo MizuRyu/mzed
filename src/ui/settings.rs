@@ -40,6 +40,7 @@ pub(crate) fn Settings(
     mut feature_pdf_export: Signal<bool>,
     mut open_latest_on_project_open: Signal<bool>,
     mut frontmatter_default_open: Signal<bool>,
+    mut line_breaks: Signal<config::LineBreaks>,
     mut feature_task_view: Signal<bool>,
     mut task_view_tasks_subpath: Signal<String>,
     mut task_view_scan_roots: Signal<Vec<PathBuf>>,
@@ -894,6 +895,25 @@ pub(crate) fn Settings(
                                             "+"
                                         }
                                         button { style: "{reset_btn}", onclick: move |_| line_height.set(1.7), "リセット" }
+                                    }
+                                }
+                                // Single newline inside a paragraph.
+                                div {
+                                    style: "{row} border-top: 1px solid {row_border};",
+                                    div {
+                                        div { style: row_title, "1 回の改行" }
+                                        div { style: "{row_desc}", "本文中の 1 回の改行の扱い" }
+                                    }
+                                    select {
+                                        class: "mdo-select", style: "{select_style}",
+                                        onchange: move |e| {
+                                            line_breaks.set(match e.value().as_str() {
+                                                "commonmark" => config::LineBreaks::Commonmark,
+                                                _ => config::LineBreaks::Newline,
+                                            });
+                                        },
+                                        option { value: "newline", selected: line_breaks() == config::LineBreaks::Newline, "改行する" }
+                                        option { value: "commonmark", selected: line_breaks() == config::LineBreaks::Commonmark, "つなげる（CommonMark）" }
                                     }
                                 }
                             },

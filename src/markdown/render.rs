@@ -6,7 +6,19 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use super::toc::{slugify, unique_anchor};
-use super::{alerts, frontmatter, security};
+use super::{alerts, frontmatter, raw_html, security};
+use serde::{Deserialize, Serialize};
+
+/// How a single newline inside a paragraph is rendered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum LineBreaks {
+    /// A line break (`<br>`).
+    #[default]
+    Newline,
+    /// CommonMark: the newline collapses into a space.
+    Commonmark,
+}
 
 fn markdown_options() -> Options {
     let mut options = Options::empty();
@@ -26,7 +38,8 @@ fn markdown_options() -> Options {
 /// as a collapsible table before the body.
 /// `frontmatter_open` renders the Metadata disclosure expanded instead of
 /// collapsed (config `frontmatter_default_open`).
-pub fn render_with(input: &str, frontmatter_open: bool) -> String {
+/// `line_breaks` decides how a single newline inside a paragraph renders.
+pub fn render_with(input: &str, frontmatter_open: bool, line_breaks: LineBreaks) -> String {
     let (front, body) = frontmatter::split_frontmatter(input);
     let options = markdown_options();
     let body = security::escape_user_html(&body, options);
@@ -89,6 +102,10 @@ pub fn render_with(input: &str, frontmatter_open: bool) -> String {
     }
 
     let events = autolink_pass(events);
+    let events = match line_breaks {
+        LineBreaks::Newline => soft_breaks_to_hard(events),
+        LineBreaks::Commonmark => events,
+    };
 
     let mut out = String::new();
     if let Some(front) = front {
@@ -96,6 +113,33 @@ pub fn render_with(input: &str, frontmatter_open: bool) -> String {
     }
     html::push_html(&mut out, events.into_iter());
     out
+}
+
+/// Turn each `SoftBreak` into a `HardBreak`, except next to an allow-listed raw
+/// HTML tag.
+///
+/// why: user raw HTML is escaped to text here and only becomes real tags in
+/// post_process (`raw_html::reconstruct_allowed`), so the line boundary is judged
+/// on the (coalesced) text: a `<br>` or a block tag (`<p>`, `<details>`, `<img>`…)
+/// already breaks the line, and another `<br>` would double it.
+fn soft_breaks_to_hard(mut events: Vec<Event<'static>>) -> Vec<Event<'static>> {
+    for i in 0..events.len() {
+        if !matches!(events[i], Event::SoftBreak) {
+            continue;
+        }
+        let prev_tag = matches!(
+            i.checked_sub(1).map(|j| &events[j]),
+            Some(Event::Text(t)) if raw_html::ends_with_allowed_tag(t)
+        );
+        let next_tag = matches!(
+            events.get(i + 1),
+            Some(Event::Text(t)) if raw_html::starts_with_allowed_tag(t)
+        );
+        if !prev_tag && !next_tag {
+            events[i] = Event::HardBreak;
+        }
+    }
+    events
 }
 
 /// GFM-style autolink pass for bare `http(s)://…` URLs in prose.
@@ -471,7 +515,7 @@ mod tests {
 
     /// Test shorthand: render with the default (collapsed) frontmatter state.
     fn render(input: &str) -> String {
-        render_with(input, false)
+        render_with(input, false, LineBreaks::Commonmark)
     }
 
     #[test]
@@ -731,5 +775,90 @@ mod tests {
 
         assert!(html.contains("&lt;b&gt;x&lt;/b&gt;"));
         assert!(!html.contains("&amp;lt;b&amp;gt;"));
+    }
+
+    fn full(input: &str, lb: LineBreaks) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let html = render_with(input, false, lb);
+        super::super::post_process::post_process(&html, dir.path(), &[dir.path().to_path_buf()])
+    }
+
+    fn br_count(html: &str) -> usize {
+        html.matches("<br").count()
+    }
+
+    #[test]
+    fn 一回の改行はnewlineでbrになりcommonmarkでは改行文字のまま() {
+        assert_eq!(
+            render_with("a\nb", false, LineBreaks::Newline),
+            "<p>a<br />\nb</p>\n"
+        );
+        assert_eq!(
+            render_with("a\nb", false, LineBreaks::Commonmark),
+            "<p>a\nb</p>\n"
+        );
+    }
+
+    #[test]
+    fn 行末スペースと円記号の改行はどちらの設定でもbr1つ() {
+        for lb in [LineBreaks::Newline, LineBreaks::Commonmark] {
+            assert_eq!(br_count(&full("a  \nb", lb)), 1, "spaces {lb:?}");
+            assert_eq!(br_count(&full("a\\\nb", lb)), 1, "backslash {lb:?}");
+        }
+    }
+
+    #[test]
+    fn 行末のraw_br変種の直後は二重改行にしない() {
+        for src in [
+            "a<br>\nb",
+            "a<br/>\nb",
+            "a<BR />\nb",
+            "**a**<br>\nb",
+            "a<br class=\"x\">\nb",
+            "a<br  />\nb",
+            "a<br/ >\nb",
+        ] {
+            let out = full(src, LineBreaks::Newline);
+            assert_eq!(br_count(&out), 1, "{src}: {out}");
+        }
+    }
+
+    #[test]
+    fn インラインコード内のbrは判定に使わない() {
+        let out = render_with("a `<br>`\nb", false, LineBreaks::Newline);
+        assert_eq!(out.matches("<br />").count(), 1, "{out}");
+    }
+
+    #[test]
+    fn タグに接した改行は変換しない() {
+        let centered = "<p align=\"center\">\n<img src=\"x.png\" width=\"128\">\n</p>\n";
+        assert_eq!(br_count(&full(centered, LineBreaks::Newline)), 0);
+        let details = "<details>\n<summary>s</summary>\n\nbody\n</details>\n";
+        assert_eq!(br_count(&full(details, LineBreaks::Newline)), 0);
+        let div = full("<div>\nfoo\nbar\n</div>\n", LineBreaks::Newline);
+        assert_eq!(br_count(&div), 1, "{div}");
+    }
+
+    #[test]
+    fn 許可外タグや文中のタグに接しても改行は変換する() {
+        let out = full("a <b>\nc\n", LineBreaks::Newline);
+        assert_eq!(br_count(&out), 1, "{out}");
+        let out = full("x <img src=\"a.png\"> y\nz\n", LineBreaks::Newline);
+        assert_eq!(br_count(&out), 1, "{out}");
+    }
+
+    #[test]
+    fn 段落区切りとコードブロックは変わらない() {
+        let out = full("a\n\nb", LineBreaks::Newline);
+        assert_eq!(out.matches("<p>").count(), 2, "{out}");
+        assert_eq!(br_count(&out), 0, "{out}");
+        let out = full("```\nx\ny\n```\n", LineBreaks::Newline);
+        assert_eq!(br_count(&out), 0, "{out}");
+    }
+
+    #[test]
+    fn リストの継続行と引用の複数行はnewlineでbrになる() {
+        assert_eq!(br_count(&full("- a\n  b\n", LineBreaks::Newline)), 1);
+        assert_eq!(br_count(&full("> a\n> b\n", LineBreaks::Newline)), 1);
     }
 }

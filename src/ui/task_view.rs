@@ -100,6 +100,7 @@ pub(crate) fn TaskView(
     date_order: Signal<DateOrder>,
     /// Render the task.md Metadata disclosure expanded (Settings → General).
     frontmatter_open: Signal<bool>,
+    line_breaks: Signal<crate::config::LineBreaks>,
     /// Current project name (directory basename) shown in the header.
     proj_name: String,
     dark: bool,
@@ -232,10 +233,16 @@ pub(crate) fn TaskView(
         };
         doc_html.set("<p style=\"color:#8b949e\">読み込み中…</p>".to_string());
         let fm_open = frontmatter_open();
+        let line_breaks = line_breaks();
         spawn(async move {
             let roots_vec = vec![project_path];
             let result = tokio::task::spawn_blocking(move || {
-                services::file_service::load_document(Some(file_path), &roots_vec, fm_open)
+                services::file_service::load_document(
+                    Some(file_path),
+                    &roots_vec,
+                    fm_open,
+                    line_breaks,
+                )
             })
             .await;
             if doc_gen() != gen_id {

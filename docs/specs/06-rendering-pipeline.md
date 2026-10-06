@@ -84,6 +84,18 @@ GitHub 互換のため以下の拡張を有効化する。
 | alerts | GitHub Alerts (`> [!NOTE]` 等、現行は前処理) |
 | frontmatter | YAML frontmatter 抽出 |
 
+### 1 回の改行（`line_breaks`）
+
+pulldown-cmark のイベント列の上で `Event::SoftBreak` を扱う（HTML 文字列への後置換はしない）。`line_breaks` は `newline`（既定）/ `commonmark`。
+
+- `newline`: `SoftBreak` を `HardBreak`（`<br />`）に置き換える。段落内の 1 回の改行が改行として見える
+- `commonmark`: `SoftBreak` をそのまま出す（改行文字、ブラウザ上は空白）
+- 行末スペース 2 つ / `\` の改行は元から `HardBreak` で、設定に依らず `<br>` 1 つ
+- 二重改行の防止: `SoftBreak` の直前のテキストが許可リストのタグ（`<br>`・`<br class="x">`・`<p>`・`</details>`・`<img>` 等）で終わる、または直後のテキストが許可リストのタグで始まるときは変換しない。ユーザーの raw HTML はエスケープでテキストになり、`raw_html::reconstruct_allowed` が後段で実タグに戻すため、イベント上では連結済みテキストの先頭 / 末尾を `raw_html` と同じタグ判定（`ends_with_allowed_tag` / `starts_with_allowed_tag`）で見る。複数行の HTML ブロック（README の中央寄せ画像、`<details>`、`<div>`）に余計な `<br>` が入らない。タグに接していない地の文の行間（`<div>\nfoo\nbar\n</div>` の foo と bar の間）は変換する
+- インラインコード内の `<br>` は判定に使わない（コードは別イベント）。コードブロック・表のセル・段落区切りは影響しない
+
+設定値は `load_document` の引数として本文表示・`mzed serve` に渡る。HTML / PDF エクスポートは描画済みの本文をそのまま使うので同じ結果になる。
+
 ### highlight.js
 
 コードブロックは `language-*` class を持つ HTML として出力し、WebView 側の highlight.js でハイライトする。Mermaid のコードブロックは `<pre class="mermaid">` として出力し、本文は text event として escape する。

@@ -23,6 +23,7 @@ use include_dir::{include_dir, Dir};
 use percent_encoding::percent_decode_str;
 use tiny_http::{Header, Response, Server};
 
+use crate::config::LineBreaks;
 use crate::files;
 use crate::services::file_service;
 
@@ -100,7 +101,8 @@ fn start(dir: &Path, port: u16) -> anyhow::Result<ServeHandle> {
     let log = Arc::new(crate::logging::LogFile::open("serve.log"));
     // Rendering honours the user's config (frontmatter disclosure state),
     // read once at server start.
-    let fm_open = crate::config::load().frontmatter_default_open;
+    let cfg = crate::config::load();
+    let (fm_open, line_breaks) = (cfg.frontmatter_default_open, cfg.line_breaks);
     let threads = (0..WORKERS)
         .map(|_| {
             let server = Arc::clone(&server);
@@ -112,7 +114,7 @@ fn start(dir: &Path, port: u16) -> anyhow::Result<ServeHandle> {
                 for request in server.incoming_requests() {
                     let started = std::time::Instant::now();
                     let url = request.url().to_string();
-                    let response = route_cached(&root, &url, &tree_cache, fm_open);
+                    let response = route_cached(&root, &url, &tree_cache, fm_open, line_breaks);
                     let status = response.status_code().0;
                     let _ = request.respond(response);
                     log_request(&log, started.elapsed().as_millis(), status, &url);
@@ -134,6 +136,7 @@ fn route_cached(
     url: &str,
     tree_cache: &Mutex<Option<(std::time::Instant, String)>>,
     fm_open: bool,
+    line_breaks: LineBreaks,
 ) -> Response<std::io::Cursor<Vec<u8>>> {
     if url.split('?').next() == Some("/api/tree") {
         let mut cache = tree_cache.lock().expect("tree cache lock");
@@ -144,7 +147,7 @@ fn route_cached(
         let (_, json) = cache.as_ref().expect("cache was just filled");
         return json_response(json);
     }
-    route(root, url, fm_open)
+    route(root, url, fm_open, line_breaks)
 }
 
 /// `mzed serve`: run in the foreground until the process is interrupted.
@@ -197,7 +200,12 @@ pub(crate) fn toggle_app_share(root: &Path, port: u16) -> anyhow::Result<Option<
 
 /// Dispatch one request URL to a response. Pure with respect to the request
 /// (all state is the served root + the filesystem).
-fn route(root: &Path, url: &str, fm_open: bool) -> Response<std::io::Cursor<Vec<u8>>> {
+fn route(
+    root: &Path,
+    url: &str,
+    fm_open: bool,
+    line_breaks: LineBreaks,
+) -> Response<std::io::Cursor<Vec<u8>>> {
     let (path, query) = match url.split_once('?') {
         Some((p, q)) => (p, q),
         None => (url, ""),
@@ -206,7 +214,7 @@ fn route(root: &Path, url: &str, fm_open: bool) -> Response<std::io::Cursor<Vec<
         "/" => html_response(&shell::page(root)),
         "/api/tree" => json_response(&tree_json(root)),
         "/api/doc" => match doc_param(root, query) {
-            Ok(file) => json_response(&doc_json(root, &file, fm_open)),
+            Ok(file) => json_response(&doc_json(root, &file, fm_open, line_breaks)),
             Err(msg) => error_response(400, &msg),
         },
         "/api/stat" => match doc_param(root, query) {
@@ -297,9 +305,13 @@ fn tree_json(root: &Path) -> String {
 
 /// A rendered document as JSON: sanitised HTML, flat ToC, and mtime for the
 /// client's live-reload polling.
-fn doc_json(root: &Path, file: &Path, fm_open: bool) -> String {
-    let snapshot =
-        file_service::load_document(Some(file.to_path_buf()), &[root.to_path_buf()], fm_open);
+fn doc_json(root: &Path, file: &Path, fm_open: bool, line_breaks: LineBreaks) -> String {
+    let snapshot = file_service::load_document(
+        Some(file.to_path_buf()),
+        &[root.to_path_buf()],
+        fm_open,
+        line_breaks,
+    );
     let mut toc = String::from("[");
     for (i, e) in snapshot.toc().iter().enumerate() {
         if i > 0 {
@@ -443,7 +455,7 @@ mod tests {
         let root = tmp.path().canonicalize().unwrap();
         fs::write(root.join("a.md"), "# Title\n\n## Sub\n\ntext").unwrap();
 
-        let json = doc_json(&root, &root.join("a.md"), false);
+        let json = doc_json(&root, &root.join("a.md"), false, LineBreaks::default());
         let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
         assert!(v["html"].as_str().unwrap().contains("<h1"));
         assert_eq!(v["toc"][0]["text"], "Title");
@@ -520,9 +532,9 @@ mod tests {
     fn routeはassetsの外を404にする() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
-        let r = route(&root, "/assets/../Cargo.toml", false);
+        let r = route(&root, "/assets/../Cargo.toml", false, LineBreaks::default());
         assert_eq!(r.status_code().0, 404);
-        let r = route(&root, "/etc/passwd", false);
+        let r = route(&root, "/etc/passwd", false, LineBreaks::default());
         assert_eq!(r.status_code().0, 404);
     }
 }
