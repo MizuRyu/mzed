@@ -26,8 +26,13 @@ bundle_dir := "target/dx/mzed/bundle/macos/macos"
 # Build the macOS .app (and .dmg) bundle into target/dx/mzed/bundle/macos/macos/.
 # Re-sign ad-hoc after dx bundle: dx leaves a broken resource seal that makes
 # Gatekeeper reject the app on other machines even after removing quarantine.
+# The document type lists mzed under Finder's "Open With" for Markdown
+# (`Alternate`: never claims the default handler). It is written here because
+# dx regenerates Info.plist on bundle and its `info_plist_path` replaces the
+# whole file instead of merging.
 bundle:
   dx bundle --platform desktop --release --bin mzed --package-types macos
+  plutil -replace CFBundleDocumentTypes -json '[{"CFBundleTypeName":"Markdown Document","CFBundleTypeRole":"Viewer","LSHandlerRank":"Alternate","LSItemContentTypes":["net.daringfireball.markdown"]}]' {{bundle_dir}}/mzed.app/Contents/Info.plist
   codesign --force --deep -s - {{bundle_dir}}/mzed.app
   codesign -v {{bundle_dir}}/mzed.app
   hdiutil create -volname mzed -srcfolder {{bundle_dir}}/mzed.app -ov -format UDZO {{bundle_dir}}/mzed_{{version}}_aarch64.dmg

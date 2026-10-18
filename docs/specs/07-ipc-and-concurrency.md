@@ -116,6 +116,12 @@ sequenceDiagram
 - socket worker から UI window へのルーティングは bounded queue を使い、未登録 window 向け pending も最大 128 件に制限する。queue が満杯の場合は新着 IPC message を捨て、UI thread をブロックしない。
 - IPC 経由の `NewWindow` は短時間の連打を落とす。ユーザー操作の Cmd+N は通常の UI 操作として扱う。
 
+### Finder から開く
+
+Finder の「このアプリケーションで開く」やダブルクリックは、argv ではなく Apple Event（`application:openURLs:` → tao の `Event::Opened`）でファイルを渡す。`Config::with_custom_event_handler` でこれを受け、`OpenMany` として上記の router に流す（`route_finder_open`）。以降の検証（`is_file && is_markdown`）と開き方は IPC と同じ。router は window 登録前のメッセージを pending に積むので、Finder の操作で mzed が起動した場合も、最初のウィンドウができた時点で開く。
+
+Finder の候補に出るのは、Info.plist の `CFBundleDocumentTypes`（`just bundle` が dx の bundle 後に `plutil` で書き込む。dx は bundle 時に Info.plist を作り直し、`info_plist_path` は合成ではなく全置換のため）で `net.daringfireball.markdown` を宣言しているため。`LSHandlerRank` は `Alternate` で、インストールしても既定アプリは奪わない。
+
 ## ウィンドウの退場（最後のタブを閉じたとき）
 
 Cmd+W で**最後のタブ**を閉じたら、そのウィンドウは画面から消える（macOS 標準。アプリの終了は Cmd+Q）。分割中は両ペインが空になったときだけ退場する。右ペインが空になった場合は分割が畳まれるだけで、左ペインを空にした場合は分割のまま左が空表示になる（畳むのは右ペイン基準）。タブが 0 枚のウィンドウでも Cmd+W で消える。タブバーの × で最後のタブを閉じた場合は退場せず、空表示のまま残る（`CloseTab` コマンド経路だけの挙動）。

@@ -433,8 +433,30 @@ pub fn run() {
     let saved = config::load();
     let window = services::platform::main_window_builder(saved.window_width, saved.window_height);
     dioxus::LaunchBuilder::desktop()
-        .with_cfg(Config::new().with_menu(build_menu()).with_window(window))
+        .with_cfg(
+            Config::new()
+                .with_menu(build_menu())
+                .with_window(window)
+                .with_custom_event_handler(|event, _| {
+                    if let dioxus::desktop::tao::event::Event::Opened { urls } = event {
+                        route_finder_open(
+                            urls.iter().filter_map(|u| u.to_file_path().ok()).collect(),
+                        );
+                    }
+                }),
+        )
         .launch(App);
+}
+
+/// Finder's "Open With" and double-click hand files over as an Apple Event,
+/// not as argv, so they join the IPC path here. The router holds them until a
+/// window registers, which covers a launch triggered by the open itself.
+fn route_finder_open(paths: Vec<PathBuf>) {
+    if paths.is_empty() {
+        return;
+    }
+    logging::app(format!("finder: open {paths:?}"));
+    route_window_message(Msg::OpenMany { paths });
 }
 
 /// Build the application menu bar. Keeps standard Window + Edit menus and adds a

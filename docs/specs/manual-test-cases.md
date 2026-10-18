@@ -754,6 +754,15 @@ allowlist 方式で再構築する安全な生 HTML サブセット（`<img>` / 
 | **備考** | ツリー・監視・最新 md の探索は同じ規則（`files::is_ignored_dir`）。→ [06](06-rendering-pipeline.md#サイドバー更新の発火条件) |
 | **自動化済み** | `src/files.rs` の `隠しディレクトリのうちagentとclaudeの設定だけをツリーに出す`、`src/watcher.rs` の `agentとclaudeの設定ディレクトリ配下はツリー更新する` |
 
+### FILE-14 Finder の「このアプリケーションで開く」で mzed が開く
+
+| 項目 | 内容 |
+|---|---|
+| **前提** | `just install` した mzed.app。プロジェクト外に `.md` と `.txt` がある |
+| **手順** | 1. mzed を起動したまま、Finder で `.md` を右クリック →「このアプリケーションで開く」→ mzed。2. mzed を Cmd+Q で終了し、同じ操作をする。3. `.txt` を `open -a mzed` で渡す。4. `.md` の既定アプリを確認する |
+| **期待結果** | 1. 候補に mzed が出る。選ぶと新規タブで開き、サイドバーのプロジェクトは変わらない。2. mzed が起動して、そのファイルを開く（プロジェクトが無ければ親フォルダがプロジェクトになる）。3. 何も開かない。4. インストール前と変わらない（mzed は既定アプリを奪わない） |
+| **備考** | `~/Library/Logs/mzed/mzed.log` に `finder: open [...]` が残る。→ [07](07-ipc-and-concurrency.md#finder-から開く) |
+
 ---
 
 ## Web serve（SRV）
