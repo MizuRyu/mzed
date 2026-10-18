@@ -61,7 +61,9 @@ pub fn path_mtime(p: &Path) -> Option<u64> {
         .map(|d| d.as_secs())
 }
 
-fn is_ignored_dir(name: &str) -> bool {
+/// Directories the sidebar tree, the file watcher and the latest-doc search
+/// never descend into.
+pub(crate) fn is_ignored_dir(name: &str) -> bool {
     name.starts_with('.') || matches!(name, "node_modules" | "target" | "dist" | "build")
 }
 

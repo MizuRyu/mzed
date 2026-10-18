@@ -370,8 +370,7 @@ fn latest_markdown_in(dir: &Path, depth: usize) -> Option<PathBuf> {
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
         if is_dir {
             // Skip the same noisy directories as the sidebar tree.
-            if name.starts_with('.') || matches!(name, "node_modules" | "target" | "dist" | "build")
-            {
+            if crate::files::is_ignored_dir(name) {
                 continue;
             }
             if let Some((t, p)) = latest_markdown_in(&path, depth + 1)

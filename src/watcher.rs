@@ -25,11 +25,6 @@ fn is_markdown(p: &Path) -> bool {
     )
 }
 
-/// Noise directories whose contents must never trigger a sidebar refresh.
-fn is_ignored_component(name: &str) -> bool {
-    name.starts_with('.') || matches!(name, "node_modules" | "target" | "dist" | "build")
-}
-
 /// Resolve a path the way FSEvents reports one, so the two can be compared.
 ///
 /// FSEvents always reports the *fully resolved* path — symlinks followed and
@@ -173,7 +168,7 @@ fn is_relevant_tree_path(root: &Path, p: &Path) -> bool {
         return false; // the root itself
     };
     for component in components {
-        if is_ignored_component(&last.as_os_str().to_string_lossy()) {
+        if crate::files::is_ignored_dir(&last.as_os_str().to_string_lossy()) {
             return false;
         }
         last = component;
@@ -181,7 +176,9 @@ fn is_relevant_tree_path(root: &Path, p: &Path) -> bool {
     match std::fs::metadata(p) {
         // A directory's own name has to pass the ignore rule too, or creating
         // `.cache.md/` would read as a markdown file and refresh the sidebar.
-        Ok(meta) if meta.is_dir() => !is_ignored_component(&last.as_os_str().to_string_lossy()),
+        Ok(meta) if meta.is_dir() => {
+            !crate::files::is_ignored_dir(&last.as_os_str().to_string_lossy())
+        }
         Ok(_) => is_markdown(p),
         // The path is already gone (a delete, or the source half of a rename,
         // which FSEvents reports without any file/folder hint). Guessing from
