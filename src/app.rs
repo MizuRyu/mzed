@@ -449,14 +449,17 @@ pub fn run() {
 }
 
 /// Finder's "Open With" and double-click hand files over as an Apple Event,
-/// not as argv, so they join the IPC path here. The router holds them until a
-/// window registers, which covers a launch triggered by the open itself.
+/// not as argv, so they join the IPC path here, chunked like a second `mzed`
+/// launch. The router holds them until a window registers, which covers a
+/// launch triggered by the open itself.
 fn route_finder_open(paths: Vec<PathBuf>) {
     if paths.is_empty() {
         return;
     }
-    logging::app(format!("finder: open {paths:?}"));
-    route_window_message(Msg::OpenMany { paths });
+    logging::app(format!("finder: open {} file(s)", paths.len()));
+    for msg in Msg::for_secondary(&cli::Target::Files(paths)) {
+        route_window_message(msg);
+    }
 }
 
 /// Build the application menu bar. Keeps standard Window + Edit menus and adds a

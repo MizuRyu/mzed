@@ -761,7 +761,7 @@ allowlist 方式で再構築する安全な生 HTML サブセット（`<img>` / 
 | **前提** | `just install` した mzed.app。プロジェクト外に `.md` と `.txt` がある |
 | **手順** | 1. mzed を起動したまま、Finder で `.md` を右クリック →「このアプリケーションで開く」→ mzed。2. mzed を Cmd+Q で終了し、同じ操作をする。3. `.txt` を `open -a mzed` で渡す。4. `.md` の既定アプリを確認する |
 | **期待結果** | 1. 候補に mzed が出る。選ぶと新規タブで開き、サイドバーのプロジェクトは変わらない。2. mzed が起動して、そのファイルを開く（プロジェクトが無ければ親フォルダがプロジェクトになる）。3. 何も開かない。4. インストール前と変わらない（mzed は既定アプリを奪わない） |
-| **備考** | `~/Library/Logs/mzed/mzed.log` に `finder: open [...]` が残る。→ [07](07-ipc-and-concurrency.md#finder-から開く) |
+| **備考** | `~/Library/Logs/mzed/mzed.log` に `finder: open N file(s)` が残る。→ [07](07-ipc-and-concurrency.md#finder-から開く) |
 
 ---
 

@@ -118,7 +118,7 @@ sequenceDiagram
 
 ### Finder から開く
 
-Finder の「このアプリケーションで開く」やダブルクリックは、argv ではなく Apple Event（`application:openURLs:` → tao の `Event::Opened`）でファイルを渡す。`Config::with_custom_event_handler` でこれを受け、`OpenMany` として上記の router に流す（`route_finder_open`）。以降の検証（`is_file && is_markdown`）と開き方は IPC と同じ。router は window 登録前のメッセージを pending に積むので、Finder の操作で mzed が起動した場合も、最初のウィンドウができた時点で開く。
+Finder の「このアプリケーションで開く」やダブルクリックは、argv ではなく Apple Event（`application:openURLs:` → tao の `Event::Opened`）でファイルを渡す。`Config::with_custom_event_handler` でこれを受け、2 回目以降の `mzed` 起動と同じく `Open` / `OpenMany`（1 メッセージ最大 128 paths）に分けて上記の router に流す（`route_finder_open`）。以降の検証（`is_file && is_markdown`）と開き方は IPC と同じ。router は window 登録前のメッセージを pending に積むので、Finder の操作で mzed が起動した場合も、最初のウィンドウができた時点で開く。
 
 Finder の候補に出るのは、Info.plist の `CFBundleDocumentTypes`（`just bundle` が dx の bundle 後に `plutil` で書き込む。dx は bundle 時に Info.plist を作り直し、`info_plist_path` は合成ではなく全置換のため）で `net.daringfireball.markdown` を宣言しているため。`LSHandlerRank` は `Alternate` で、インストールしても既定アプリは奪わない。
 
