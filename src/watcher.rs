@@ -388,6 +388,16 @@ mod tests {
         assert!(!tree_affected(Path::new("/proj"), changed));
     }
 
+    #[test]
+    fn agentとclaudeの設定ディレクトリ配下はツリー更新する() {
+        for p in [
+            "/proj/.agents/skills/x/SKILL.md",
+            "/proj/.claude/agents/r.md",
+        ] {
+            assert!(tree_affected(Path::new("/proj"), [(CREATE, Path::new(p))]));
+        }
+    }
+
     // ── event kind: only structural changes redraw the sidebar ───────────
 
     #[test]

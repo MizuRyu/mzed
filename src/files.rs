@@ -62,8 +62,12 @@ pub fn path_mtime(p: &Path) -> Option<u64> {
 }
 
 /// Directories the sidebar tree, the file watcher and the latest-doc search
-/// never descend into.
+/// never descend into. Hidden directories are skipped except the agent config
+/// ones, which hold Markdown people read (skills, agent definitions).
 pub(crate) fn is_ignored_dir(name: &str) -> bool {
+    if matches!(name, ".agents" | ".claude") {
+        return false;
+    }
     name.starts_with('.') || matches!(name, "node_modules" | "target" | "dist" | "build")
 }
 
@@ -630,5 +634,23 @@ mod tests {
         // research/ nested under docs with its single md.
         let research = docs.children.iter().find(|n| n.name == "research").unwrap();
         assert_eq!(research.md_count, 1);
+    }
+
+    #[test]
+    fn 隠しディレクトリのうちagentとclaudeの設定だけをツリーに出す() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for sub in [".agents/skills/x", ".claude/agents", ".git", ".cache"] {
+            fs::create_dir_all(root.join(sub)).unwrap();
+        }
+        fs::write(root.join(".agents/skills/x/SKILL.md"), "# s").unwrap();
+        fs::write(root.join(".claude/agents/reviewer.md"), "# r").unwrap();
+        fs::write(root.join(".git/HEAD.md"), "# h").unwrap();
+        fs::write(root.join(".cache/c.md"), "# c").unwrap();
+
+        let tree = build_tree(root);
+
+        let names: Vec<&str> = tree.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, vec![".agents", ".claude"]);
     }
 }

@@ -744,6 +744,16 @@ allowlist 方式で再構築する安全な生 HTML サブセット（`<img>` / 
 | **期待結果** | 1. 入力が詰まらず、件数は全件数のまま出る。2. 現在の一致（濃い色）が進み、周りの一致にも薄い色が付いている。3. 文書末尾の一致へ飛び、その周りにも薄い色が付いている。4. `lorem` の 2 件目が現在の一致になる（`lore` の一致を進めた後に 1 件目へ戻されない） |
 | **備考** | Range を作るのは現在の一致 ± 500 件だけ。自動化済み: `src/js.rs` の `find_paints_only_a_window_around_the_current_match`（窓の定数）。Range 数の上限は jsdom ハーネスで確認 |
 
+### FILE-13 `.agents` / `.claude` はサイドバーに出て、他の隠しフォルダは出ない
+
+| 項目 | 内容 |
+|---|---|
+| **前提** | `.agents/skills/<name>/SKILL.md`、`.claude/agents/<name>.md`、`.git/` を持つプロジェクトを開いている |
+| **手順** | 1. サイドバーを見る。2. アプリ起動後に `.claude/commands/new.md` を作る。3. `.cache/x.md` を作る |
+| **期待結果** | 1. `.agents` と `.claude` がフォルダとして出て、配下の md を開ける。`.git` は出ない。2. フォーカス復帰を待たずにサイドバーへ現れる。3. サイドバーは変化しない |
+| **備考** | ツリー・監視・最新 md の探索は同じ規則（`files::is_ignored_dir`）。→ [06](06-rendering-pipeline.md#サイドバー更新の発火条件) |
+| **自動化済み** | `src/files.rs` の `隠しディレクトリのうちagentとclaudeの設定だけをツリーに出す`、`src/watcher.rs` の `agentとclaudeの設定ディレクトリ配下はツリー更新する` |
+
 ---
 
 ## Web serve（SRV）
