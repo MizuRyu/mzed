@@ -582,44 +582,13 @@ pub(crate) fn Settings(
                                             div { style: row_title, "スキャン除外ディレクトリ名" }
                                             div { style: "{row_desc}", "ビルトイン（node_modules, target 等）に加え、スキャンをスキップするディレクトリ名" }
                                         }
-                                        div {
-                                            style: "display: flex; flex-direction: column; gap: 4px; align-items: flex-end;",
-                                            for (i, name) in task_view_scan_exclude().iter().enumerate() {
-                                                div {
-                                                    key: "excl-{i}",
-                                                    style: "display: flex; gap: 6px; align-items: center;",
-                                                    span { style: "font: 13px -apple-system, sans-serif; color: {text_color};", "{name}" }
-                                                    button {
-                                                        style: "{reset_btn} padding: 2px 8px; font-size: 11px;",
-                                                        onclick: move |_| { task_view_scan_exclude.write().remove(i); },
-                                                        "✕"
-                                                    }
-                                                }
-                                            }
-                                            {
-                                                let mut excl_input = use_signal(String::new);
-                                                rsx! {
-                                                    div {
-                                                        style: "display: flex; gap: 4px; align-items: center;",
-                                                        input {
-                                                            r#type: "text",
-                                                            value: "{excl_input}",
-                                                            placeholder: "ディレクトリ名",
-                                                            style: "padding: 4px 8px; border: 1px solid {btn_border}; border-radius: 6px; background: {overlay_bg}; color: {text_color}; font: 12px -apple-system, sans-serif; width: 140px;",
-                                                            oninput: move |e| excl_input.set(e.value()),
-                                                            onkeydown: move |e| {
-                                                                if e.key() == Key::Enter {
-                                                                    let v = excl_input().trim().to_string();
-                                                                    if !v.is_empty() && !task_view_scan_exclude().contains(&v) {
-                                                                        task_view_scan_exclude.write().push(v);
-                                                                        excl_input.set(String::new());
-                                                                    }
-                                                                }
-                                                            },
-                                                        }
-                                                    }
-                                                }
-                                            }
+                                        NameList {
+                                            items: task_view_scan_exclude,
+                                            placeholder: "ディレクトリ名",
+                                            text_color,
+                                            btn_border,
+                                            input_bg: overlay_bg,
+                                            remove_btn: reset_btn.clone(),
                                         }
                                     }
                                     div {
@@ -1062,6 +1031,56 @@ pub(crate) fn Settings(
                             },
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+/// Editable list of names: each entry with a ✕, plus an input that appends on
+/// Enter (blank and duplicate entries are ignored).
+#[component]
+fn NameList(
+    mut items: Signal<Vec<String>>,
+    placeholder: &'static str,
+    text_color: &'static str,
+    btn_border: &'static str,
+    input_bg: &'static str,
+    remove_btn: String,
+) -> Element {
+    let mut input = use_signal(String::new);
+    rsx! {
+        div {
+            style: "display: flex; flex-direction: column; gap: 4px; align-items: flex-end;",
+            for (i, name) in items().iter().enumerate() {
+                div {
+                    key: "{i}",
+                    style: "display: flex; gap: 6px; align-items: center;",
+                    span { style: "font: 13px -apple-system, sans-serif; color: {text_color};", "{name}" }
+                    button {
+                        style: "{remove_btn} padding: 2px 8px; font-size: 11px;",
+                        onclick: move |_| { items.write().remove(i); },
+                        "✕"
+                    }
+                }
+            }
+            div {
+                style: "display: flex; gap: 4px; align-items: center;",
+                input {
+                    r#type: "text",
+                    value: "{input}",
+                    placeholder,
+                    style: "padding: 4px 8px; border: 1px solid {btn_border}; border-radius: 6px; background: {input_bg}; color: {text_color}; font: 12px -apple-system, sans-serif; width: 140px;",
+                    oninput: move |e| input.set(e.value()),
+                    onkeydown: move |e| {
+                        if e.key() == Key::Enter {
+                            let v = input().trim().to_string();
+                            if !v.is_empty() && !items().contains(&v) {
+                                items.write().push(v);
+                                input.set(String::new());
+                            }
+                        }
+                    },
                 }
             }
         }
