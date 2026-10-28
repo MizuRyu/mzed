@@ -748,7 +748,7 @@ allowlist 方式で再構築する安全な生 HTML サブセット（`<img>` / 
 
 | 項目 | 内容 |
 |---|---|
-| **前提** | `.agents/skills/<name>/SKILL.md`、`.claude/agents/<name>.md`、`.git/` を持つプロジェクトを開いている |
+| **前提** | `shown_hidden_dirs` は既定のまま。`.agents/skills/<name>/SKILL.md`、`.claude/agents/<name>.md`、`.git/` を持つプロジェクトを開いている |
 | **手順** | 1. サイドバーを見る。2. アプリ起動後に `.claude/commands/new.md` を作る。3. `.cache/x.md` を作る |
 | **期待結果** | 1. `.agents` と `.claude` がフォルダとして出て、配下の md を開ける。`.git` は出ない。2. フォーカス復帰を待たずにサイドバーへ現れる。3. サイドバーは変化しない |
 | **備考** | ツリー・監視・最新 md の探索は同じ規則（`files::is_ignored_dir`）。→ [06](06-rendering-pipeline.md#サイドバー更新の発火条件) |
@@ -762,6 +762,24 @@ allowlist 方式で再構築する安全な生 HTML サブセット（`<img>` / 
 | **手順** | 1. mzed を起動したまま、Finder で `.md` を右クリック →「このアプリケーションで開く」→ mzed。2. mzed を Cmd+Q で終了し、同じ操作をする。3. `.txt` を `open -a mzed` で渡す。4. `.md` の既定アプリを確認する |
 | **期待結果** | 1. 候補に mzed が出る。選ぶと新規タブで開き、サイドバーのプロジェクトは変わらない。2. mzed が起動して、そのファイルを開く（プロジェクトが無ければ親フォルダがプロジェクトになる）。3. 何も開かない。4. インストール前と変わらない（mzed は既定アプリを奪わない） |
 | **備考** | `~/Library/Logs/mzed/mzed.log` に `finder: open N file(s)` が残る。→ [07](07-ipc-and-concurrency.md#finder-から開く) |
+
+### FILE-15 表示する隠しフォルダを設定で足し引きすると、再起動せずにツリーへ反映される
+
+| 項目 | 内容 |
+|---|---|
+| **前提** | `.claude/x.md`、`.github/y.md`、`.cache/z.md` を持つプロジェクトを開いている（設定は既定） |
+| **手順** | 1. 設定 > 一般 >「表示する隠しフォルダ」に `.github` を入力して Enter。2. 同じ一覧で `.claude` の ✕ を押す。3. mzed を再起動する |
+| **期待結果** | 1. すぐにサイドバーへ `.github` が出る。`.cache` は出ないまま。2. すぐに `.claude` が消える。3. 再起動後も `.github` が出て `.claude` は出ない（`config.json` の `shown_hidden_dirs` が `[".agents", ".github"]`） |
+| **備考** | 判定は単体テスト済み（`files.rs` の `表示する隠しディレクトリは設定した名前だけで…`）。この TC は設定画面からの即時反映を見る |
+
+### FILE-16 未読にしないファイル名は、更新されても未読マーカーが付かない
+
+| 項目 | 内容 |
+|---|---|
+| **前提** | `CHANGELOG.md` と `docs/a.md` を持つプロジェクトを開いている。設定 > 一般 >「未読にしないファイル名」に `CHANGELOG.md` を入れてある |
+| **手順** | 1. 外部で `CHANGELOG.md` と `docs/a.md` を書き換える。2. サイドバー、ツールバーの未読バッジ、Cmd+P を見る |
+| **期待結果** | `docs/a.md` だけが未読（緑丸、`docs` の件数 1、バッジ 1）。`CHANGELOG.md` はツリーに出たまま緑丸が付かず、未読一覧にも Cmd+P の未読先頭にも出ない |
+| **備考** | 判定は単体テスト済み（`app_state/unread.rs` の `除外したファイル名は…`）。名前は完全一致（`docs/CHANGELOG.md` も同じ名前なので対象） |
 
 ---
 

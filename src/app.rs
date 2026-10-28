@@ -431,6 +431,7 @@ pub fn run() {
     // below the macOS default so the window can be shrunk for side-by-side use.
     // Initial window size comes from the persisted config (General settings).
     let saved = config::load();
+    files::set_shown_hidden_dirs(saved.shown_hidden_dirs.clone());
     let window = services::platform::main_window_builder(saved.window_width, saved.window_height);
     dioxus::LaunchBuilder::desktop()
         .with_cfg(
@@ -866,6 +867,8 @@ pub(crate) fn App() -> Element {
     let task_view_tasks_subpath = use_signal(|| saved_config.task_view_tasks_subpath.clone());
     let task_view_scan_roots = use_signal(|| saved_config.task_view_scan_roots.clone());
     let task_view_scan_exclude = use_signal(|| saved_config.task_view_scan_exclude.clone());
+    let unread_exclude = use_signal(|| saved_config.unread_exclude.clone());
+    let shown_hidden_dirs = use_signal(|| saved_config.shown_hidden_dirs.clone());
     let task_view_days = use_signal(|| saved_config.task_view_days);
     let task_view_group_by_status = use_signal(|| saved_config.task_view_group_by_status);
     let task_view_group_order = use_signal(|| saved_config.task_view_group_order);
@@ -1382,12 +1385,21 @@ pub(crate) fn App() -> Element {
     let marked_trees = use_memo(move || {
         let mut list = trees();
         let hist_map = history.read();
+        let excluded = unread_exclude.read();
         let empty = session::PerProjectHistory::default();
         for (r, nodes) in list.iter_mut() {
             let hist = hist_map.get(r).unwrap_or(&empty);
-            app_state::unread::mark(nodes, r, hist);
+            app_state::unread::mark(nodes, r, hist, &excluded);
         }
         list
+    });
+
+    // The hidden-dir setting is process-wide (see `files::set_shown_hidden_dirs`);
+    // startup already applied the saved value, so only an edit triggers a rescan.
+    use_effect(move || {
+        if files::set_shown_hidden_dirs(shown_hidden_dirs()) {
+            tree_refresh += 1;
+        }
     });
 
     // Flat tree across all roots, for the palette/full-text file lists. Sourced
@@ -1842,6 +1854,8 @@ pub(crate) fn App() -> Element {
             worktree_switch: worktree_switch(),
             serve_port: serve_port(),
             tab_insert: tab_insert(),
+            unread_exclude: unread_exclude(),
+            shown_hidden_dirs: shown_hidden_dirs(),
         };
         let generation = config_save_generation.write().advance();
         spawn(async move {
@@ -3162,6 +3176,8 @@ pub(crate) fn App() -> Element {
                         project_aliases,
                         project_menu_hidden,
                         worktree_switch,
+                        unread_exclude,
+                        shown_hidden_dirs,
                         dark,
                     }
                 }

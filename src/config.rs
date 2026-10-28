@@ -211,6 +211,12 @@ pub struct Config {
     /// Which end of the tab strip a newly opened file lands on.
     #[serde(default)]
     pub tab_insert: TabInsert,
+    /// File names (exact match) never marked unread; they stay in the tree.
+    #[serde(default)]
+    pub unread_exclude: Vec<String>,
+    /// The only `.`-prefixed directories the tree, watcher and latest-doc search enter.
+    #[serde(default = "default_shown_hidden_dirs")]
+    pub shown_hidden_dirs: Vec<String>,
 }
 
 /// A user-defined nickname for one project directory.
@@ -269,6 +275,10 @@ fn default_task_view_days() -> u32 {
 fn default_serve_port() -> u16 {
     6280
 }
+// why: agent config directories hold Markdown people read (skills, agent definitions).
+pub fn default_shown_hidden_dirs() -> Vec<String> {
+    vec![".agents".to_string(), ".claude".to_string()]
+}
 /// Status heading order shown by default: the natural task lifecycle.
 pub fn default_task_view_status_order() -> Vec<String> {
     ["todo", "in_progress", "review", "done"]
@@ -317,6 +327,8 @@ impl Default for Config {
             worktree_switch: WorktreeSwitch::default(),
             serve_port: default_serve_port(),
             tab_insert: TabInsert::default(),
+            unread_exclude: Vec::new(),
+            shown_hidden_dirs: default_shown_hidden_dirs(),
         }
     }
 }

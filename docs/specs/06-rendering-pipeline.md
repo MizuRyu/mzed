@@ -281,7 +281,7 @@ flowchart LR
 サイドバーは**ツリーの形が変わったときだけ**再スキャンする。`watcher::tree_affected` がイベント種別とパスの両方で判定する。
 
 - 種別: `Create` / `Remove` / `Modify(Name)` のみ。`Modify(Data)` / `Modify(Metadata)`（＝ふつうの保存）は対象外
-- パス: root 配下で、祖先に無視ディレクトリ（`.` 始まり（`.agents` と `.claude` は除く）、`node_modules`、`target`、`dist`、`build`）を含まないもの。サイドバーツリーと最新 md の探索も同じ規則（`files::is_ignored_dir`）で辿る。名前だけで判定するので、`.claude/worktrees/`（Claude Code の worktree）に checkout があると、その中身もツリーに出て走査される（既知の制約）。そのうえで
+- パス: root 配下で、祖先に無視ディレクトリ（`.` 始まり（config `shown_hidden_dirs` に挙げた名前は除く。既定は `.agents` と `.claude`）、`node_modules`、`target`、`dist`、`build`）を含まないもの。サイドバーツリーと最新 md の探索も同じ規則（`files::is_ignored_dir`）で辿る。`shown_hidden_dirs` はプロセスで 1 つの値として持ち（`files::set_shown_hidden_dirs`）、起動時に config から入れ、設定画面で変えたらツリーを走査し直す。監視側はイベントごとにこの値を読むので、購読は張り直さない。名前だけで判定するので、`.claude/worktrees/`（Claude Code の worktree）に checkout があると、その中身もツリーに出て走査される（既知の制約）。そのうえで
   - 実在するディレクトリ → 自身の名前も無視判定にかける（`.cache.md/` が md ファイルに見えるのを防ぐ）
   - 実在するファイル → md（`.md` / `.markdown`）のみ
   - **すでに消えているパス → 拡張子で判断せず、常に構造変化として扱う**

@@ -53,6 +53,8 @@ pub(crate) fn Settings(
     mut project_aliases: Signal<Vec<config::ProjectAlias>>,
     mut project_menu_hidden: Signal<Vec<PathBuf>>,
     mut worktree_switch: Signal<WorktreeSwitch>,
+    unread_exclude: Signal<Vec<String>>,
+    shown_hidden_dirs: Signal<Vec<String>>,
     dark: bool,
 ) -> Element {
     let win = dioxus::desktop::use_window();
@@ -275,6 +277,36 @@ pub(crate) fn Settings(
                                             r#type: "checkbox", checked: frontmatter_default_open(),
                                             style: "width: 16px; height: 16px; cursor: pointer;",
                                             onchange: move |e| frontmatter_default_open.set(e.value() == "true"),
+                                        }
+                                    }
+                                    div {
+                                        style: "{row} border-bottom: 1px solid {row_border};",
+                                        div {
+                                            div { style: row_title, "未読にしないファイル名" }
+                                            div { style: "{row_desc}", "このファイル名は更新されても未読の印を付けない（完全一致）。ツリーには表示する" }
+                                        }
+                                        NameList {
+                                            items: unread_exclude,
+                                            placeholder: "CHANGELOG.md",
+                                            text_color,
+                                            btn_border,
+                                            input_bg: overlay_bg,
+                                            remove_btn: reset_btn.clone(),
+                                        }
+                                    }
+                                    div {
+                                        style: "{row} border-bottom: 1px solid {row_border};",
+                                        div {
+                                            div { style: row_title, "表示する隠しフォルダ" }
+                                            div { style: "{row_desc}", "「.」で始まるフォルダのうち、サイドバーに出すもの（例: .github）。それ以外の隠しフォルダは出さない" }
+                                        }
+                                        NameList {
+                                            items: shown_hidden_dirs,
+                                            placeholder: ".github",
+                                            text_color,
+                                            btn_border,
+                                            input_bg: overlay_bg,
+                                            remove_btn: reset_btn.clone(),
                                         }
                                     }
                                     // Export folder.

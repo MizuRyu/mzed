@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, PoisonError, RwLock};
 
 /// A node in the markdown tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,14 +62,37 @@ pub fn path_mtime(p: &Path) -> Option<u64> {
         .map(|d| d.as_secs())
 }
 
-/// Directories the sidebar tree, the file watcher and the latest-doc search
-/// never descend into. Hidden directories are skipped except the agent config
-/// ones, which hold Markdown people read (skills, agent definitions).
-pub(crate) fn is_ignored_dir(name: &str) -> bool {
-    if matches!(name, ".agents" | ".claude") {
+// why: process-wide so the tree walk, the watcher thread and the latest-doc
+// search follow one setting without threading the config through each caller.
+static SHOWN_HIDDEN_DIRS: LazyLock<RwLock<Vec<String>>> =
+    LazyLock::new(|| RwLock::new(crate::config::default_shown_hidden_dirs()));
+
+/// Returns whether the set changed, so the caller knows to rescan the tree.
+pub(crate) fn set_shown_hidden_dirs(names: Vec<String>) -> bool {
+    let mut shown = SHOWN_HIDDEN_DIRS
+        .write()
+        .unwrap_or_else(PoisonError::into_inner);
+    if *shown == names {
         return false;
     }
-    name.starts_with('.') || matches!(name, "node_modules" | "target" | "dist" | "build")
+    *shown = names;
+    true
+}
+
+/// Directories the sidebar tree, the file watcher and the latest-doc search
+/// never descend into.
+pub(crate) fn is_ignored_dir(name: &str) -> bool {
+    let shown = SHOWN_HIDDEN_DIRS
+        .read()
+        .unwrap_or_else(PoisonError::into_inner);
+    is_ignored_dir_with(name, &shown)
+}
+
+fn is_ignored_dir_with(name: &str, shown_hidden: &[String]) -> bool {
+    if name.starts_with('.') {
+        return !shown_hidden.iter().any(|d| d == name);
+    }
+    matches!(name, "node_modules" | "target" | "dist" | "build")
 }
 
 /// Build the markdown tree under `root` (the root itself is not a node).
@@ -637,7 +661,20 @@ mod tests {
     }
 
     #[test]
-    fn 隠しディレクトリのうちagentとclaudeの設定だけをツリーに出す() {
+    fn 表示する隠しディレクトリは設定した名前だけで通常の除外名は設定に関係なく除外する() {
+        let shown = vec![".github".to_string()];
+        assert!(!is_ignored_dir_with(".github", &shown));
+        assert!(is_ignored_dir_with(".claude", &shown));
+        assert!(is_ignored_dir_with(".git", &[]));
+        assert!(!is_ignored_dir_with("docs", &[]));
+        assert!(is_ignored_dir_with(
+            "node_modules",
+            &["node_modules".to_string()]
+        ));
+    }
+
+    #[test]
+    fn 既定では隠しディレクトリのうちagentとclaudeの設定だけをツリーに出す() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         for sub in [".agents/skills/x", ".claude/agents", ".git", ".cache"] {

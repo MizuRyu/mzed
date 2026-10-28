@@ -47,16 +47,23 @@ fn is_unread_in(hist: &PerProjectHistory, key: &str, mtime: u64) -> bool {
 
 /// Flag every file under `nodes` and roll the counts up into the directories,
 /// then reorder each directory's children (see [`order_unread_first`]).
-/// Returns the total, for the toolbar badge. Pure: the mtimes come from the
-/// tree walk, so marking never stats.
-pub fn mark(nodes: &mut [TreeNode], root: &Path, hist: &PerProjectHistory) -> usize {
+/// Files whose name is in `excluded` are never unread. Returns the total, for
+/// the toolbar badge. Pure: the mtimes come from the tree walk, so marking
+/// never stats.
+pub fn mark(
+    nodes: &mut [TreeNode],
+    root: &Path,
+    hist: &PerProjectHistory,
+    excluded: &[String],
+) -> usize {
     let mut total = 0;
     for node in nodes.iter_mut() {
         if node.is_dir {
-            node.unread_count = mark(&mut node.children, root, hist);
+            node.unread_count = mark(&mut node.children, root, hist, excluded);
             node.unread = false;
         } else {
-            node.unread = is_unread_in(hist, &seen_key(root, &node.path), node.mtime);
+            node.unread = !excluded.contains(&node.name)
+                && is_unread_in(hist, &seen_key(root, &node.path), node.mtime);
             node.unread_count = usize::from(node.unread);
         }
         total += node.unread_count;
@@ -277,12 +284,38 @@ mod tests {
             ),
             file_node("/p/c.md", 200),
         ];
-        let total = mark(&mut tree, Path::new("/p"), &hist(100, 0, &[]));
+        let total = mark(&mut tree, Path::new("/p"), &hist(100, 0, &[]), &[]);
         assert_eq!(total, 2);
         assert_eq!(tree[0].unread_count, 1);
         assert!(tree[0].children[0].unread);
         assert!(!tree[0].children[1].unread);
         assert!(tree[1].unread);
+    }
+
+    #[test]
+    fn 除外したファイル名は更新されても未読にならず件数にも数えない() {
+        let mut tree = vec![
+            dir_node(
+                "/p/docs",
+                vec![
+                    file_node("/p/docs/CHANGELOG.md", 150),
+                    file_node("/p/docs/a.md", 150),
+                ],
+            ),
+            file_node("/p/CHANGELOG.md", 200),
+        ];
+        let excluded = vec!["CHANGELOG.md".to_string()];
+        let total = mark(&mut tree, Path::new("/p"), &hist(100, 0, &[]), &excluded);
+        assert_eq!(total, 1);
+        assert_eq!(tree[0].unread_count, 1);
+        let docs = &tree[0].children;
+        let unread: Vec<&str> = docs
+            .iter()
+            .filter(|n| n.unread)
+            .map(|n| n.name.as_str())
+            .collect();
+        assert_eq!(unread, vec!["a.md"]);
+        assert!(!tree[1].unread);
     }
 
     #[test]
@@ -293,7 +326,7 @@ mod tests {
             file_node("/p/a-unread.md", 200), // 未読
             file_node("/p/m-read.md", 60),    // 既読
         ];
-        mark(&mut tree, Path::new("/p"), &hist(100, 0, &[]));
+        mark(&mut tree, Path::new("/p"), &hist(100, 0, &[]), &[]);
         let names: Vec<&str> = tree.iter().map(|n| n.name.as_str()).collect();
         // 未読(mtime降順) → 既読(名前順)。
         assert_eq!(
@@ -305,7 +338,7 @@ mod tests {
     #[test]
     fn markは未読の同mtimeを名前順にする() {
         let mut tree = vec![file_node("/p/b.md", 200), file_node("/p/a.md", 200)];
-        mark(&mut tree, Path::new("/p"), &hist(100, 0, &[]));
+        mark(&mut tree, Path::new("/p"), &hist(100, 0, &[]), &[]);
         let names: Vec<&str> = tree.iter().map(|n| n.name.as_str()).collect();
         assert_eq!(names, vec!["a.md", "b.md"]);
     }
@@ -317,7 +350,7 @@ mod tests {
             dir_node("/p/zeta", vec![file_node("/p/zeta/x.md", 10)]),
             dir_node("/p/alpha", vec![file_node("/p/alpha/x.md", 10)]),
         ];
-        mark(&mut tree, Path::new("/p"), &hist(100, 0, &[]));
+        mark(&mut tree, Path::new("/p"), &hist(100, 0, &[]), &[]);
         let names: Vec<&str> = tree.iter().map(|n| n.name.as_str()).collect();
         assert_eq!(names, vec!["alpha", "zeta", "z-unread.md"]);
     }
@@ -332,7 +365,7 @@ mod tests {
                 file_node("/p/docs/mid.md", 200),
             ],
         )];
-        mark(&mut tree, Path::new("/p"), &hist(100, 0, &[]));
+        mark(&mut tree, Path::new("/p"), &hist(100, 0, &[]), &[]);
         let names: Vec<&str> = tree[0].children.iter().map(|n| n.name.as_str()).collect();
         assert_eq!(names, vec!["new.md", "mid.md", "old.md"]);
     }

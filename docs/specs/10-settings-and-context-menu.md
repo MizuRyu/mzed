@@ -26,6 +26,8 @@ Cmd+, で開く単一の設定画面。Obsidian 風に左ナビ + 右ペイン�
 | `external_links.open_in_browser` | bool | true | http/https リンクを既定ブラウザで開く |
 | `tab_insert` | enum | `start` | 新しく開いたタブの位置。`start`(左端) / `end`(右端)。既に開いているタブを開き直したときは位置を動かさずアクティブにするだけ。セッション復元は保存順をそのまま並べる（設定に依らない） |
 | `open_latest_on_project_open` | bool | false | プロジェクト切替時に最終更新 Markdown を自動で開く（復元タブが無い場合のみ） |
+| `unread_exclude` | `[string]` | `[]` | 未読マーカーを付けないファイル名（完全一致・大文字小文字を区別）。ツリーには表示し、緑丸・フォルダの未読件数・ツールバーのバッジと一覧・Cmd+P の未読先頭のすべてから外す。設定 General の一覧で追加・削除し、即反映 |
+| `shown_hidden_dirs` | `[string]` | `[".agents", ".claude"]` | `.` で始まるディレクトリのうち、サイドバーツリー・ファイル監視・最新 md の探索が入るもの（完全一致）。ここに無い隠しディレクトリは入らない。設定 General の一覧で編集し、変えるとツリーを走査し直す（`mzed serve` はサーバ起動時の値） |
 | `frontmatter_default_open` | bool | false | frontmatter の「Metadata」折りたたみを開いた状態で表示。設定 General でトグル、表示中ドキュメントに即反映（`mzed serve` はサーバ起動時の値） |
 | `project_aliases` | `[{path, alias}]` | `[]` | プロジェクトフォルダに付ける論理名（別名） |
 | `project_menu_hidden` | `[string]` | `[]` | プロジェクト切替（Cmd+O）から隠すパス。候補行の ✕ で追加、設定 General の「非表示のプロジェクト」で復元。Zed の履歴自体は編集できないためローカルの重ね掛け |

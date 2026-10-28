@@ -102,6 +102,7 @@ fn start(dir: &Path, port: u16) -> anyhow::Result<ServeHandle> {
     // Rendering honours the user's config (frontmatter disclosure state),
     // read once at server start.
     let cfg = crate::config::load();
+    crate::files::set_shown_hidden_dirs(cfg.shown_hidden_dirs.clone());
     let (fm_open, line_breaks) = (cfg.frontmatter_default_open, cfg.line_breaks);
     let threads = (0..WORKERS)
         .map(|_| {
