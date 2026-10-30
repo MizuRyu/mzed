@@ -45,24 +45,76 @@ fn is_unread_in(hist: &PerProjectHistory, key: &str, mtime: u64) -> bool {
     )
 }
 
+/// One `unread_exclude` entry. Without a `/` it is a file or folder name matched
+/// at any depth below the root; with one it is a path — absolute, `~/`-based, or relative to the project
+/// root — matched by components, so a directory covers everything below it.
+enum Exclusion {
+    Name(String),
+    Absolute(PathBuf),
+    Relative(PathBuf),
+}
+
+impl Exclusion {
+    fn parse(entry: &str, home: Option<&Path>) -> Self {
+        if !entry.contains('/') {
+            return Self::Name(entry.to_string());
+        }
+        match (entry.strip_prefix("~/"), home) {
+            (Some(rest), Some(home)) => Self::Absolute(home.join(rest)),
+            _ if entry.starts_with('/') => Self::Absolute(PathBuf::from(entry)),
+            _ => Self::Relative(PathBuf::from(entry.trim_start_matches("./"))),
+        }
+    }
+
+    fn matches(&self, root: &Path, node: &TreeNode) -> bool {
+        match self {
+            Self::Name(name) => node
+                .path
+                .strip_prefix(root)
+                .unwrap_or(Path::new(&node.name))
+                .components()
+                .any(|c| c.as_os_str() == name.as_str()),
+            Self::Absolute(p) => node.path.starts_with(p),
+            Self::Relative(p) => node
+                .path
+                .strip_prefix(root)
+                .is_ok_and(|rel| rel.starts_with(p)),
+        }
+    }
+}
+
 /// Flag every file under `nodes` and roll the counts up into the directories,
 /// then reorder each directory's children (see [`order_unread_first`]).
-/// Files whose name is in `excluded` are never unread. Returns the total, for
-/// the toolbar badge. Pure: the mtimes come from the tree walk, so marking
-/// never stats.
+/// Files matching an `excluded` entry (see [`Exclusion`]) are never unread.
+/// Returns the total, for the toolbar badge. Pure: the mtimes come from the
+/// tree walk, so marking never stats.
 pub fn mark(
     nodes: &mut [TreeNode],
     root: &Path,
     hist: &PerProjectHistory,
     excluded: &[String],
 ) -> usize {
+    let home = dirs::home_dir();
+    let rules: Vec<Exclusion> = excluded
+        .iter()
+        .map(|e| Exclusion::parse(e, home.as_deref()))
+        .collect();
+    mark_with(nodes, root, hist, &rules)
+}
+
+fn mark_with(
+    nodes: &mut [TreeNode],
+    root: &Path,
+    hist: &PerProjectHistory,
+    rules: &[Exclusion],
+) -> usize {
     let mut total = 0;
     for node in nodes.iter_mut() {
         if node.is_dir {
-            node.unread_count = mark(&mut node.children, root, hist, excluded);
+            node.unread_count = mark_with(&mut node.children, root, hist, rules);
             node.unread = false;
         } else {
-            node.unread = !excluded.contains(&node.name)
+            node.unread = !rules.iter().any(|r| r.matches(root, node))
                 && is_unread_in(hist, &seen_key(root, &node.path), node.mtime);
             node.unread_count = usize::from(node.unread);
         }
@@ -316,6 +368,96 @@ mod tests {
             .collect();
         assert_eq!(unread, vec!["a.md"]);
         assert!(!tree[1].unread);
+    }
+
+    fn unread_names(nodes: &[TreeNode], out: &mut Vec<String>) {
+        for n in nodes {
+            if n.is_dir {
+                unread_names(&n.children, out);
+            } else if n.unread {
+                out.push(n.path.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    #[test]
+    fn スラッシュを含む除外はパスとして扱いフォルダ指定なら配下をすべて除外する() {
+        let mut tree = vec![
+            dir_node(
+                "/p/docs",
+                vec![
+                    file_node("/p/docs/CHANGELOG.md", 150),
+                    file_node("/p/docs/a.md", 150),
+                ],
+            ),
+            dir_node(
+                "/p/gen",
+                vec![
+                    file_node("/p/gen/x.md", 150),
+                    file_node("/p/gen/sub/y.md", 150),
+                ],
+            ),
+            dir_node("/p/generated", vec![file_node("/p/generated/z.md", 150)]),
+            file_node("/p/CHANGELOG.md", 150),
+            file_node("/p/notes.md", 150),
+        ];
+        let excluded = vec![
+            "docs/CHANGELOG.md".to_string(),
+            "./gen".to_string(),
+            "/p/notes.md".to_string(),
+        ];
+        let total = mark(&mut tree, Path::new("/p"), &hist(100, 0, &[]), &excluded);
+        let mut unread = Vec::new();
+        unread_names(&tree, &mut unread);
+        unread.sort();
+        // 同名でも別の場所の CHANGELOG.md と、名前の前方だけ一致する generated は残る。
+        assert_eq!(
+            unread,
+            vec!["/p/CHANGELOG.md", "/p/docs/a.md", "/p/generated/z.md"]
+        );
+        assert_eq!(total, 3);
+    }
+
+    #[test]
+    fn スラッシュの無い除外はどの階層のフォルダ名にも一致しルート自身の名前には一致しない() {
+        let mut tree = vec![
+            dir_node(
+                "/work/gen/docs",
+                vec![
+                    dir_node(
+                        "/work/gen/docs/generated",
+                        vec![file_node("/work/gen/docs/generated/x.md", 150)],
+                    ),
+                    file_node("/work/gen/docs/a.md", 150),
+                ],
+            ),
+            dir_node(
+                "/work/gen/generated",
+                vec![file_node("/work/gen/generated/y.md", 150)],
+            ),
+        ];
+        let excluded = vec!["generated".to_string(), "gen".to_string()];
+        let total = mark(
+            &mut tree,
+            Path::new("/work/gen"),
+            &hist(100, 0, &[]),
+            &excluded,
+        );
+        let mut unread = Vec::new();
+        unread_names(&tree, &mut unread);
+        assert_eq!(unread, vec!["/work/gen/docs/a.md"]);
+        assert_eq!(total, 1);
+    }
+
+    #[test]
+    fn チルダ始まりの除外はホームからの絶対パスになる() {
+        let home = Path::new("/Users/me");
+        let rule = Exclusion::parse("~/proj/a.md", Some(home));
+        assert!(rule.matches(
+            Path::new("/Users/me/proj"),
+            &file_node("/Users/me/proj/a.md", 1)
+        ));
+        assert!(!rule.matches(Path::new("/other"), &file_node("/other/proj/a.md", 1)));
     }
 
     #[test]

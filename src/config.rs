@@ -211,7 +211,7 @@ pub struct Config {
     /// Which end of the tab strip a newly opened file lands on.
     #[serde(default)]
     pub tab_insert: TabInsert,
-    /// File names (exact match) never marked unread; they stay in the tree.
+    /// Names or paths never marked unread (see `unread::mark`); they stay in the tree.
     #[serde(default)]
     pub unread_exclude: Vec<String>,
     /// The only `.`-prefixed directories the tree, watcher and latest-doc search enter.

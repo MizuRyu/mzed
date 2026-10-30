@@ -282,8 +282,8 @@ pub(crate) fn Settings(
                                     div {
                                         style: "{row} border-bottom: 1px solid {row_border};",
                                         div {
-                                            div { style: row_title, "未読にしないファイル名" }
-                                            div { style: "{row_desc}", "このファイル名は更新されても未読の印を付けない（完全一致）。ツリーには表示する" }
+                                            div { style: row_title, "未読にしないファイル・フォルダ" }
+                                            div { style: "{row_desc}", "名前（CHANGELOG.md、generated）はどの階層でも一致。/ を含めるとパス（docs/generated はルートから、/ や ~/ で始めると絶対パス）。フォルダは配下すべて。ツリーには表示する" }
                                         }
                                         NameList {
                                             items: unread_exclude,

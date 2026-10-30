@@ -772,14 +772,23 @@ allowlist 方式で再構築する安全な生 HTML サブセット（`<img>` / 
 | **期待結果** | 1. すぐにサイドバーへ `.github` が出る。`.cache` は出ないまま。2. すぐに `.claude` が消える。3. 再起動後も `.github` が出て `.claude` は出ない（`config.json` の `shown_hidden_dirs` が `[".agents", ".github"]`） |
 | **備考** | 判定は単体テスト済み（`files.rs` の `表示する隠しディレクトリは設定した名前だけで…`）。この TC は設定画面からの即時反映を見る |
 
-### FILE-16 未読にしないファイル名は、更新されても未読マーカーが付かない
+### FILE-16 未読にしない名前は、更新されても未読マーカーが付かない
 
 | 項目 | 内容 |
 |---|---|
-| **前提** | `CHANGELOG.md` と `docs/a.md` を持つプロジェクトを開いている。設定 > 一般 >「未読にしないファイル名」に `CHANGELOG.md` を入れてある |
+| **前提** | `CHANGELOG.md` と `docs/a.md` を持つプロジェクトを開いている。設定 > 一般 >「未読にしないファイル・フォルダ」に `CHANGELOG.md` を入れてある |
 | **手順** | 1. 外部で `CHANGELOG.md` と `docs/a.md` を書き換える。2. サイドバー、ツールバーの未読バッジ、Cmd+P を見る |
 | **期待結果** | `docs/a.md` だけが未読（緑丸、`docs` の件数 1、バッジ 1）。`CHANGELOG.md` はツリーに出たまま緑丸が付かず、未読一覧にも Cmd+P の未読先頭にも出ない |
 | **備考** | 判定は単体テスト済み（`app_state/unread.rs` の `除外したファイル名は…`）。名前は完全一致（`docs/CHANGELOG.md` も同じ名前なので対象） |
+
+### FILE-17 パスやフォルダで指定した除外は、その場所の配下だけに効く
+
+| 項目 | 内容 |
+|---|---|
+| **前提** | `CHANGELOG.md`・`docs/CHANGELOG.md`・`docs/generated/x.md`・`notes/generated/y.md`・`docs/a.md` を持つプロジェクトを開いている。設定 > 一般 >「未読にしないファイル・フォルダ」に `docs/CHANGELOG.md` と `docs/generated` を入れてある |
+| **手順** | 1. 外部で 5 ファイルすべてを書き換える。2. サイドバーと未読バッジを見る。3. 一覧の `docs/generated` を消して `generated` を入れ、もう一度 5 ファイルを書き換える |
+| **期待結果** | 2: 未読は `CHANGELOG.md`・`notes/generated/y.md`・`docs/a.md` の 3 件（バッジ 3）。3: `notes/generated/y.md` も未読にならず、未読は 2 件 |
+| **備考** | 判定は単体テスト済み（`app_state/unread.rs` の `スラッシュを含む除外は…`・`スラッシュの無い除外は…`）。`/` や `~/` で始めると絶対パスで、そのプロジェクトだけに効く |
 
 ---
 
