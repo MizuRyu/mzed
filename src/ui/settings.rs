@@ -55,6 +55,7 @@ pub(crate) fn Settings(
     mut worktree_switch: Signal<WorktreeSwitch>,
     unread_exclude: Signal<Vec<String>>,
     shown_hidden_dirs: Signal<Vec<String>>,
+    mut pin_expiry: Signal<config::PinExpiry>,
     dark: bool,
 ) -> Element {
     let win = dioxus::desktop::use_window();
@@ -307,6 +308,30 @@ pub(crate) fn Settings(
                                             btn_border,
                                             input_bg: overlay_bg,
                                             remove_btn: reset_btn.clone(),
+                                        }
+                                    }
+                                    div {
+                                        style: "{row} border-bottom: 1px solid {row_border};",
+                                        div {
+                                            div { style: row_title, "ピンの自動削除" }
+                                            div { style: "{row_desc}", "mzed --pin で付いたピンを、手で外さなくても消すタイミング" }
+                                        }
+                                        select {
+                                            class: "mdo-select", style: "{select_style}",
+                                            onchange: move |e| {
+                                                pin_expiry.set(match e.value().as_str() {
+                                                    "on_open" => config::PinExpiry::OnOpen,
+                                                    "hour" => config::PinExpiry::Hour,
+                                                    "week" => config::PinExpiry::Week,
+                                                    "never" => config::PinExpiry::Never,
+                                                    _ => config::PinExpiry::Day,
+                                                });
+                                            },
+                                            option { value: "on_open", selected: pin_expiry() == config::PinExpiry::OnOpen, "開いたら消す" }
+                                            option { value: "hour", selected: pin_expiry() == config::PinExpiry::Hour, "1 時間後" }
+                                            option { value: "day", selected: pin_expiry() == config::PinExpiry::Day, "24 時間後" }
+                                            option { value: "week", selected: pin_expiry() == config::PinExpiry::Week, "7 日後" }
+                                            option { value: "never", selected: pin_expiry() == config::PinExpiry::Never, "消さない" }
                                         }
                                     }
                                     // Export folder.

@@ -88,6 +88,20 @@ pub(crate) async fn atomic_write_queued(path: PathBuf, contents: Vec<u8>) -> Res
         .context("persistence write worker stopped before completing request")?
 }
 
+/// Queue a write behind every earlier one without waiting for it. For callers
+/// that must not block and order writes by enqueueing under their own lock.
+pub(crate) fn atomic_write_detached(path: PathBuf, contents: Vec<u8>) {
+    let (done, _) = tokio::sync::oneshot::channel();
+    let request = WriteRequest {
+        path,
+        contents,
+        done,
+    };
+    if write_queue().send(request).is_err() {
+        crate::logging::app("persistence: write worker gone, dropped a write");
+    }
+}
+
 fn write_queue() -> &'static std::sync::mpsc::Sender<WriteRequest> {
     WRITE_QUEUE.get_or_init(|| {
         let (tx, rx) = std::sync::mpsc::channel::<WriteRequest>();

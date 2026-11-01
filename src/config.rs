@@ -26,6 +26,31 @@ pub enum StartupBehavior {
     Blank,
 }
 
+/// When a pin leaves the sidebar without being removed by hand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PinExpiry {
+    /// As soon as the pinned file is opened; unopened pins stay.
+    OnOpen,
+    Hour,
+    #[default]
+    Day,
+    Week,
+    Never,
+}
+
+impl PinExpiry {
+    /// Lifetime counted from when the file was pinned, if this expiry has one.
+    pub fn ttl_secs(self) -> Option<u64> {
+        match self {
+            Self::Hour => Some(60 * 60),
+            Self::Day => Some(24 * 60 * 60),
+            Self::Week => Some(7 * 24 * 60 * 60),
+            Self::OnOpen | Self::Never => None,
+        }
+    }
+}
+
 /// A single rebindable shortcut. `code` is a DOM `KeyboardEvent.code` value
 /// (e.g. "KeyO", "Comma", "Backslash") so matching is keyboard-layout
 /// independent. `meta` matches Cmd or Ctrl.
@@ -217,6 +242,9 @@ pub struct Config {
     /// The only `.`-prefixed directories the tree, watcher and latest-doc search enter.
     #[serde(default = "default_shown_hidden_dirs")]
     pub shown_hidden_dirs: Vec<String>,
+    /// When a pin (`mzed --pin`) leaves the sidebar on its own.
+    #[serde(default)]
+    pub pin_expiry: PinExpiry,
 }
 
 /// A user-defined nickname for one project directory.
@@ -329,6 +357,7 @@ impl Default for Config {
             tab_insert: TabInsert::default(),
             unread_exclude: Vec::new(),
             shown_hidden_dirs: default_shown_hidden_dirs(),
+            pin_expiry: PinExpiry::default(),
         }
     }
 }

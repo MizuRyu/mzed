@@ -59,6 +59,7 @@ cp -R .agents/skills/mzed-notes ~/.claude/skills/mzed-notes
 
 ```
 mzed [PATH...] [--sync <auto|self|off>] [--sync-source <auto|zed|orca>]
+mzed --pin FILE...
 mzed serve [DIR] [-p PORT] [--no-open]
 ```
 
@@ -71,6 +72,7 @@ mzed serve [DIR] [-p PORT] [--no-open]
 | `--sync-source auto` | Zed と Orca の両方に追従（デフォルト。最後に切り替えた方に追う） |
 | `--sync-source zed` | Zed のプロジェクト切替だけに追従 |
 | `--sync-source orca` | Orca の worktree 切替だけに追従 |
+| `--pin FILE...` | md をタブで開かず、サイドバー上部の「ピン」欄に登録する（起動中の mzed へ IPC で即反映。未起動なら起動して登録）。消えるタイミングは config `pin_expiry`。保存先 `~/.config/mzed/pins.json` |
 | `serve [DIR]` | フォルダをブラウザで表示（127.0.0.1 固定・live-reload・画面共有向け）。既定ポート 6280、`--no-open` でブラウザ自動起動を抑止。フォアグラウンド実行で Ctrl+C 停止。GUI・IPC を通らない headless 経路 |
 
 **パス解決ルール**:
@@ -120,6 +122,7 @@ mzed serve [DIR] [-p PORT] [--no-open]
 | `open_latest_on_project_open` | bool | `false` | プロジェクト切替時に最終更新 Markdown を自動で開く（復元タブが無い場合のみ） |
 | `unread_exclude` | `["name or path", ...]` | `[]` | 未読マーカーを付けないファイル・フォルダ。`/` 無し = どの階層でも名前一致（`CHANGELOG.md`, `generated`）、`/` 有り = パス（`docs/generated` はルート相対、`/`・`~/` 始まりは絶対）。フォルダは配下すべて。ツリーには出る。設定 General の一覧 |
 | `shown_hidden_dirs` | `["name", ...]` | `[".agents", ".claude"]` | サイドバーに出す `.` 始まりのフォルダ（完全一致）。ここに無い隠しフォルダは出ない。設定 General の一覧 |
+| `pin_expiry` | `"on_open"` \| `"hour"` \| `"day"` \| `"week"` \| `"never"` | `"day"` | `mzed --pin` のピンが手で外さなくても消えるタイミング（開いたら／1 時間／24 時間／7 日／消さない）。設定 General の select |
 | `frontmatter_default_open` | bool | `false` | frontmatter の「Metadata」折りたたみを開いた状態で表示。設定 General でトグル |
 | `line_breaks` | `"newline"` / `"commonmark"` | `"newline"` | 段落内の 1 回の改行の扱い。`newline` は改行、`commonmark` は空白につなぐ。設定 Appearance の「1 回の改行」から変更可 |
 | `line_height` | float | `1.7` | 本文行間（1.2〜2.4）。設定 Appearance の「行間」から変更可 |

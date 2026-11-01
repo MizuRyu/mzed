@@ -1,5 +1,6 @@
 pub(crate) mod generation;
 pub(crate) mod pane;
+pub(crate) mod pins;
 pub(crate) mod rename;
 pub(crate) mod unread;
 

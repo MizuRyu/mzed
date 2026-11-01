@@ -41,6 +41,12 @@ pub enum Msg {
     OpenMany { paths: Vec<PathBuf> },
     /// Switch the project root to a directory.
     OpenDir { path: PathBuf },
+    /// Pin a markdown file in every window's sidebar without opening it.
+    Pin { path: PathBuf },
+    /// The pin list changed; windows re-read it. In-process only: never sent
+    /// over the socket, so a peer cannot forge it.
+    #[serde(skip)]
+    PinsChanged,
 }
 
 impl Msg {
@@ -445,6 +451,17 @@ mod tests {
         let line = encode(&Msg::NewWindow);
         assert_eq!(line, "{\"type\":\"new_window\"}\n");
         assert_eq!(parse(&line), Some(Msg::NewWindow));
+    }
+
+    #[test]
+    fn pinは往復しpins_changedは外から送られても受け付けない() {
+        let pin = Msg::Pin {
+            path: PathBuf::from("/abs/x.md"),
+        };
+        let line = encode(&pin);
+        assert!(line.contains("\"type\":\"pin\""));
+        assert_eq!(parse(&line), Some(pin));
+        assert_eq!(parse("{\"type\":\"pins_changed\"}\n"), None);
     }
 
     #[test]

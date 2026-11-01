@@ -34,6 +34,11 @@ pub struct Cli {
     #[arg(long = "sync-source", value_enum)]
     pub sync_source: Option<SyncSource>,
 
+    /// Pin the markdown files in the sidebar of the running mzed instead of
+    /// opening them (starting mzed first if it is not running).
+    #[arg(long)]
+    pub pin: bool,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -151,6 +156,7 @@ mod tests {
             paths: paths.iter().map(PathBuf::from).collect(),
             sync,
             sync_source: None,
+            pin: false,
             command: None,
         }
     }
@@ -239,6 +245,14 @@ mod tests {
         let intent = resolve_with(&c, &never_dir);
         assert_eq!(intent.sync_source, SyncSource::Orca);
         assert!(intent.sync_source_overridden);
+    }
+
+    #[test]
+    fn pinフラグはファイル指定と一緒に受け付けて既定では付かない() {
+        let c = Cli::try_parse_from(["mzed", "--pin", "a.md", "b.md"]).unwrap();
+        assert!(c.pin);
+        assert_eq!(c.paths, vec![PathBuf::from("a.md"), PathBuf::from("b.md")]);
+        assert!(!Cli::try_parse_from(["mzed", "a.md"]).unwrap().pin);
     }
 
     #[test]

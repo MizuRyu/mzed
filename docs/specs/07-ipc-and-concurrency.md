@@ -122,6 +122,16 @@ Finder の「このアプリケーションで開く」やダブルクリック�
 
 Finder の候補に出るのは、Info.plist の `CFBundleDocumentTypes`（`just bundle` が dx の bundle 後に `plutil` で書き込む。dx は bundle 時に Info.plist を作り直し、`info_plist_path` は合成ではなく全置換のため）で `net.daringfireball.markdown` を宣言しているため。`LSHandlerRank` は `Alternate` で、インストールしても既定アプリは奪わない。
 
+### ピン（`mzed --pin`）
+
+`mzed --pin <file>...` は md をタブで開かずにサイドバー上部の「ピン」欄へ登録する。エージェントが別セッションで書いた md を、mzed がどのプロジェクトを表示していても読み手に知らせるための経路。
+
+- 起動中の primary があれば `Pin { path }` を送って即終了する（`Open` と同じ 1 接続最大 128 メッセージ）。無ければ自プロセスでピンを保存し、パス指定なしの起動（`Target::Zed`）として続ける。ピンは今のタブを奪わない。
+- primary は `Pin` をウィンドウへ回さず、IPC router のスレッドで処理する（`pin_and_notify`）。パスを canonicalize し、`is_file && is_markdown` を通ったものだけを登録する。ウィンドウがまだ無い起動直後でも取りこぼさない。
+- ピン一覧はプロセスで 1 つ（`services::pin_store`）。`~/.config/mzed/pins.json` に置き、`state.json` には混ぜない（`state.json` はベースウィンドウが丸ごと書き直すため、他ウィンドウの変更を消しうる）。書き込みはロックを持ったまま persistence の writer queue に積み、変更順にディスクへ着く。UI thread は書き込みの完了を待たない。
+- 一覧が変わると、全ウィンドウへ `PinsChanged` を broadcast し、各ウィンドウが一覧を読み直す。`PinsChanged` は `#[serde(skip)]` でソケットからは受け付けない（外部から偽装できない）。
+- 表示中のタブがピンなら「開いた」扱いにして緑丸を消す（`pin_expiry` が `on_open` ならピンごと消す）。期限切れと実ファイルが消えたピンは、各ウィンドウが 60 秒ごとに UI thread の外で掃除する。
+
 ## ウィンドウの退場（最後のタブを閉じたとき）
 
 Cmd+W で**最後のタブ**を閉じたら、そのウィンドウは画面から消える（macOS 標準。アプリの終了は Cmd+Q）。分割中は両ペインが空になったときだけ退場する。右ペインが空になった場合は分割が畳まれるだけで、左ペインを空にした場合は分割のまま左が空表示になる（畳むのは右ペイン基準）。タブが 0 枚のウィンドウでも Cmd+W で消える。タブバーの × で最後のタブを閉じた場合は退場せず、空表示のまま残る（`CloseTab` コマンド経路だけの挙動）。

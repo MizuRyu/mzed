@@ -148,6 +148,15 @@ impl WindowMessageRouter {
         }
     }
 
+    /// Deliver to every live window. Not queued for windows yet to come: a
+    /// window reads the shared state it refreshes when it mounts.
+    fn broadcast(&mut self, msg: &Msg) {
+        self.senders.retain(|tx| !tx.is_closed());
+        for tx in &self.senders {
+            let _ = tx.try_send(msg.clone());
+        }
+    }
+
     fn accept_ipc_new_window(&mut self, now: Instant) -> bool {
         if self.pending.iter().any(|msg| matches!(msg, Msg::NewWindow)) {
             return false;
@@ -181,6 +190,21 @@ fn route_window_message(msg: Msg) {
         .route(msg);
 }
 
+fn broadcast_window_message(msg: &Msg) {
+    window_router()
+        .lock()
+        .expect("window message router lock")
+        .broadcast(msg);
+}
+
+/// Pin from the IPC thread rather than a window: the list is process-wide and
+/// a `mzed --pin` that launched the app arrives before any window exists.
+fn pin_and_notify(path: &Path) {
+    if services::pin_store::pin(path) {
+        broadcast_window_message(&Msg::PinsChanged);
+    }
+}
+
 fn start_ipc_router(
     rx: std::sync::mpsc::Receiver<Msg>,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
@@ -188,7 +212,10 @@ fn start_ipc_router(
         .name("mzed-ipc-router".into())
         .spawn(move || {
             while let Ok(msg) = rx.recv() {
-                route_window_message(msg);
+                match msg {
+                    Msg::Pin { path } => pin_and_notify(&path),
+                    msg => route_window_message(msg),
+                }
             }
         })
 }
@@ -385,6 +412,12 @@ pub fn run() {
         _ => intent,
     };
 
+    let intent = if parsed.pin {
+        pin_startup_files(intent)
+    } else {
+        intent
+    };
+
     // Single instance: hand the startup request to an existing primary. A
     // pathless start is a typed request for another native window.
     let msgs = Msg::for_secondary(&intent.target);
@@ -447,6 +480,35 @@ pub fn run() {
                 }),
         )
         .launch(App);
+}
+
+/// `mzed --pin <file>...`: hand the pins to a running primary and exit, or,
+/// with none running, pin them here and carry on as a plain start that opens
+/// nothing, since a pin must not take over the reader's tabs.
+fn pin_startup_files(intent: cli::Intent) -> cli::Intent {
+    let cli::Target::Files(files) = &intent.target else {
+        eprintln!("mzed: --pin takes markdown files");
+        std::process::exit(2);
+    };
+    let msgs: Vec<Msg> = files
+        .iter()
+        .map(|path| Msg::Pin { path: path.clone() })
+        .collect();
+    match instance::try_send(&msgs) {
+        Ok(true) => std::process::exit(0),
+        Ok(false) => {}
+        Err(err) => {
+            eprintln!("mzed: failed to send IPC request: {err}");
+            std::process::exit(1);
+        }
+    }
+    for path in files {
+        services::pin_store::pin(path);
+    }
+    cli::Intent {
+        target: cli::Target::Zed,
+        ..intent
+    }
 }
 
 /// Finder's "Open With" and double-click hand files over as an Apple Event,
@@ -869,6 +931,9 @@ pub(crate) fn App() -> Element {
     let task_view_scan_exclude = use_signal(|| saved_config.task_view_scan_exclude.clone());
     let unread_exclude = use_signal(|| saved_config.unread_exclude.clone());
     let shown_hidden_dirs = use_signal(|| saved_config.shown_hidden_dirs.clone());
+    let pin_expiry = use_signal(|| saved_config.pin_expiry);
+    // A mirror of the process-wide pin list, refreshed on `Msg::PinsChanged`.
+    let mut pins = use_signal(services::pin_store::snapshot);
     let task_view_days = use_signal(|| saved_config.task_view_days);
     let task_view_group_by_status = use_signal(|| saved_config.task_view_group_by_status);
     let task_view_group_order = use_signal(|| saved_config.task_view_group_order);
@@ -1196,7 +1261,23 @@ pub(crate) fn App() -> Element {
                 open_project(path.clone(), vec![path], TabPolicy::Swap);
             }
         }
+        // The IPC router stores a `Pin` itself and broadcasts `PinsChanged`.
+        Msg::Pin { .. } | Msg::PinsChanged => pins.set(services::pin_store::snapshot()),
     };
+
+    // Pins expire while mzed sits open, so sweep them on a timer.
+    use_future(move || async move {
+        loop {
+            let expiry = *pin_expiry.peek();
+            let pruned = tokio::task::spawn_blocking(move || services::pin_store::prune(expiry))
+                .await
+                .unwrap_or(false);
+            if pruned {
+                broadcast_window_message(&Msg::PinsChanged);
+            }
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        }
+    });
 
     // Apply the CLI-derived startup intent exactly once. Files open as tabs (the
     // first becomes the project root's basis); a Dir becomes the root. A pure
@@ -1484,6 +1565,27 @@ pub(crate) fn App() -> Element {
                 Err(err) => show_toast(format!("Document load failed: {err}")),
             }
         });
+    });
+
+    // A pinned file on screen counts as opened. `pins` is peeked: a pin landing
+    // on the file already in view keeps its dot until the reader opens it.
+    use_effect(move || {
+        let mut shown: Vec<PathBuf> = active().into_iter().collect();
+        if split() {
+            shown.extend(active_r());
+        }
+        let expiry = pin_expiry();
+        let opened: Vec<PathBuf> = shown
+            .into_iter()
+            .filter(|p| pins.peek().iter().any(|pin| &pin.path == p))
+            .collect();
+        let mut changed = false;
+        for path in opened {
+            changed |= services::pin_store::mark_opened(&path, expiry);
+        }
+        if changed {
+            broadcast_window_message(&Msg::PinsChanged);
+        }
     });
 
     // B-9: whatever pane(s) are on screen count as read. Depends on `trees`
@@ -1856,6 +1958,7 @@ pub(crate) fn App() -> Element {
             tab_insert: tab_insert(),
             unread_exclude: unread_exclude(),
             shown_hidden_dirs: shown_hidden_dirs(),
+            pin_expiry: pin_expiry(),
         };
         let generation = config_save_generation.write().advance();
         spawn(async move {
@@ -2889,6 +2992,64 @@ pub(crate) fn App() -> Element {
                                 rsx! {
                                 div {
                                     style: "width: {sw}px; flex: 0 0 auto; overflow: auto; border-right: 1px solid {panel_border}; background: {panel_bg}; padding: 6px 0;",
+                                    // Pins (`mzed --pin`): files an agent flagged, whatever
+                                    // project is showing. The parent folder tells apart
+                                    // same-named files from different sessions.
+                                    if !pins().is_empty() {
+                                        {
+                                            let pin_fg = if dark { "#c9d1d9" } else { "#1f2328" };
+                                            let pin_muted = if dark { "#8b949e" } else { "#8c959f" };
+                                            rsx! {
+                                                div {
+                                                    style: "padding: 6px 10px 4px; font: 600 11px -apple-system, sans-serif; color: #8b949e; text-transform: uppercase; letter-spacing: 0.4px; display: flex; align-items: center; gap: 6px;",
+                                                    svg { width: "12", height: "12", view_box: "0 0 24 24", fill: "{unread_color(dark)}",
+                                                        path { d: "M16 3l5 5-2.5 1L14 13.5l.5 4.5-2 2-3.5-3.5L4 21.5 2.5 20l5-5L4 11.5l2-2 4.5.5L15 5.5z" } }
+                                                    "ピン"
+                                                }
+                                                for pin in pins() {
+                                                    {
+                                                        let name = pin.path.file_name()
+                                                            .map(|s| s.to_string_lossy().to_string())
+                                                            .unwrap_or_else(|| pin.path.display().to_string());
+                                                        let parent = pin.path.parent()
+                                                            .and_then(|p| p.file_name())
+                                                            .map(|s| s.to_string_lossy().to_string())
+                                                            .unwrap_or_default();
+                                                        let full = pin.path.display().to_string();
+                                                        let open_path = pin.path.clone();
+                                                        let rm_path = pin.path.clone();
+                                                        rsx! {
+                                                            div {
+                                                                key: "pin-{full}",
+                                                                class: "mdo-fav-row mdo-tree-row",
+                                                                title: "{full}",
+                                                                style: "display: flex; align-items: center; gap: 6px; padding: 5px 8px 5px 14px; cursor: pointer; user-select: none; font: 13px -apple-system, sans-serif; line-height: 1.4; color: {pin_fg}; border-radius: 4px;",
+                                                                onclick: move |_| apply_msg(Msg::Open { path: open_path.clone() }),
+                                                                {file_icon(pin_muted)}
+                                                                span { style: "overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto;",
+                                                                    "{name}"
+                                                                    span { style: "color: {pin_muted}; font-size: 11px; margin-left: 6px;", "{parent}" }
+                                                                }
+                                                                if !pin.opened { {unread_dot(dark)} }
+                                                                button {
+                                                                    class: "mdo-fav-x",
+                                                                    style: "background: transparent; border: none; color: {pin_muted}; cursor: pointer; flex: 0 0 auto; padding: 0 2px; font-size: 12px;",
+                                                                    title: "ピンを外す",
+                                                                    onclick: move |e| {
+                                                                        e.stop_propagation();
+                                                                        if services::pin_store::remove(&rm_path) {
+                                                                            broadcast_window_message(&Msg::PinsChanged);
+                                                                        }
+                                                                    },
+                                                                    "✕"
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                     // Quick Access favorites (arto-style): one ordered
                                     // list of files + project dirs, told apart by icon.
                                     if !favorites().is_empty() {
@@ -3178,6 +3339,7 @@ pub(crate) fn App() -> Element {
                         worktree_switch,
                         unread_exclude,
                         shown_hidden_dirs,
+                        pin_expiry,
                         dark,
                     }
                 }
