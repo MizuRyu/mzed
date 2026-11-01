@@ -1,7 +1,7 @@
 # README の画面例
 
 - `main.png`: 架空のプロジェクト `aurora` を、隔離した HOME で起動した mzed で開き、ウィンドウを撮ったもの。ピンは架空のレビュー md。
-- `mzed-demo-ja.mp4` / `.gif` / `.png`: 日本語版の24秒紹介動画・README 用 GIF・再生前の静止画。
+- `mzed-demo-ja.mp4` / `.gif` / `.png`: 日本語版の27秒紹介動画・README 用 GIF・再生前の静止画。
 - `mzed-demo-en.mp4` / `.gif` / `.png`: 英語版。画面内の文言も英語。
 
 個人の設定・メモ・ピン・実在のプロジェクトは使わない。
