@@ -68,7 +68,7 @@
 | U-06 | キーバインド閲覧・編集 → [10](10-settings-and-context-menu.md) | ★★☆ |
 | U-07 | お気に入り / クイックアクセス | ★★☆ |
 | U-08 | Raw Markdown 表示 | ★★☆ |
-| U-09 | メモ（本文を選択して Cmd+Shift+M → `~/.config/mzed/notes/` に 1 メモ 1 JSON。エージェントがスキル `mzed-notes` で読む。`mzed serve` は非対応） → [10](10-settings-and-context-menu.md) | ★★☆ |
+| U-09 | メモ（本文を選択して Cmd+Shift+M → `~/.config/mzed/notes/` に 1 メモ 1 JSON。エージェントがスキル `mzed` で読む。`mzed serve` は非対応） → [10](10-settings-and-context-menu.md) | ★★☆ |
 | U-10 | ピン（`mzed --pin FILE...` で登録した md を、表示中のプロジェクトに関係なくサイドバー上部の「ピン」欄に出す。新しい順・未開封は緑丸・親フォルダ名を添える。クリックで開き、✕ で外す。config `pin_expiry` で自動削除（既定 24 時間） → [07](07-ipc-and-concurrency.md#ピンmzed---pin), [10](10-settings-and-context-menu.md)） | ★★☆ |
 
 ### コマンドパレット操作

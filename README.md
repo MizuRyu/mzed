@@ -20,9 +20,10 @@ English version: [README.en.md](README.en.md)
 - **ライブリロード** — ファイル保存を検知して即再描画
 - **快適なナビゲーション** — サイドバー、マルチタブ、左右分割、目次、コマンドパレット、ファジー検索、全文検索
 - **Task View（`Cmd+Shift+D`）** — `docs/memo/tasks/` のタスクフォルダを status 別に一覧し、task.md を即読みする専用ビュー。複数プロジェクト横断にも対応
-- **メモ** — 読みながら本文を選択すると終端にアイコンが浮き、その場で「ここを直して」を残せる（`Cmd+Shift+M` でも同じ）。`~/.config/mzed/notes/` に 1 メモ 1 JSON で溜まり、AI エージェントがスキル `mzed-notes` で読んで直す。未処理のメモは本文の引用箇所に破線の下線で出て、ホバーで内容と時刻が見える
+- **メモ** — 読みながら本文を選択すると終端にアイコンが浮き、その場で「ここを直して」を残せる（`Cmd+Shift+M` でも同じ）。`~/.config/mzed/notes/` に 1 メモ 1 JSON で溜まり、AI エージェントがスキル `mzed` で読んで直す。未処理のメモは本文の引用箇所に破線の下線で出て、ホバーで内容と時刻が見える
 - **エクスポート** — self-contained な HTML / PDF
 - **CLI** — `mzed file.md` で単一インスタンスに転送。ドラッグ&ドロップ、セッション復元も対応
+- **ピン（`mzed --pin`）** — 別セッションのエージェントが、表示中のプロジェクトに関係なく md をサイドバー上部へ緑丸付きで出せる。読んでいるタブは奪わない。期限で自然に消える（既定 24 時間）
 
 ## 動作環境
 
@@ -45,11 +46,22 @@ ln -sf /Applications/mzed.app/Contents/MacOS/mzed ~/.local/bin/mzed  # CLI を�
 
 ソースからビルドする場合は [docs/development.md](docs/development.md) を参照。
 
+### エージェント用スキル
+
+`skills/mzed` は、AI エージェント（Claude Code など `SKILL.md` を読むもの）に、書いた md を `mzed --pin` でピンする手順と、mzed に残したメモを反映する手順を教える。グローバルの skills に入れる:
+
+```sh
+mkdir -p ~/.claude/skills && curl -fsSL https://github.com/MizuRyu/mzed/archive/refs/heads/main.tar.gz | tar -xz -C ~/.claude/skills --strip-components=2 mzed-main/skills/mzed
+```
+
+clone して使う場合は `ln -s "$PWD/skills/mzed" ~/.claude/skills/mzed` にすると `git pull` で更新が届く。
+
 ## 使い方
 
 ```sh
 mzed               # Zed / Orca 連動モードで起動
 mzed file.md       # ファイルをタブで開く
+mzed --pin a.md    # 開かずにサイドバーへピン留め
 mzed ./docs        # ディレクトリをルートにして開く
 mzed --sync self   # 連動モード指定
 mzed serve ./docs  # フォルダをブラウザで表示（127.0.0.1 のみ、live-reload。画面共有向け）

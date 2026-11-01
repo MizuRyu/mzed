@@ -19,9 +19,10 @@ A Markdown viewer that follows Zed (the editor) and Orca (a worktree manager). I
 - **Live reload** — re-renders on file save
 - **Comfortable navigation** — sidebar, multi-tab, split pane, table of contents, command palette, fuzzy finder, full-text search
 - **Task View (`Cmd+Shift+D`)** — a dedicated view that lists `docs/memo/tasks/` task folders by status and opens each task.md instantly, across multiple projects
-- **Notes (`Cmd+Shift+M`)** — select a passage while reading and leave a "fix this" note. Each note lands as its own JSON file under `~/.config/mzed/notes/` for an AI agent to read (skill `mzed-notes`) and act on
+- **Notes (`Cmd+Shift+M`)** — select a passage while reading and leave a "fix this" note. Each note lands as its own JSON file under `~/.config/mzed/notes/` for an AI agent to read (skill `mzed`) and act on
 - **Export** — self-contained HTML / PDF
 - **CLI** — `mzed file.md` forwards to the single running instance; drag & drop and session restore included
+- **Pins (`mzed --pin`)** — an agent in another session puts a Markdown file at the top of the sidebar with a green dot, whatever project is showing, without taking over the tab you are reading. Pins expire on their own (24 hours by default)
 
 ## Requirements
 
@@ -44,11 +45,22 @@ ln -sf /Applications/mzed.app/Contents/MacOS/mzed ~/.local/bin/mzed  # for CLI u
 
 To build from source, see [docs/development.md](docs/development.md).
 
+### Agent skill
+
+`skills/mzed` teaches an AI agent (Claude Code, or any agent that reads `SKILL.md`) to pin the Markdown it writes with `mzed --pin`, and to apply the notes you leave in mzed. Install it into your global skills:
+
+```sh
+mkdir -p ~/.claude/skills && curl -fsSL https://github.com/MizuRyu/mzed/archive/refs/heads/main.tar.gz | tar -xz -C ~/.claude/skills --strip-components=2 mzed-main/skills/mzed
+```
+
+From a clone, `ln -s "$PWD/skills/mzed" ~/.claude/skills/mzed` keeps it current with `git pull`.
+
 ## Usage
 
 ```sh
 mzed               # start in Zed / Orca-linked mode
 mzed file.md       # open a file in a tab
+mzed --pin a.md    # pin a file in the sidebar without opening it
 mzed ./docs        # open a directory as the root
 mzed --sync self   # choose the sync mode
 mzed serve ./docs  # serve a folder in the browser (127.0.0.1 only, live-reload)
