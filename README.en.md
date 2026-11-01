@@ -15,7 +15,7 @@ It detects the project open in Zed (the editor) or Orca (a worktree manager) and
 
 [![Showing a project's docs, then using pins and notes](images/mzed-demo-en.gif)](images/mzed-demo-en.mp4)
 
-*A 20-second feature tour. Click to play it with music. The screens show a fictional project; the app UI is in Japanese.*
+*A 24-second feature tour. Click to play it with music. The UI is illustrative, not a screen recording.*
 
 ## What it does
 
