@@ -45,10 +45,10 @@ export PATH="$HOME/.local/bin:$PATH"
 
 ### エージェント用スキルの配布
 
-`skills/mzed` は、エージェントが md を mzed に出す（既定は `mzed --pin`）手順と、メモ（Cmd+Shift+M）を読んで反映する手順を持つ。どのプロジェクトでも使うので、グローバルの skills にリンクする（`git pull` で更新が届く）:
+`agents/skills/mzed` は、エージェントが md を mzed に出す（既定は `mzed --pin`）手順と、メモ（Cmd+Shift+M）を読んで反映する手順を持つ。どのプロジェクトでも使うので、グローバルの skills にリンクする（`git pull` で更新が届く）:
 
 ```bash
-ln -s "$PWD/skills/mzed" ~/.claude/skills/mzed
+ln -s "$PWD/agents/skills/mzed" ~/.claude/skills/mzed
 ```
 
 ---

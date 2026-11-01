@@ -270,7 +270,7 @@ Enter で保存、Esc で閉じる。空文字は保存しない。**ポップ�
 
 ### エージェント側
 
-`skills/mzed/references/notes.md`（スキル `mzed` の一部。保存先の読み方、`jq` での絞り込み、全件反映の方針、結果を記録した `done/` 移動）。
+`agents/skills/mzed/references/notes.md`（スキル `mzed` の一部。保存先の読み方、`jq` での絞り込み、全件反映の方針、結果を記録した `done/` 移動）。
 
 ## 段階
 

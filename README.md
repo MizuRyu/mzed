@@ -48,13 +48,13 @@ ln -sf /Applications/mzed.app/Contents/MacOS/mzed ~/.local/bin/mzed  # CLI を�
 
 ### エージェント用スキル
 
-`skills/mzed` は、AI エージェント（Claude Code など `SKILL.md` を読むもの）に、書いた md を `mzed --pin` でピンする手順と、mzed に残したメモを反映する手順を教える。グローバルの skills に入れる:
+`agents/skills/mzed` は、AI エージェント（Claude Code など `SKILL.md` を読むもの）に、書いた md を `mzed --pin` でピンする手順と、mzed に残したメモを反映する手順を教える。グローバルの skills に入れる:
 
 ```sh
-mkdir -p ~/.claude/skills && curl -fsSL https://github.com/MizuRyu/mzed/archive/refs/heads/main.tar.gz | tar -xz -C ~/.claude/skills --strip-components=2 mzed-main/skills/mzed
+mkdir -p ~/.claude/skills && curl -fsSL https://github.com/MizuRyu/mzed/archive/refs/heads/main.tar.gz | tar -xz -C ~/.claude/skills --strip-components=3 mzed-main/agents/skills/mzed
 ```
 
-clone して使う場合は `ln -s "$PWD/skills/mzed" ~/.claude/skills/mzed` にすると `git pull` で更新が届く。
+clone して使う場合は `ln -s "$PWD/agents/skills/mzed" ~/.claude/skills/mzed` にすると `git pull` で更新が届く。
 
 ## 使い方
 

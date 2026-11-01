@@ -47,13 +47,13 @@ To build from source, see [docs/development.md](docs/development.md).
 
 ### Agent skill
 
-`skills/mzed` teaches an AI agent (Claude Code, or any agent that reads `SKILL.md`) to pin the Markdown it writes with `mzed --pin`, and to apply the notes you leave in mzed. Install it into your global skills:
+`agents/skills/mzed` teaches an AI agent (Claude Code, or any agent that reads `SKILL.md`) to pin the Markdown it writes with `mzed --pin`, and to apply the notes you leave in mzed. Install it into your global skills:
 
 ```sh
-mkdir -p ~/.claude/skills && curl -fsSL https://github.com/MizuRyu/mzed/archive/refs/heads/main.tar.gz | tar -xz -C ~/.claude/skills --strip-components=2 mzed-main/skills/mzed
+mkdir -p ~/.claude/skills && curl -fsSL https://github.com/MizuRyu/mzed/archive/refs/heads/main.tar.gz | tar -xz -C ~/.claude/skills --strip-components=3 mzed-main/agents/skills/mzed
 ```
 
-From a clone, `ln -s "$PWD/skills/mzed" ~/.claude/skills/mzed` keeps it current with `git pull`.
+From a clone, `ln -s "$PWD/agents/skills/mzed" ~/.claude/skills/mzed` keeps it current with `git pull`.
 
 ## Usage
 
