@@ -351,6 +351,16 @@ allowlist 方式で再構築する安全な生 HTML サブセット（`<img>` / 
 | **備考** | 壊れた worktree 登録（`gitdir` の指す先が消えている）を開いた場合は付け替えず、その worktree がそのまま開く（`/tmp` などの無関係なディレクトリに飛ばない） |
 | **自動化済み** | `src/worktrees.rs` の `redirectは同じ親の別worktreeを同じ選択に写す` / `main_root_ofは壊れたgitdirを親と誤認しない`、`src/app.rs` の `same_selection_needs_the_whole_root_set` |
 
+### ZED-12 mzed 起動後に作った worktree の md がツリーに出る
+
+| 項目 | 内容 |
+|---|---|
+| **前提** | `worktree_switch`: `main`（既定）。mzed はあるリポジトリの main を表示中（その worktree からの付け替えでもよい）。mzed のウィンドウにはフォーカスを当てない |
+| **手順** | 1. Orca でそのリポジトリの新しい workspace を作る（または `git worktree add` して Zed で開く）。2. 新しい worktree にだけ md を作る。3. 切り替えずに、その worktree にもう 1 つ md を作る |
+| **期待結果** | 1〜2. 数秒以内に新しい md が main のツリーに未読付きで出る。アクティブタブ・展開状態は変わらない。3. 追加した md も出る（新しい worktree が監視対象に入っている） |
+| **備考** | 切り替えずに `git worktree add` しただけの worktree は、次のフォーカス復帰かパレットを開いたときに出る |
+| **自動化済み** | `src/worktrees.rs` の `後から追加したworktreeでoverlayが変わる` |
+
 ### ZED-07 worktree オーバーレイ: 本文が最新の checkout を映す
 
 | 項目 | 内容 |

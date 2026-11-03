@@ -1093,6 +1093,15 @@ pub(crate) fn App() -> Element {
         }
     });
 
+    // Worktree overlay: linked worktrees of each root, re-discovered on tree
+    // changes (a `git worktree add/remove` shows up as one). Discovery is a
+    // couple of tiny file reads per root. PartialEq memoisation means
+    // downstream effects only re-run when the worktree set itself changes.
+    let overlay = use_memo(move || {
+        tree_refresh();
+        crate::worktrees::Overlay::discover(&roots())
+    });
+
     // Switch to `new_primary` (with `new_roots` as the full sidebar set),
     // retaining per-project tabs. Parks the current project's tabs, restores the
     // target's (or starts empty + opens `open_pick`). The same-selection case
@@ -1186,6 +1195,24 @@ pub(crate) fn App() -> Element {
         // so moving between them must be a no-op. Picking a representative
         // markdown first would scan the disk and then steal the active tab.
         if same_selection(root().as_deref(), &roots.read(), &primary, &new_roots) {
+            // why: a worktree created after the last scan redirects here too,
+            // and its registration lives under the ignored `.git` while its
+            // checkout sits outside every watched root. Only a changed
+            // worktree set rescans, so hopping between known worktrees stays
+            // free.
+            spawn(async move {
+                let probe = new_roots.clone();
+                let Ok(next) = tokio::task::spawn_blocking(move || {
+                    crate::worktrees::Overlay::discover(&probe)
+                })
+                .await
+                else {
+                    return;
+                };
+                if *roots.peek() == new_roots && next != *overlay.peek() {
+                    tree_refresh += 1;
+                }
+            });
             return;
         }
         let pick = file_service::pick_markdown(&primary);
@@ -1401,15 +1428,6 @@ pub(crate) fn App() -> Element {
         spawn(async move {
             let _ = document::eval(&script).await;
         });
-    });
-
-    // Worktree overlay: linked worktrees of each root, re-discovered on tree
-    // changes (a `git worktree add/remove` shows up as one). Discovery is a
-    // couple of tiny file reads per root. PartialEq memoisation means
-    // downstream effects only re-run when the worktree set itself changes.
-    let overlay = use_memo(move || {
-        tree_refresh();
-        crate::worktrees::Overlay::discover(&roots())
     });
 
     // Build file trees off the UI thread. A generation prevents an older scan

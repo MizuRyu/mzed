@@ -147,7 +147,7 @@ v1 は単一ルートを主対象とし、マルチルートは「全ルート�
 
 `worktree_switch: main` の相方。mzed が main の checkout を表示している間、そのリポジトリの **linked worktree 側で更新された docs を UI 上 main に重ねて見せる**。worktree で作業しつつ mzed は main を開いたままでよい。ファイルのコピー・書き込みは一切しない。
 
-- **検出**: `.git/worktrees/<name>/gitdir` を直接読む（git コマンド起動なし）。消えた worktree の残骸登録は無視。worktree の追加/削除はツリー監視経由で自動反映
+- **検出**: `.git/worktrees/<name>/gitdir` を直接読む（git コマンド起動なし）。消えた worktree の残骸登録は無視。登録は監視対象外の `.git` 配下にあり、worktree の実体も main の外に置かれることが多い（Orca は `~/orca/workspaces/` 配下）ため、ツリー監視では追加を拾えない。再検出するのはツリーの再スキャン時（フォーカス復帰、パレット、監視中 root の構造変化）と、同じ親へ付け替わる切替を受けたとき。後者は登録だけを読み直し、worktree の集合が変わったときに限って再スキャンする（既知の worktree 間の移動では走査しない）
 - **本文**: 表示パスは常に main 側の「論理パス」。読み込み時に main + 各 worktree の同相対パスを **mtime 比較し最新の実体**を表示（出所表示なし）。全候補をウォッチし、どの checkout の保存でも即再解決
 - **サイドバー**: worktree にしかない md / フォルダも main のツリーに合成表示（ノードは論理パス）。同名は1ノードに集約
 - **Task View**: worktree 配下のタスクは main プロジェクトに帰属。同名タスクフォルダは task.md の mtime が新しい checkout 側が残る。走査で worktree が独立プロジェクトとして発見された場合も main に合流

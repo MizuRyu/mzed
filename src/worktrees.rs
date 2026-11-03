@@ -424,4 +424,14 @@ mod tests {
         let b = Overlay::discover(&[main.clone()]);
         assert_eq!(a, b);
     }
+
+    #[test]
+    fn 後から追加したworktreeでoverlayが変わる() {
+        let (_dir, main, _wt) = fixture();
+        let before = Overlay::discover(&[main.clone()]);
+        let added = add_worktree(&main, "wt-new");
+        let after = Overlay::discover(&[main.clone()]);
+        assert_ne!(before, after);
+        assert!(after.worktrees_of(&main).contains(&added));
+    }
 }
