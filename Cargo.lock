@@ -3370,6 +3370,7 @@ dependencies = [
  "open",
  "percent-encoding",
  "pulldown-cmark",
+ "rayon",
  "rfd",
  "rusqlite",
  "serde",

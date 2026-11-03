@@ -95,16 +95,41 @@ fn is_ignored_dir_with(name: &str, shown_hidden: &[String]) -> bool {
     matches!(name, "node_modules" | "target" | "dist" | "build")
 }
 
+// why: sibling subtrees are independent, and one big folder (cloned repos
+// under a scratch dir) can hold 100k+ entries. A pool of its own keeps the walk
+// off rayon's global pool, which image codecs under Dioxus may also use.
+static WALK_POOL: LazyLock<Option<rayon::ThreadPool>> = LazyLock::new(|| walk_pool(4));
+
+fn walk_pool(threads: usize) -> Option<rayon::ThreadPool> {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .thread_name(|i| format!("mzed-walk-{i}"))
+        .build()
+        .ok()
+}
+
 /// Build the markdown tree under `root` (the root itself is not a node).
 pub fn build_tree(root: &Path) -> Vec<TreeNode> {
     crate::perf::measure(
         "files.build_tree",
         &[("root", root.display().to_string())],
-        || build_dir(root, 0),
+        || build_tree_in(WALK_POOL.as_ref(), root),
     )
 }
 
-fn build_dir(dir: &Path, depth: usize) -> Vec<TreeNode> {
+fn build_tree_in(pool: Option<&rayon::ThreadPool>, root: &Path) -> Vec<TreeNode> {
+    let shown = SHOWN_HIDDEN_DIRS
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    match pool {
+        Some(pool) => pool.install(|| build_dir(root, 0, &shown)),
+        None => build_dir(root, 0, &shown),
+    }
+}
+
+fn build_dir(dir: &Path, depth: usize, shown_hidden: &[String]) -> Vec<TreeNode> {
+    use rayon::prelude::*;
     if depth >= MAX_DEPTH {
         return Vec::new();
     }
@@ -112,7 +137,7 @@ fn build_dir(dir: &Path, depth: usize) -> Vec<TreeNode> {
         return Vec::new();
     };
 
-    let mut dirs: Vec<TreeNode> = Vec::new();
+    let mut subdirs: Vec<(PathBuf, String)> = Vec::new();
     let mut files: Vec<TreeNode> = Vec::new();
 
     for entry in entries.flatten() {
@@ -132,23 +157,8 @@ fn build_dir(dir: &Path, depth: usize) -> Vec<TreeNode> {
         };
 
         if is_dir {
-            if is_ignored_dir(&name) {
-                continue;
-            }
-            let children = build_dir(&path, depth + 1);
-            let md_count: usize = children.iter().map(|c| c.md_count).sum();
-            // Hide directories that contain no markdown at all.
-            if md_count > 0 {
-                dirs.push(TreeNode {
-                    path,
-                    name,
-                    is_dir: true,
-                    md_count,
-                    mtime: children.iter().map(|c| c.mtime).max().unwrap_or(0),
-                    unread: false,
-                    unread_count: 0,
-                    children,
-                });
+            if !is_ignored_dir_with(&name, shown_hidden) {
+                subdirs.push((path, name));
             }
         } else if is_markdown(&path) {
             files.push(TreeNode {
@@ -163,6 +173,25 @@ fn build_dir(dir: &Path, depth: usize) -> Vec<TreeNode> {
             });
         }
     }
+
+    let mut dirs: Vec<TreeNode> = subdirs
+        .into_par_iter()
+        .filter_map(|(path, name)| {
+            let children = build_dir(&path, depth + 1, shown_hidden);
+            let md_count: usize = children.iter().map(|c| c.md_count).sum();
+            // Hide directories that contain no markdown at all.
+            (md_count > 0).then(|| TreeNode {
+                path,
+                name,
+                is_dir: true,
+                md_count,
+                mtime: children.iter().map(|c| c.mtime).max().unwrap_or(0),
+                unread: false,
+                unread_count: 0,
+                children,
+            })
+        })
+        .collect();
 
     // Directories first, then files; each group sorted by name.
     dirs.sort_by(|a, b| a.name.cmp(&b.name));
@@ -404,6 +433,38 @@ mod tests {
         assert!(docs.is_dir);
         assert_eq!(docs.md_count, 1);
         assert!(tree.iter().any(|n| n.name == "note.md" && !n.is_dir));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn 並列走査は逐次走査と同じツリーを返す() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for i in 0..12 {
+            for j in 0..5 {
+                let d = root.join(format!("d{i:02}/s{j}/deep/er"));
+                fs::create_dir_all(&d).unwrap();
+                fs::write(d.join("a.md"), "# a").unwrap();
+                fs::write(d.join("x.txt"), "x").unwrap();
+            }
+            fs::create_dir_all(root.join(format!("d{i:02}/empty"))).unwrap();
+        }
+        for ignored in [".hidden", "node_modules", "target"] {
+            fs::create_dir_all(root.join(ignored)).unwrap();
+            fs::write(root.join(ignored).join("no.md"), "# no").unwrap();
+        }
+        // Deeper than MAX_DEPTH, and a cycle that only MAX_DEPTH bounds.
+        let too_deep = root.join("z/1/2/3/4/5/6/7/8");
+        fs::create_dir_all(&too_deep).unwrap();
+        fs::write(too_deep.join("cut.md"), "# cut").unwrap();
+        std::os::unix::fs::symlink(root, root.join("d00/loop")).unwrap();
+        fs::write(root.join("top.md"), "# top").unwrap();
+
+        let sequential = build_tree_in(walk_pool(1).as_ref(), root);
+        let parallel = build_tree_in(walk_pool(4).as_ref(), root);
+        assert_eq!(sequential, parallel);
+        assert!(!sequential.iter().any(|n| n.name == "node_modules"));
+        assert!(sequential.iter().any(|n| n.name == "top.md"));
     }
 
     #[test]
