@@ -47,7 +47,7 @@ pub(crate) fn ProjectMenu(
     current: Option<PathBuf>,
     /// User-defined nicknames; matched by the search box and shown on the row.
     aliases: Signal<Vec<config::ProjectAlias>>,
-    /// When mzed last opened each project; orders projects of equal match.
+    /// When each project was last used (mzed or Zed); orders equal matches.
     last_opened: HashMap<PathBuf, u64>,
     dark: bool,
     on_pick: EventHandler<PathBuf>,

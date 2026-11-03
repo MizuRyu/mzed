@@ -15,6 +15,7 @@ mod orca;
 mod palette;
 mod perf;
 mod project_tabs;
+mod recent_projects;
 mod search;
 mod serve;
 mod services;

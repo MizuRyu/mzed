@@ -34,7 +34,7 @@ pub struct PerProjectHistory {
     /// When mzed first opened this project: the floor for never-opened files.
     #[serde(default)]
     pub first_opened_at: u64,
-    /// When mzed last opened it; orders the Cmd+O list.
+    /// When mzed last opened or left it; orders and prunes the Cmd+O list.
     #[serde(default)]
     pub last_opened_at: u64,
     /// Last "mark all as read" (0 = never).

@@ -1128,6 +1128,9 @@ pub(crate) fn App() -> Element {
             }
             return;
         }
+        // why: a project kept on screen for weeks was last *opened* long ago;
+        // stamping it on the way out keeps it in the switcher's recent window.
+        record_project_open(&roots());
         if tab_policy == TabPolicy::Keep {
             // SelfPinned: follow the project in the sidebar without taking the
             // viewer. Tabs, the split and per-project parking all stay put.
@@ -2071,68 +2074,89 @@ pub(crate) fn App() -> Element {
             .unwrap_or_else(|| "—".to_string())
     });
 
-    // Derived: project-switch candidates. Union of mzed-opened projects
-    // (project_tabs keys), the current sidebar roots, and Zed's recent
-    // workspaces — de-duplicated, current roots first so they stay near the top.
-    // why: opening Zed's DB (busy timeout 5 s) in a memo blocks the UI; read
-    // it in the background and keep the previous list until it lands.
-    let mut recent_projects = use_signal(Vec::<PathBuf>::new);
-    let mut recent_projects_generation = use_signal(app_state::generation::Generation::default);
+    // Derived: project-switch candidates (`recent_projects` owns the rules).
+    // why: opening Zed's DB (busy timeout 5 s) and statting every candidate in a
+    // memo blocks the UI; build the list in the background, refreshed when the
+    // menu opens, and keep the previous one until it lands.
+    let mut zed_recent = use_signal(Vec::<(PathBuf, Option<u64>)>::new);
+    let mut proj_candidates = use_signal(Vec::<crate::recent_projects::Candidate>::new);
+    let mut proj_candidates_generation = use_signal(app_state::generation::Generation::default);
     use_effect(move || {
-        let _ = roots.read();
-        let _ = project_tabs.read();
-        let _ = project_aliases.read();
-        let _ = project_menu_hidden.read();
-        let generation = recent_projects_generation.write().advance();
+        let current = roots();
+        let parked: Vec<PathBuf> = project_tabs.read().roots().cloned().collect();
+        let aliased: Vec<PathBuf> = project_aliases
+            .read()
+            .iter()
+            .map(|a| a.path.clone())
+            .collect();
+        let hidden = project_menu_hidden();
+        let worktree = worktree_switch();
+        if !proj_menu_open() && !proj_candidates.peek().is_empty() {
+            return;
+        }
+        // why: history changes on every file read, so it is sampled, not
+        // subscribed to; the next menu open picks up whatever changed.
+        let opened: HashMap<PathBuf, u64> = history
+            .peek()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.last_opened_at))
+            .collect();
+        let previous_zed = zed_recent.peek().clone();
+        let generation = proj_candidates_generation.write().advance();
         spawn(async move {
-            let result = tokio::task::spawn_blocking(|| {
-                zed::default_zed_db_path()
+            let result = tokio::task::spawn_blocking(move || {
+                let fresh = zed::default_zed_db_path()
                     .map(|db| zed::recent_workspaces(&db))
-                    .unwrap_or_default()
+                    .unwrap_or_default();
+                // An empty list can't be told apart from a failed DB read,
+                // so it never wipes a list we already have.
+                let zed = if fresh.is_empty() {
+                    previous_zed
+                } else {
+                    fresh
+                };
+                let list = crate::recent_projects::collect(
+                    &crate::recent_projects::Sources {
+                        current: &current,
+                        parked: &parked,
+                        zed: &zed,
+                        aliased: &aliased,
+                        hidden: &hidden,
+                        opened: &opened,
+                        worktree,
+                    },
+                    &|p| p.is_dir(),
+                    &crate::worktrees::main_root_of,
+                );
+                (zed, list)
             })
             .await;
-            if !recent_projects_generation.read().is_current(generation) {
+            if !proj_candidates_generation.read().is_current(generation) {
                 return;
             }
             match result {
-                // An empty list can't be told apart from a failed DB read,
-                // so it never wipes a list we already have.
-                Ok(recent) if recent.is_empty() && !recent_projects.peek().is_empty() => {}
-                Ok(recent) => recent_projects.set(recent),
-                Err(err) => logging::app(format!("zed recent workspaces: {err}")),
+                Ok((zed, list)) => {
+                    zed_recent.set(zed);
+                    proj_candidates.set(list);
+                }
+                Err(err) => logging::app(format!("project candidates: {err}")),
             }
         });
     });
-    let proj_candidates = use_memo(move || {
-        let mut out: Vec<PathBuf> = Vec::new();
-        let mut push = |p: PathBuf| {
-            if !out.contains(&p) {
-                out.push(p);
-            }
-        };
-        for r in roots() {
-            push(r);
-        }
-        for r in project_tabs.read().roots() {
-            push(r.clone());
-        }
-        for r in recent_projects() {
-            push(r);
-        }
-        // Aliased projects are always listed: naming a folder is an explicit
-        // "I want to reach this", and it may not be in Zed's recents or in this
-        // session's history yet.
-        for a in project_aliases() {
-            if a.path.is_dir() {
-                push(a.path);
-            }
-        }
-        // Hidden entries are a local overlay (Zed's recents can't be edited
-        // from here). The current project stays visible so the ✓ row remains.
-        let hidden = project_menu_hidden();
-        let current = root();
-        out.retain(|p| current.as_ref() == Some(p) || !hidden.contains(p));
-        out
+    // Rows actually offered: an empty query lists recent projects only, a typed
+    // one reaches every candidate.
+    let proj_rows = use_memo(move || {
+        let mut exempt = roots();
+        exempt.extend(project_aliases().iter().map(|a| a.path.clone()));
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        crate::recent_projects::visible(
+            &proj_candidates(),
+            &exempt,
+            proj_menu_query().trim().is_empty(),
+            now,
+        )
     });
 
     // Unread files, newest first, trimmed to the toolbar popover's 20 rows;
@@ -3402,12 +3426,12 @@ pub(crate) fn App() -> Element {
                     ProjectMenu {
                         open: proj_menu_open,
                         query: proj_menu_query,
-                        candidates: proj_candidates(),
+                        candidates: proj_rows(),
                         current: root(),
                         aliases: project_aliases,
-                        last_opened: history()
-                            .iter()
-                            .map(|(k, v)| (k.clone(), v.last_opened_at))
+                        last_opened: proj_candidates()
+                            .into_iter()
+                            .map(|c| (c.path, c.last_used.unwrap_or(0)))
                             .collect::<HashMap<_, _>>(),
                         on_hide: move |p: PathBuf| {
                             let mut h = project_menu_hidden.write();

@@ -91,14 +91,12 @@ fn query_latest_project(conn: &Connection) -> Result<Option<ActiveProject>> {
     }
 }
 
-/// Recent Zed workspace roots, most-recently-used first, de-duplicated.
-///
-/// Reads up to 30 of the newest `workspaces` rows (by string timestamp) and
-/// splits each multi-root `paths` column via [`parse_roots`], preserving order
-/// while dropping repeats. Read-only connection. Errors yield an empty list so
-/// the caller (the project-switch dropdown) degrades gracefully.
+/// Recent Zed workspace roots, newest first and de-duplicated (so each keeps
+/// its newest timestamp, Unix seconds). Errors yield an empty list.
+/// why: Zed writes UTC `YYYY-MM-DD HH:MM:SS`; the switcher prunes stale rows
+/// itself, so the cap only bounds the read.
 #[allow(dead_code)] // Used by the mzed bin, not the zed_watch bin.
-pub fn recent_workspaces(db_path: &Path) -> Vec<PathBuf> {
+pub fn recent_workspaces(db_path: &Path) -> Vec<(PathBuf, Option<u64>)> {
     let Ok(conn) = Connection::open_with_flags(
         db_path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -106,20 +104,23 @@ pub fn recent_workspaces(db_path: &Path) -> Vec<PathBuf> {
         return Vec::new();
     };
     let Ok(mut stmt) = conn.prepare(
-        "SELECT paths FROM workspaces \
+        "SELECT paths, CAST(strftime('%s', timestamp) AS INTEGER) FROM workspaces \
          WHERE paths IS NOT NULL AND paths != '' \
-         ORDER BY timestamp DESC LIMIT 30",
+         ORDER BY timestamp DESC LIMIT 200",
     ) else {
         return Vec::new();
     };
-    let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) else {
+    let Ok(rows) = stmt.query_map([], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(1)?))
+    }) else {
         return Vec::new();
     };
-    let mut out: Vec<PathBuf> = Vec::new();
-    for paths in rows.flatten() {
+    let mut out: Vec<(PathBuf, Option<u64>)> = Vec::new();
+    for (paths, at) in rows.flatten() {
+        let at = at.and_then(|t| u64::try_from(t).ok());
         for root in parse_roots(&paths) {
-            if !out.contains(&root) {
-                out.push(root);
+            if !out.iter().any(|(r, _)| *r == root) {
+                out.push((root, at));
             }
         }
     }
@@ -370,12 +371,39 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let db = dir.path().join("db.sqlite");
             make_db(&db);
+            let paths: Vec<PathBuf> = recent_workspaces(&db).into_iter().map(|(p, _)| p).collect();
             assert_eq!(
-                recent_workspaces(&db),
+                paths,
                 vec![
                     PathBuf::from("/Users/me/new"),
                     PathBuf::from("/Users/me/mid"),
                     PathBuf::from("/Users/me/old"),
+                ]
+            );
+        }
+
+        #[test]
+        fn timestampはUTCのUnix秒_読めなければNone() {
+            let dir = tempfile::tempdir().unwrap();
+            let db = dir.path().join("db.sqlite");
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch(indoc! {r#"
+                CREATE TABLE workspaces (
+                    workspace_id INTEGER PRIMARY KEY,
+                    paths TEXT,
+                    timestamp TEXT NOT NULL
+                );
+                INSERT INTO workspaces (workspace_id, paths, timestamp) VALUES
+                    (1, '/a', '2026-06-23 10:00:00'),
+                    (2, '/b', 'garbage');
+            "#})
+                .unwrap();
+            // Rows sort as strings, so 'garbage' comes first.
+            assert_eq!(
+                recent_workspaces(&db),
+                vec![
+                    (PathBuf::from("/b"), None),
+                    (PathBuf::from("/a"), Some(1_782_208_800)),
                 ]
             );
         }
@@ -396,13 +424,15 @@ mod tests {
                     (2, '/b' || char(10) || '/c', '2026-06-22 10:00:00');
             "#})
                 .unwrap();
-            // /b は最初の行で既出なので 2 行目では除外。
+            // /b は最初の行で既出なので 2 行目では除外され、新しい方の時刻を持つ。
+            let newer = Some(1_782_208_800);
+            let older = Some(1_782_122_400);
             assert_eq!(
                 recent_workspaces(&db),
                 vec![
-                    PathBuf::from("/a"),
-                    PathBuf::from("/b"),
-                    PathBuf::from("/c"),
+                    (PathBuf::from("/a"), newer),
+                    (PathBuf::from("/b"), newer),
+                    (PathBuf::from("/c"), older),
                 ]
             );
         }
