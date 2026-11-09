@@ -17,7 +17,7 @@ It detects the project open in Zed (the editor) or Orca (a worktree manager) and
 
 *A 27-second feature tour. Click to play it with music. The UI is illustrative, not a screen recording.*
 
-## What it does
+## Features
 
 - **Follows your editor.** Switch projects in Zed or Orca and the docs on screen switch too. Opening a git worktree shows its parent repository, with each worktree's Markdown merged into that tree.
 - **Renders like GitHub.** Mermaid, KaTeX, syntax highlighting, GitHub Alerts, and frontmatter. Saving a file re-renders it at once.
@@ -29,9 +29,16 @@ It detects the project open in Zed (the editor) or Orca (a worktree manager) and
 
 There are also tabs and a split pane, a table of contents, a command palette, fuzzy file search, full-text search, Task View, HTML / PDF export, and a browser view (`mzed serve`).
 
-## Installation
+## Requirements
 
 Runs on Apple Silicon Macs.
+
+| What | Used for |
+| --- | --- |
+| Zed or Orca (optional) | Following the project you have open. Without them, `mzed file.md` and `mzed ./docs` still work |
+| The `mzed` agent skill (optional) | Exchanging pins and notes with agents |
+
+## Installation
 
 This command fetches the latest release into `/Applications`, removes the quarantine attribute, and creates the CLI symlink. Run it again to update.
 
@@ -85,6 +92,13 @@ When mzed is already running, later commands go to its window.
 
 Key bindings can be changed in settings.
 
+| When | Do this |
+| --- | --- |
+| You want to read Markdown an agent wrote in another session | Have the agent hand it over with `mzed --pin` (the `mzed` skill) |
+| You want to show docs in a browser while screen sharing | `mzed serve ./docs` |
+| You want the view to stay put while you switch editors | Lock following with `Cmd+Shift+L` |
+| `Cmd+O` lists projects you no longer use | Hide them with the ✕ on the row (restorable in settings) |
+
 ## Settings
 
 `Cmd+,` opens settings. They are saved to `~/.config/mzed/config.json`.
@@ -99,6 +113,14 @@ Key bindings can be changed in settings.
 | Never unread (`unread_exclude`) | File names, folder names, or paths that never get the green dot |
 
 Every setting is in the [settings spec](docs/specs/10-settings-and-context-menu.md) (Japanese).
+
+## Limitations
+
+- mzed does not edit Markdown. It is a viewer.
+- It follows only Zed and Orca.
+- Pages opened with `mzed serve` cannot take notes.
+- For safety, HTML tags outside the allowlist (`iframe`, `svg`, `style`, and others) are not rendered.
+- The app is not signed by Apple, so the quarantine attribute must be removed once.
 
 ## Development
 

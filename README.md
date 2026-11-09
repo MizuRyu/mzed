@@ -17,7 +17,7 @@ English version: [README.en.md](README.en.md)
 
 *機能を紹介する27秒の動画です。クリックすると音楽付きで再生します。画面は合成したイメージで、実機の録画ではありません。*
 
-## できること
+## 特徴
 
 - **エディタに追従して docs を表示する。** Zed や Orca でプロジェクトを切り替えると、表示中の docs も切り替わります。git worktree を開いたときは親のリポジトリを表示し、各 worktree の md をそのツリーに重ねて見せます。
 - **GitHub と同じ見た目で読む。** Mermaid、KaTeX、シンタックスハイライト、GitHub Alerts、frontmatter を描画します。保存すると即座に再描画します。
@@ -29,9 +29,16 @@ English version: [README.en.md](README.en.md)
 
 ほかに、タブと左右分割、目次、コマンドパレット、ファジー検索、全文検索、Task View、HTML / PDF へのエクスポート、ブラウザでの表示（`mzed serve`）があります。
 
-## インストール
+## 動作環境
 
 Apple Silicon の Mac で使えます。
+
+| 必要なもの | 用途 |
+| --- | --- |
+| Zed か Orca（任意） | 開いているプロジェクトに docs を追従させる。無くても `mzed file.md` や `mzed ./docs` で開ける |
+| エージェント用スキル `mzed`（任意） | エージェントとのピンとメモのやりとり |
+
+## インストール
 
 次のコマンドで最新版を取得して `/Applications` に配置し、quarantine 属性の解除と CLI の symlink 作成まで行います。更新にも同じコマンドを使います。
 
@@ -85,6 +92,13 @@ mzed serve ./docs  # フォルダをブラウザで表示（127.0.0.1 のみ。�
 
 キーバインドは設定画面で変更できます。
 
+| こんなとき | こうする |
+| --- | --- |
+| 別のセッションのエージェントが書いた md を読みたい | エージェントに `mzed --pin` で渡させる（スキル `mzed`） |
+| 画面共有でブラウザに見せたい | `mzed serve ./docs` |
+| エディタを切り替えても表示を変えたくない | `Cmd+Shift+L` で追従を固定する |
+| `Cmd+O` に使わないプロジェクトが残る | 候補の行の ✕ で隠す（設定から戻せる） |
+
 ## 設定
 
 `Cmd+,` で設定画面を開きます。内容は `~/.config/mzed/config.json` に保存されます。
@@ -99,6 +113,14 @@ mzed serve ./docs  # フォルダをブラウザで表示（127.0.0.1 のみ。�
 | 未読にしないファイル・フォルダ（`unread_exclude`） | 緑の丸を付けないファイル名・フォルダ名・パス |
 
 すべての項目は [設定の仕様](docs/specs/10-settings-and-context-menu.md) にあります。
+
+## できないこと
+
+- md の編集はしません。読むためのビューアです。
+- Zed と Orca 以外のエディタには追従しません。
+- `mzed serve` で開いたページにはメモを残せません。
+- 安全のため、許可していない HTML タグ（`iframe`、`svg`、`style` など）は描画しません。
+- Apple の署名をしていないため、初回は quarantine 属性の解除が要ります。
 
 ## 開発
 
@@ -119,7 +141,7 @@ just bundle
 - [mo](https://github.com/k1LoW/mo) — Markdown をブラウザで見せるビューア。`mzed serve` はこの用途を mzed に取り込んだものです
 - [Arto](https://github.com/arto-app/Arto) — ファイルをドロップしてすぐ表示する体験
 
-## License
+## ライセンス
 
 [MIT](LICENSE)
 
