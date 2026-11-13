@@ -21,6 +21,7 @@ mod serve;
 mod services;
 mod session;
 mod sync;
+mod t3code;
 mod tabs;
 mod theme;
 mod ui;

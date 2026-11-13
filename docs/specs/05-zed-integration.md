@@ -1,7 +1,7 @@
-# 05 - プロジェクト連動（Zed / Orca）
+# 05 - プロジェクト連動（Zed / Orca / T3 Code）
 
-mzed の中核。**Zed** と **Orca** のプロジェクト切り替えを検知し、対応する docs を切り替える。
-どちらに追従するかは `sync_source`（→ 末尾「Orca 連動」）で決める。既定は `auto`（両方を見て、最後に切り替えた方に追従）。
+mzed の中核。**Zed**・**Orca**・**T3 Code** のプロジェクト切り替えを検知し、対応する docs を切り替える。
+どれに追従するかは `sync_source`（→「Orca 連動」の「追従元」）で決める。既定は `auto`（すべてを見て、最後に切り替えたものに追従）。
 
 ## Zed の状態保存先
 
@@ -231,35 +231,36 @@ Orca はファイルを置き換えて書くので、監視対象はファイル
 
 | 値 | 挙動 |
 |---|---|
-| `auto` | Zed と Orca の両方を購読し、イベントが来た順に追従する |
-| `zed` | Zed のイベントだけ採用（Orca は無視） |
-| `orca` | Orca のイベントだけ採用（Zed は無視） |
+| `auto` | Zed・Orca・T3 Code のすべてを購読し、イベントが来た順に追従する |
+| `zed` | Zed のイベントだけ採用（ほかは無視） |
+| `orca` | Orca のイベントだけ採用（ほかは無視） |
+| `t3code` | T3 Code のイベントだけ採用（ほかは無視。→「T3 Code 連動」） |
 
-複数のイベントが処理前に溜まっていた場合（起動直後は両ウォッチャが現在値を報告する）は、1 回の切替に畳み込む。規則は 2 つだけ。
+複数のイベントが処理前に溜まっていた場合（起動直後は各ウォッチャが現在値を報告する）は、1 回の切替に畳み込む。規則は 2 つだけ。
 
 1. アクティブプロジェクトが無いイベント（`None`）は切替先を持たないので**候補から外す**。
 2. 残った中から**到着順で最後のもの**を採る。
 
 **ソースによる優先は設けない**。片方を常に優先すると `Zed(A) → Orca(B) → Zed(C)` で C が捨てられ、`Zed(Some) → Orca(None)` では正常な Zed の切替まで失われる。「最後に操作した方に追従する」という `auto` の定義そのものが規則になる。判定は `src/sync.rs` の `accepts` / `admit` / `admit_burst`（pure、ユニットテスト済み）。
 
-例外は各ウォッチャの**初回報告**（起動時に見つけた現在値。ユーザーの操作ではない）だけで、これは到着順に依らず Zed が勝つ。Orca 以前の mzed は Zed だけを追っていたので、起動時に別の場所へ着地するのは退行に見えるため。
+例外は各ウォッチャの**初回報告**（起動時に見つけた現在値。ユーザーの操作ではない）だけで、これは到着順に依らず Zed が勝つ。Orca・T3 Code 以前の mzed は Zed だけを追っていたので、起動時に別の場所へ着地するのは退行に見えるため。Orca と T3 Code の初回報告どうしは、先に着いた方が残る。
 
 初回報告はイベントに `initial: true` として乗る（`watch_service` が各スレッドの最初のコールバックにだけ付ける）。app 側は「今どこに着地しているか」を `Landing`（`Nothing` / `Startup(origin)` / `Switch`）で持ち、`sync.rs` の `admit` が 1 件ずつ判定する。
 
-| 着地状態 | `initial: false`（実際の切替） | Zed の初回報告 | Orca の初回報告 |
+| 着地状態 | `initial: false`（実際の切替） | Zed の初回報告 | Orca / T3 Code の初回報告 |
 |---|---|---|---|
 | `Nothing` | 適用 | 適用 | 適用 |
-| `Startup(Orca)` | 適用 | 適用（Zed が勝つ） | — |
+| `Startup(Orca)` / `Startup(T3Code)` | 適用 | 適用（Zed が勝つ） | 無視 |
 | `Startup(Zed)` | 適用 | — | 無視 |
 | `Switch` | 適用 | 無視 | 無視 |
 
-これで 2 つの初回報告が同じバーストに揃うかどうかに関係なく着地が決まる（実測では別々の wake-up に分かれる）。遅れて届いた初回報告が、その間にユーザーがした切替を巻き戻すこともない。
+これで初回報告が同じバーストに揃うかどうかに関係なく着地が決まる（実測では別々の wake-up に分かれる）。遅れて届いた初回報告が、その間にユーザーがした切替を巻き戻すこともない。
 
-`sync_mode`（auto / self / off）は上位ポリシーとして両ソースに等しくかかる。`off` なら Orca の切替も無視し、`self` なら root だけ更新する。
+`sync_mode`（auto / self / off）は上位ポリシーとしてすべてのソースに等しくかかる。`off` なら Orca・T3 Code の切替も無視し、`self` なら root だけ更新する。
 
-`worktree_switch: skip` は **Zed 由来のイベントにだけ**適用する。Orca は worktree 管理アプリで、その切替は定義上 worktree 切替なので、スキップすると Orca 連動そのものが機能しなくなる。`main` は Orca 由来にも適用する（Orca で worktree に移ると mzed は親リポジトリを表示する）。
+`worktree_switch: skip` は **Zed 由来のイベントにだけ**適用する。Orca と T3 Code は worktree を管理するアプリで、その切替の大半は worktree 切替なので、スキップすると連動そのものが機能しなくなる。`main` は Orca・T3 Code 由来にも適用する（worktree に移ると mzed は親リポジトリを表示する）。
 
-スキップ判定は畳み込みの**前**に行い、対象の Zed イベントはバーストから取り除く。畳み込みの後に判定すると、捨てるはずの Zed イベントが着地を確定させ、同じバーストに居た有効な Orca イベントまで消えてしまう（起動時も、スキップされた Zed の初回報告が Orca の初回報告を拒否してしまう）。`sync_source` による絞り込みも同じ理由で畳み込みの前に置く。`main` の付け替えは逆に畳み込みの**後**（切替が 1 つに決まってから）で、イベントの取捨には関与しない。
+スキップ判定は畳み込みの**前**に行い、対象の Zed イベントはバーストから取り除く。畳み込みの後に判定すると、捨てるはずの Zed イベントが着地を確定させ、同じバーストに居た有効な Orca / T3 Code イベントまで消えてしまう（起動時も、スキップされた Zed の初回報告がほかの初回報告を拒否してしまう）。`sync_source` による絞り込みも同じ理由で畳み込みの前に置く。`main` の付け替えは逆に畳み込みの**後**（切替が 1 つに決まってから）で、イベントの取捨には関与しない。
 
 ### エッジケース
 
@@ -284,6 +285,81 @@ orca: cannot read <path>; keeping current project
 orca: <path> is not valid JSON (mid-write?); keeping current project
 orca: no active worktree in <path>; keeping current project
 orca: reading <path>
+```
+
+## T3 Code 連動
+
+T3 Code（エージェントのスレッド管理アプリ）で**最後に開いたスレッドの作業ディレクトリ**に追従する。Zed の「フォーカス中のワークスペース」、Orca の「アクティブな worktree」と同じく、「今見ているプロジェクト」の報告として扱う。追従元の選択・起動時の着地・`worktree_switch` の扱いは「Orca 連動」の「追従元」に書いたとおり。
+
+### 状態保存先
+
+```
+~/.t3/userdata/statev2.sqlite   （WAL）
+```
+
+> **未文書化依存**。T3 Code の公開 API ではなく内部 DB であり、2026-11-13（v0.1.6、ベータ）に実機で確認した形を読んでいる。T3 Code 側の変更で壊れうるので、表・列・JSON キーの欠落はすべて「変化なし」に倒す（エラーをユーザーに出さない）。
+
+読み取り専用（`SQLITE_OPEN_READ_ONLY`）で開き、書き込みは一切しない。
+環境変数 `MZED_T3_DB` でパスを差し替えられる（**手動検証用**。T3 Code の実ファイルではなくコピーに対して検証する）。
+
+### 読むもの
+
+T3 Code は表示中のスレッドを保存しない。代わりに、スレッドを開いたときと、開いているスレッドが新しい出力に追いついたとき（約 10 秒の間引き、ターン完了時は即時）に、イベントログへ `thread.visited` を書く。この**最新の 1 件**を「最後に開いたスレッド」とみなす。
+
+| 対象 | 使い方 |
+|---|---|
+| `orchestration_events` の `event_type = 'thread.visited'` の行 | `sequence` 最大のものが最後に開いたスレッド。`payload_json` にスレッドの全体が入っている |
+| `payload_json.worktreePath` | スレッドの作業ディレクトリ。`null`（worktree を使わないスレッド）なら次の行 |
+| `payload_json.projectId` → `projection_projects.workspace_root` | worktree を使わないスレッドの作業ディレクトリ |
+
+実機で確かめた visit の出方:
+
+- スレッドを開いた瞬間に 1 件出る。既読で動きのないスレッドでも出る
+- 開いていないスレッドには出ない
+
+使わないもの:
+
+- スレッドの `lastVisitedAt` の並び: 中身は「開いた時刻」ではなく、開いたときのスレッドの `updatedAt`。新しく見た順にならない
+- スレッドの `updated_at` の並び: エージェントの活動でも動く（Zed の `timestamp` と同じ罠）
+- trace ログ・Local Storage・ウィンドウタイトル: 表示中のスレッドが確実には残らない
+
+### 検知方式
+
+Orca と同じ notify + 1500ms ポーリングのハイブリッド。監視対象は DB のある**ディレクトリ**（DB 本体と WAL の両方を拾うため）。
+
+- DB 本体と WAL の mtime がどちらも動いていなければ問い合わせない
+- 問い合わせは前回読んだ `sequence` より新しい行だけを見る。`event_type` にはインデックスが無いが、`sequence` が rowid なので範囲指定で未読の行だけを走査できる（実 DB で 1 回 10ms 未満）
+- パスは `canonicalize` で正規化する。T3 Code の DB には同じホームディレクトリが大文字小文字違いで混在しており、mzed は roots をバイト列で比較するため
+- 変化判定は**解決後のパスのみ**で行う。開いているスレッドには約 10 秒おきに visit が来るので、同じパスなら報告しない
+
+### エッジケース
+
+| ケース | 挙動 |
+|---|---|
+| DB が無い（T3 Code 未インストール / 未起動） | 1500ms ごとに出現を待ち続ける（`stat` のみ）。T3 Code を後から入れても mzed の再起動は要らない |
+| 表・列が無い（T3 Code 側の形式変更） | 前回値を維持。次のポーリングで読み直す |
+| DB が開けない・読めない（ロック中など） | 前回値を維持。次のポーリングで読み直す |
+| 作業ディレクトリが存在しない（消えた worktree、別マシンのパス）・相対パス・プロジェクト不明 | そのイベントは採らず前回値を維持 |
+| `sequence` が前回より小さい（DB を作り直した） | 先頭から読み直す |
+
+### 既知の制限
+
+- 別の端末（スマホなど）から開いたスレッドにも追従する。visit にクライアントの区別が無い
+- 分割表示で 2 つのスレッドを同時に出したときの挙動は未確認
+- T3 Code → Zed → T3 Code で同じスレッドに戻っても追従し直さない（パスが変わらないと報告しないため。Orca と同じ）
+- Cmd+O の切り替え先の候補には T3 Code のプロジェクトを出さない（Orca と同じ）
+
+### ログ
+
+Orca と同じく、**状態が変わったときだけ**記録する。
+
+```
+t3code: no state db found; waiting for one to appear
+t3code: cannot watch <dir>: <err>
+t3code: cannot read <path>; keeping current project
+t3code: unexpected schema in <path>; keeping current project
+t3code: the last visited thread is not in a directory here (<path>); keeping current project
+t3code: reading <path>
 ```
 
 ## 状態保持

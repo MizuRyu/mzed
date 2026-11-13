@@ -1,7 +1,7 @@
 ---
 name: mzed-setup
 description: >
-  mzed（プロジェクト連動（Zed / Orca）Markdownビューア）のインストール・設定変更・キーバインド変更・
+  mzed（プロジェクト連動（Zed / Orca / T3 Code）Markdownビューア）のインストール・設定変更・キーバインド変更・
   トラブルシュートを頼まれたときに使う。ビルド・デプロイ手順、config.json の
   全フィールド、キーバインドの形式、セッションリセット方法を網羅している。
 ---
@@ -58,25 +58,26 @@ ln -s "$PWD/agents/skills/mzed" ~/.claude/skills/mzed
 `src/cli.rs` が `clap` で定義。
 
 ```
-mzed [PATH...] [--sync <auto|self|off>] [--sync-source <auto|zed|orca>]
+mzed [PATH...] [--sync <auto|self|off>] [--sync-source <auto|zed|orca|t3code>]
 mzed --pin FILE...
 mzed serve [DIR] [-p PORT] [--no-open]
 ```
 
 | 引数 | 説明 |
 |------|------|
-| `PATH`（複数可） | 開くファイルまたはディレクトリ。省略時はプロジェクト連動（Zed / Orca）モードで起動 |
+| `PATH`（複数可） | 開くファイルまたはディレクトリ。省略時はプロジェクト連動（Zed / Orca / T3 Code）モードで起動 |
 | `--sync auto` | Zed の focused project を完全追従（デフォルト） |
 | `--sync self` | sidebar root は追従するがアクティブタブは奪わない |
-| `--sync off` | Zed / Orca を無視して独立動作 |
-| `--sync-source auto` | Zed と Orca の両方に追従（デフォルト。最後に切り替えた方に追う） |
+| `--sync off` | Zed / Orca / T3 Code を無視して独立動作 |
+| `--sync-source auto` | Zed・Orca・T3 Code のすべてに追従（デフォルト。最後に切り替えたものに追う） |
 | `--sync-source zed` | Zed のプロジェクト切替だけに追従 |
 | `--sync-source orca` | Orca の worktree 切替だけに追従 |
+| `--sync-source t3code` | T3 Code で開いたスレッドだけに追従 |
 | `--pin FILE...` | md をタブで開かず、サイドバー上部の「ピン」欄に登録する（起動中の mzed へ IPC で即反映。未起動なら起動して登録）。消えるタイミングは config `pin_expiry`。保存先 `~/.config/mzed/pins.json` |
 | `serve [DIR]` | フォルダをブラウザで表示（127.0.0.1 固定・live-reload・画面共有向け）。既定ポート 6280、`--no-open` でブラウザ自動起動を抑止。フォアグラウンド実行で Ctrl+C 停止。GUI・IPC を通らない headless 経路 |
 
 **パス解決ルール**:
-- 引数なし → プロジェクト連動（Zed / Orca）（Target::Zed）
+- 引数なし → プロジェクト連動（Zed / Orca / T3 Code）（Target::Zed）
 - ディレクトリ 1 つ → そのディレクトリをプロジェクトルートに（Target::Dir）
 - ファイル複数（ディレクトリ混在時はファイルのみ抽出）→ タブで開く（Target::Files）
 
@@ -101,7 +102,7 @@ mzed serve [DIR] [-p PORT] [--no-open]
 |-----------|-----|-----------|------|
 | `theme` | `"light"` \| `"dark"` \| `"system"` | `"system"` | 表示テーマ |
 | `sync_mode` | `"auto"` \| `"self"` \| `"off"` | `"auto"` | プロジェクト連動ポリシー |
-| `sync_source` | `"auto"` \| `"zed"` \| `"orca"` | `"auto"` | 追従元。`auto` は Zed と Orca の両方を購読し、最後に切り替えた方に追従（ソースによる優先は無い）。起動時の着地だけは Zed 優先。プロジェクト連動タブで選択。Orca が無い環境では Zed のみに追従する（設定不要） |
+| `sync_source` | `"auto"` \| `"zed"` \| `"orca"` \| `"t3code"` | `"auto"` | 追従元。`auto` は Zed・Orca・T3 Code のすべてを購読し、最後に切り替えたものに追従（ソースによる優先は無い）。起動時の着地だけは Zed 優先。プロジェクト連動タブで選択。入っていないアプリは無視されるので設定不要 |
 | `zoom` | float | `1.0` | Markdown 本文の表示倍率（0.5 〜 2.0、0.1 刻み） |
 | `startup` | `"restore"` \| `"docs"` \| `"blank"` | `"restore"` | 起動時の動作（前回セッション復元 / Zed の docs 表示 / 空） |
 | `favorites` | `["/path", ...]` | `[]` | Quick Access ブックマーク（ファイル・ディレクトリ） |
@@ -154,7 +155,7 @@ mzed serve [DIR] [-p PORT] [--no-open]
 
 | 値 | 挙動 | 効く経路 |
 |----|------|---------|
-| `"main"` | `.git` ファイルから親 checkout を引いて**親リポジトリを開く**。worktree 側の md はオーバーレイで親のツリーに合成される | プロジェクトの新規オープン経路すべて（Zed / Orca / CLI / D&D / Cmd+O / お気に入り）。セッション復元・単一ファイルのオープンは対象外 |
+| `"main"` | `.git` ファイルから親 checkout を引いて**親リポジトリを開く**。worktree 側の md はオーバーレイで親のツリーに合成される | プロジェクトの新規オープン経路すべて（Zed / Orca / T3 Code / CLI / D&D / Cmd+O / お気に入り）。セッション復元・単一ファイルのオープンは対象外 |
 | `"skip"` | 切替を無視して現在の表示を維持 | Zed 由来のみ（明示操作は制限しない） |
 | `"follow"` | worktree をそのまま開く | — |
 
@@ -176,6 +177,25 @@ Orca の状態ファイル `~/Library/Application Support/orca/profiles/<profile
 | `cannot watch <dir>: <err>` | 監視の開始に失敗（親ディレクトリ不在など） |
 | `cannot read <path>` / `is not valid JSON` | 一時的な読み取り・パース失敗。前回のプロジェクトを維持して次のポーリングで再試行 |
 | `no active worktree in <path>` | パースできたが期待キーが無い。Orca 側の形式変更を疑う |
+| `reading <path>` | 正常に読めている（復帰時にも出る） |
+
+### T3 Code 連動（`src/t3code.rs`）
+
+T3 Code の内部 DB `~/.t3/userdata/statev2.sqlite` から最新の `thread.visited` イベントを読み、最後に開いたスレッドの作業ディレクトリ（`worktreePath`、無ければプロジェクトのルート）に追従する。**T3 Code の未文書化内部 DB** なので、不在・形式違いはすべて無視して前回の表示を維持する。詳細は `docs/specs/05-zed-integration.md` の「T3 Code 連動」。
+
+DB が無ければ 1500ms ごとに出現を待つので、mzed 起動後に T3 Code を入れても再起動は要らない。
+
+環境変数 `MZED_T3_DB` で読み取り先を差し替えられる（手動検証用）。T3 Code の実ファイルは**絶対に編集しない** — 検証はコピー（`statev2.sqlite*` の 3 ファイル）に対して行う。
+
+追従しないときは `~/Library/Logs/mzed/mzed.log` の `t3code:` 行を見る（状態が変わったときだけ記録される）。
+
+| 行 | 意味 |
+|---|---|
+| `no state db found; waiting for one to appear` | DB が見つからない（T3 Code 未インストール / 未起動） |
+| `cannot watch <dir>: <err>` | 監視の開始に失敗（親ディレクトリ不在など） |
+| `cannot read <path>` | 一時的に開けない・読めない（ロック中など）。前回のプロジェクトを維持して次のポーリングで再試行 |
+| `unexpected schema in <path>` | 期待する表が無い。T3 Code 側の形式変更を疑う |
+| `the last visited thread is not in a directory here (<path>)` | 最後に開いたスレッドの作業ディレクトリがこのマシンに無い（消えた worktree、別マシンのスレッド） |
 | `reading <path>` | 正常に読めている（復帰時にも出る） |
 
 ---
@@ -292,15 +312,22 @@ xattr -dr com.apple.quarantine /Applications/mzed.app
 
 1. `config.json` の `sync_mode` が `"off"` または `"self"` になっていないか確認
 2. CLI 起動時に `--sync off` を渡していないか確認
-3. `sync_source` が追従したいアプリ以外に固定されていないか確認（`"auto"` なら両方）
+3. `sync_source` が追従したいアプリ以外に固定されていないか確認（`"auto"` ならすべて）
 3. `just watch`（`cargo run --bin zed_watch`）で Zed watch プロセスが動いているか確認
 4. 詳細は `src/zed.rs` と `src/watcher.rs` を参照
 
 ### Orca の切替に追従しない
 
-1. `~/.config/mzed/config.json` の `sync_mode` が `"off"` になっていないか、`sync_source` が `"zed"` に固定されていないか確認
+1. `~/.config/mzed/config.json` の `sync_mode` が `"off"` になっていないか、`sync_source` が `"orca"` 以外に固定されていないか確認
 2. `~/Library/Application Support/orca/profiles/*/orca-data.json` が存在するか確認（無ければ Orca 未インストール / 未起動）
 3. `~/Library/Logs/mzed/mzed.log` に `orca:` で始まる行があるか確認（状態が変わったときだけ記録される）
+
+### T3 Code の切替に追従しない
+
+1. `~/.config/mzed/config.json` の `sync_mode` が `"off"` になっていないか、`sync_source` が `"t3code"` 以外に固定されていないか確認
+2. `~/.t3/userdata/statev2.sqlite` が存在するか確認（無ければ T3 Code 未インストール / 未起動）
+3. `~/Library/Logs/mzed/mzed.log` の `t3code:` で始まる行を確認（上の表）
+4. 別の端末で開いたスレッドにも追従する仕様なので、意図しない切替はスマホなどの T3 Code を疑う
 
 ### 設定を書き換えたのに反映されない
 

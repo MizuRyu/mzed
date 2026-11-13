@@ -980,14 +980,16 @@ pub(crate) fn Settings(
                                             let next = match e.value().as_str() {
                                                 "zed" => sync::SyncSource::Zed,
                                                 "orca" => sync::SyncSource::Orca,
+                                                "t3code" => sync::SyncSource::T3Code,
                                                 _ => sync::SyncSource::Auto,
                                             };
                                             sync_source.set(next);
                                             persisted_sync_source.set(next);
                                         },
-                                        option { value: "auto", selected: cur_sync_source == sync::SyncSource::Auto, "自動 (Zed & Orca)" }
+                                        option { value: "auto", selected: cur_sync_source == sync::SyncSource::Auto, "自動 (Zed / Orca / T3 Code)" }
                                         option { value: "zed", selected: cur_sync_source == sync::SyncSource::Zed, "Zed" }
                                         option { value: "orca", selected: cur_sync_source == sync::SyncSource::Orca, "Orca" }
+                                        option { value: "t3code", selected: cur_sync_source == sync::SyncSource::T3Code, "T3 Code" }
                                     }
                                 }
                                 div {

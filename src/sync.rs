@@ -1,7 +1,8 @@
-//! Project-follow primitives shared by the Zed and Orca watchers (pure logic).
+//! Project-follow primitives shared by the Zed, Orca and T3 Code watchers (pure
+//! logic).
 //!
-//! Both watchers report the same thing — "the project the user is now looking
-//! at" — so [`ActiveProject`] lives here rather than in either watcher.
+//! Every watcher reports the same thing — "the project the user is now looking
+//! at" — so [`ActiveProject`] lives here rather than in any one watcher.
 //! [`SyncSource`] is the user's choice of *whom* to follow; `SyncMode` in
 //! `theme.rs` stays the upper-level policy of *how much* to follow.
 
@@ -42,6 +43,7 @@ pub fn parse_roots(paths: &str) -> Vec<PathBuf> {
 pub enum SyncOrigin {
     Zed,
     Orca,
+    T3Code,
 }
 
 /// One "the active project is now X" report, tagged with who said it.
@@ -73,15 +75,18 @@ pub enum SyncSource {
     Auto,
     Zed,
     Orca,
+    #[value(name = "t3code")]
+    T3Code,
 }
 
 impl SyncSource {
     /// Name of what is being followed, for toast/menu wording.
     pub fn label(self) -> &'static str {
         match self {
-            SyncSource::Auto => "Zed & Orca",
+            SyncSource::Auto => "Zed, Orca & T3 Code",
             SyncSource::Zed => "Zed",
             SyncSource::Orca => "Orca",
+            SyncSource::T3Code => "T3 Code",
         }
     }
 }
@@ -114,6 +119,7 @@ pub fn accepts(source: SyncSource, origin: SyncOrigin) -> bool {
         SyncSource::Auto => true,
         SyncSource::Zed => origin == SyncOrigin::Zed,
         SyncSource::Orca => origin == SyncOrigin::Orca,
+        SyncSource::T3Code => origin == SyncOrigin::T3Code,
     }
 }
 
@@ -121,12 +127,12 @@ pub fn accepts(source: SyncSource, origin: SyncOrigin) -> bool {
 /// landed on.
 ///
 /// A real switch always wins — it is the last thing the user did. A startup
-/// report is not a user action, and the two watchers race on startup (reading
-/// a JSON file against opening a SQLite DB), so their arrival order means
-/// nothing: Zed's report may still claim a landing that only Orca's report
-/// made, but never one a real switch made, and Orca's report only lands when
-/// nothing else has. mzed followed Zed alone before Orca existed, and starting
-/// up in some other project would read as a regression.
+/// report is not a user action, and the watchers race on startup (reading a
+/// JSON file against opening SQLite DBs), so their arrival order means nothing:
+/// Zed's report may still claim a landing that only another source's report
+/// made, but never one a real switch made, and the other sources' reports only
+/// land when nothing else has. mzed followed Zed alone before the others
+/// existed, and starting up in some other project would read as a regression.
 pub fn admit(landing: Landing, event: &SyncEvent) -> Option<Landing> {
     // No project means nothing to switch *to*; such an event must not mask a
     // real one or count as a landing.
@@ -134,17 +140,18 @@ pub fn admit(landing: Landing, event: &SyncEvent) -> Option<Landing> {
     if !event.initial {
         return Some(Landing::Switch);
     }
-    let allowed = matches!(
-        (landing, event.origin),
-        (Landing::Nothing, _) | (Landing::Startup(SyncOrigin::Orca), SyncOrigin::Zed)
-    );
+    let allowed = match (landing, event.origin) {
+        (Landing::Nothing, _) => true,
+        (Landing::Startup(landed), SyncOrigin::Zed) => landed != SyncOrigin::Zed,
+        _ => false,
+    };
     allowed.then_some(Landing::Startup(event.origin))
 }
 
 /// Whether this event is a Zed switch into a linked worktree that
-/// `worktree_switch: skip` drops. Orca is exempt — it is a worktree manager,
-/// so its switches are worktree switches by definition and skipping them would
-/// disable the follow entirely. `main` keeps the event instead, so
+/// `worktree_switch: skip` drops. Orca and T3 Code are exempt — they manage
+/// worktrees, so their switches are mostly worktree switches and skipping them
+/// would disable the follow entirely. `main` keeps the event instead, so
 /// `worktrees::redirect` can put the viewer on the parent checkout.
 ///
 /// `is_worktree` touches the disk, so it is asked at most once per Zed event.
@@ -225,18 +232,30 @@ mod tests {
         assert!(parse_roots("").is_empty());
     }
 
+    const ORIGINS: [SyncOrigin; 3] = [SyncOrigin::Zed, SyncOrigin::Orca, SyncOrigin::T3Code];
+
     #[test]
-    fn autoは両方のソースを受け入れる() {
-        assert!(accepts(SyncSource::Auto, SyncOrigin::Zed));
-        assert!(accepts(SyncSource::Auto, SyncOrigin::Orca));
+    fn autoは全てのソースを受け入れる() {
+        for origin in ORIGINS {
+            assert!(accepts(SyncSource::Auto, origin), "{origin:?}");
+        }
     }
 
     #[test]
-    fn 固定ソースは他方を拒否する() {
-        assert!(accepts(SyncSource::Zed, SyncOrigin::Zed));
-        assert!(!accepts(SyncSource::Zed, SyncOrigin::Orca));
-        assert!(accepts(SyncSource::Orca, SyncOrigin::Orca));
-        assert!(!accepts(SyncSource::Orca, SyncOrigin::Zed));
+    fn 固定ソースは他のソースを拒否する() {
+        for (source, own) in [
+            (SyncSource::Zed, SyncOrigin::Zed),
+            (SyncSource::Orca, SyncOrigin::Orca),
+            (SyncSource::T3Code, SyncOrigin::T3Code),
+        ] {
+            for origin in ORIGINS {
+                assert_eq!(
+                    accepts(source, origin),
+                    origin == own,
+                    "{source:?} / {origin:?}"
+                );
+            }
+        }
     }
 
     fn make(origin: SyncOrigin, paths: Option<&str>, initial: bool) -> SyncEvent {
@@ -379,6 +398,40 @@ mod tests {
     }
 
     #[test]
+    fn 起動報告はT3_CodeよりもZedが勝つ() {
+        for bursts in [
+            vec![
+                vec![startup(SyncOrigin::T3Code, Some("/t"))],
+                vec![startup(SyncOrigin::Zed, Some("/z"))],
+            ],
+            vec![vec![
+                startup(SyncOrigin::Zed, Some("/z")),
+                startup(SyncOrigin::T3Code, Some("/t")),
+            ]],
+        ] {
+            assert_eq!(landed(bursts), Some("/z".to_string()));
+        }
+    }
+
+    #[test]
+    fn Zed以外の起動報告は先に着いた方が残る() {
+        assert_eq!(
+            landed(vec![
+                vec![startup(SyncOrigin::Orca, Some("/o"))],
+                vec![startup(SyncOrigin::T3Code, Some("/t"))],
+            ]),
+            Some("/o".to_string())
+        );
+        assert_eq!(
+            landed(vec![
+                vec![startup(SyncOrigin::T3Code, Some("/t"))],
+                vec![startup(SyncOrigin::Orca, Some("/o"))],
+            ]),
+            Some("/t".to_string())
+        );
+    }
+
+    #[test]
     fn Zedの起動報告が無ければOrcaに着地する() {
         assert_eq!(
             landed(vec![vec![startup(SyncOrigin::Orca, Some("/o"))]]),
@@ -482,10 +535,13 @@ mod tests {
         let is_worktree = |p: &Path| p == Path::new("/w");
         for (mode, origin) in [
             (WorktreeSwitch::Skip, SyncOrigin::Orca),
+            (WorktreeSwitch::Skip, SyncOrigin::T3Code),
             (WorktreeSwitch::Main, SyncOrigin::Zed),
             (WorktreeSwitch::Main, SyncOrigin::Orca),
+            (WorktreeSwitch::Main, SyncOrigin::T3Code),
             (WorktreeSwitch::Follow, SyncOrigin::Zed),
             (WorktreeSwitch::Follow, SyncOrigin::Orca),
+            (WorktreeSwitch::Follow, SyncOrigin::T3Code),
         ] {
             let policy = Policy {
                 source: SyncSource::Auto,
@@ -534,6 +590,10 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<SyncSource>("\"zed\"").unwrap(),
             SyncSource::Zed
+        );
+        assert_eq!(
+            serde_json::to_string(&SyncSource::T3Code).unwrap(),
+            "\"t3code\""
         );
     }
 }

@@ -6,8 +6,8 @@
 
 | ID | 機能 | 説明 | 優先度 |
 |---|---|---|---|
-| C-01 | プロジェクト連動（Zed / Orca） | Zed のプロジェクト切替、Orca の worktree 切替を検知 → docs 自動切替 | ★★★ |
-| C-02 | 連動モード | auto / self / off の切替。固定トグル Cmd+Shift+L（auto⇄self）あり。追従元は `sync_source`（auto / zed / orca）で指定 | ★★★ |
+| C-01 | プロジェクト連動（Zed / Orca / T3 Code） | Zed のプロジェクト切替、Orca の worktree 切替、T3 Code のスレッド切替を検知 → docs 自動切替 | ★★★ |
+| C-02 | 連動モード | auto / self / off の切替。固定トグル Cmd+Shift+L（auto⇄self）あり。追従元は `sync_source`（auto / zed / orca / t3code）で指定 | ★★★ |
 | C-03 | 瞬時プロジェクト切替 | インメモリキャッシュで Zed 級の速度 | ★★★ |
 | C-04 | シングルインスタンス | IPC で既存プロセスにルーティング | ★★★ |
 
@@ -93,7 +93,7 @@
 | L-02 | `mzed <file>` — 単体ファイル | ★★★ |
 | L-03 | `mzed <dir>` — ディレクトリ内の md | ★★★ |
 | L-04 | `mzed --sync <mode>` — 連動モード指定 | ★★☆ |
-| L-07 | `mzed --sync-source <auto|zed|orca>` — 追従元指定 | ★★☆ |
+| L-07 | `mzed --sync-source <auto|zed|orca|t3code>` — 追従元指定 | ★★☆ |
 | L-08 | `mzed --pin <file>...` — md を開かずにピン留め（エージェントが別セッションの成果を知らせる経路） | ★★☆ |
 | L-05 | `mzed --version` | ★★★ |
 | L-06 | `mzed --help` | ★★★ |

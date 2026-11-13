@@ -9,7 +9,7 @@
 
 mzed is a Markdown viewer for the Mac.
 
-It detects the project open in Zed (the editor) or Orca (a worktree manager) and shows its docs alongside. It is for reading the Markdown your AI agents write without opening it in the editor.
+It detects the project open in Zed (the editor), Orca (a worktree manager), or T3 Code (an agent thread manager) and shows its docs alongside. It is for reading the Markdown your AI agents write without opening it in the editor.
 
 日本語版: [README.md](README.md)
 
@@ -19,7 +19,7 @@ It detects the project open in Zed (the editor) or Orca (a worktree manager) and
 
 ## Features
 
-- **Follows your editor.** Switch projects in Zed or Orca and the docs on screen switch too. Opening a git worktree shows its parent repository, with each worktree's Markdown merged into that tree.
+- **Follows your editor.** Switch projects in Zed or Orca, or threads in T3 Code, and the docs on screen switch too. Opening a git worktree shows its parent repository, with each worktree's Markdown merged into that tree.
 - **Renders like GitHub.** Mermaid, KaTeX, syntax highlighting, GitHub Alerts, and frontmatter. Saving a file re-renders it at once.
 - **Passes Markdown to and from agents.** An agent in another session hands you a file with `mzed --pin`, and it appears at the top of the sidebar with a green dot. Notes you leave on selected text while reading are picked up and applied by an agent through the `mzed` skill.
 
@@ -35,7 +35,7 @@ Runs on Apple Silicon Macs.
 
 | What | Used for |
 | --- | --- |
-| Zed or Orca (optional) | Following the project you have open. Without them, `mzed file.md` and `mzed ./docs` still work |
+| Zed, Orca, or T3 Code (optional) | Following the project you have open. Without them, `mzed file.md` and `mzed ./docs` still work |
 | The `mzed` agent skill (optional) | Exchanging pins and notes with agents |
 
 ## Installation
@@ -68,7 +68,7 @@ From a clone, `ln -s "$PWD/agents/skills/mzed" ~/.claude/skills/mzed` keeps it c
 ## Usage
 
 ```sh
-mzed               # start following Zed / Orca
+mzed               # start following Zed / Orca / T3 Code
 mzed file.md       # open a file in a tab
 mzed --pin a.md    # pin a file in the sidebar without opening it
 mzed ./docs        # open a directory as the root
@@ -106,7 +106,7 @@ Key bindings can be changed in settings.
 | Setting | What it controls |
 | --- | --- |
 | Sync (`sync_mode`) | `auto` switches the project and its docs (default), `self` the project only, `off` nothing |
-| Source (`sync_source`) | `zed`, `orca`, or both (`auto`, default) |
+| Source (`sync_source`) | `zed`, `orca`, `t3code`, or all of them (`auto`, default) |
 | Worktrees (`worktree_switch`) | On opening a worktree: show the parent repository (default), ignore it, or open it as is |
 | Line breaks (`line_breaks`) | Whether a single newline in a paragraph renders as a line break (default: yes) |
 | Pin expiry (`pin_expiry`) | On open, 1 hour, 24 hours (default), 1 week, or never |
@@ -117,7 +117,7 @@ Every setting is in the [settings spec](docs/specs/10-settings-and-context-menu.
 ## Limitations
 
 - mzed does not edit Markdown. It is a viewer.
-- It follows only Zed and Orca.
+- It follows only Zed, Orca, and T3 Code.
 - Pages opened with `mzed serve` cannot take notes.
 - For safety, HTML tags outside the allowlist (`iframe`, `svg`, `style`, and others) are not rendered.
 - The app is not signed by Apple, so the quarantine attribute must be removed once.

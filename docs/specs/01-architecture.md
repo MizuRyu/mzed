@@ -2,8 +2,8 @@
 
 ## 概要
 
-mzed は Zed（エディタ）/ Orca（worktree 管理ツール）連動の Markdown ビューア。
-どちらかのプロジェクト切り替えを検知し、対応する docs を瞬時に表示する。
+mzed は Zed（エディタ）/ Orca（worktree 管理ツール）/ T3 Code（エージェントのスレッド管理ツール）連動の Markdown ビューア。
+いずれかのプロジェクト切り替えを検知し、対応する docs を瞬時に表示する。
 
 ## システム構成
 
@@ -15,6 +15,7 @@ graph TB
             IM[Instance service<br/>IPC 単一制御]
             ZM[Zed service<br/>SQLite 監視]
             OM[Orca service<br/>状態ファイル監視]
+            TM[T3 Code service<br/>SQLite 監視]
             FW[Watch service<br/>notify-rs]
             MD[Markdown pipeline<br/>pulldown-cmark]
             OS[Platform service<br/>Finder / clipboard / Trash]
@@ -33,12 +34,13 @@ graph TB
     end
     ZedDB[(Zed SQLite DB)] --> ZM
     OrcaFile[(Orca 状態ファイル)] --> OM
+    T3DB[(T3 Code SQLite DB)] --> TM
     FS[(ファイルシステム)] --> FW
 ```
 
-## プロジェクト連動（Zed / Orca）
+## プロジェクト連動（Zed / Orca / T3 Code）
 
-どちらに追従するかは `sync_source`（auto / zed / orca、既定 auto）で決める。詳細は [05](05-zed-integration.md) を参照。
+どれに追従するかは `sync_source`（auto / zed / orca / t3code、既定 auto）で決める。詳細は [05](05-zed-integration.md) を参照。
 
 ### 検知フロー（Zed）
 
@@ -74,9 +76,27 @@ sequenceDiagram
 
 未文書化の内部形式のため全フィールドを optional として扱い、パース失敗・キー欠落・ファイル不在は「変化なし」に倒す。詳細は [05](05-zed-integration.md) の「Orca 連動」節を参照。
 
+### 検知フロー（T3 Code）
+
+```mermaid
+sequenceDiagram
+    participant T3 as T3 Code
+    participant DB as statev2.sqlite
+    participant Mon as mzed T3 Code Monitor
+    participant App as Dioxus App
+
+    T3->>DB: スレッドを開く (thread.visited を追記)
+    Mon->>DB: mtime 監視 (notify + 1500ms ポーリング)
+    Mon->>DB: 前回より新しい行から最新の thread.visited を取得
+    Mon->>Mon: worktreePath / プロジェクトのルートを解決・正規化
+    Mon->>App: state 更新 → サイドバー完全入れ替え
+```
+
+Orca と同じく未文書化の内部形式のため、読めないときは「変化なし」に倒す。詳細は [05](05-zed-integration.md) の「T3 Code 連動」節を参照。
+
 ### 連動モード
 
-`sync_mode`（下表）は Zed / Orca どちらの切替にも同じように適用される。
+`sync_mode`（下表）は Zed / Orca / T3 Code のどの切替にも同じように適用される。
 
 | モード | 挙動 |
 |---|---|
@@ -98,7 +118,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    Input["CLI / D&D / Zed / Orca 連動"] --> Rust
+    Input["CLI / D&D / Zed / Orca / T3 Code 連動"] --> Rust
     subgraph Rust["Rust Backend"]
         R1[パス解決] --> R2[md 読み込み] --> R3[監視登録]
     end

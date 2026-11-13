@@ -245,6 +245,9 @@ mod tests {
         let intent = resolve_with(&c, &never_dir);
         assert_eq!(intent.sync_source, SyncSource::Orca);
         assert!(intent.sync_source_overridden);
+
+        let c = Cli::try_parse_from(["mzed", "--sync-source", "t3code"]).unwrap();
+        assert_eq!(c.sync_source, Some(SyncSource::T3Code));
     }
 
     #[test]

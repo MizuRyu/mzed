@@ -9,7 +9,7 @@
 
 mzed は、Mac 用の Markdown ビューアです。
 
-Zed（エディタ）や Orca（worktree 管理ツール）で開いているプロジェクトを検知し、その docs を隣に表示します。AI エージェントが書いた md を、エディタを開かずに読むための道具です。
+Zed（エディタ）、Orca（worktree 管理ツール）、T3 Code（エージェントのスレッド管理ツール）で開いているプロジェクトを検知し、その docs を隣に表示します。AI エージェントが書いた md を、エディタを開かずに読むための道具です。
 
 English version: [README.en.md](README.en.md)
 
@@ -19,7 +19,7 @@ English version: [README.en.md](README.en.md)
 
 ## 特徴
 
-- **エディタに追従して docs を表示する。** Zed や Orca でプロジェクトを切り替えると、表示中の docs も切り替わります。git worktree を開いたときは親のリポジトリを表示し、各 worktree の md をそのツリーに重ねて見せます。
+- **エディタに追従して docs を表示する。** Zed や Orca でプロジェクトを、T3 Code でスレッドを切り替えると、表示中の docs も切り替わります。git worktree を開いたときは親のリポジトリを表示し、各 worktree の md をそのツリーに重ねて見せます。
 - **GitHub と同じ見た目で読む。** Mermaid、KaTeX、シンタックスハイライト、GitHub Alerts、frontmatter を描画します。保存すると即座に再描画します。
 - **エージェントと md をやりとりする。** 別のセッションのエージェントが `mzed --pin` で md を渡すと、サイドバーの上に緑の丸付きで並びます。読みながら本文を選んで残したメモは、エージェントがスキル `mzed` で読んで反映します。
 
@@ -35,7 +35,7 @@ Apple Silicon の Mac で使えます。
 
 | 必要なもの | 用途 |
 | --- | --- |
-| Zed か Orca（任意） | 開いているプロジェクトに docs を追従させる。無くても `mzed file.md` や `mzed ./docs` で開ける |
+| Zed・Orca・T3 Code のいずれか（任意） | 開いているプロジェクトに docs を追従させる。無くても `mzed file.md` や `mzed ./docs` で開ける |
 | エージェント用スキル `mzed`（任意） | エージェントとのピンとメモのやりとり |
 
 ## インストール
@@ -68,7 +68,7 @@ clone して使う場合は、`ln -s "$PWD/agents/skills/mzed" ~/.claude/skills/
 ## 使い方
 
 ```sh
-mzed               # Zed / Orca に連動して起動
+mzed               # Zed / Orca / T3 Code に連動して起動
 mzed file.md       # ファイルをタブで開く
 mzed --pin a.md    # 開かずにサイドバーへピン留め
 mzed ./docs        # ディレクトリをルートにして開く
@@ -106,7 +106,7 @@ mzed serve ./docs  # フォルダをブラウザで表示（127.0.0.1 のみ。�
 | 設定 | 内容 |
 | --- | --- |
 | 連動（`sync_mode`） | `auto` はプロジェクトと docs を切り替える（既定）、`self` はプロジェクトだけ、`off` は連動しない |
-| 追従元（`sync_source`） | `zed`、`orca`、両方（`auto`、既定） |
+| 追従元（`sync_source`） | `zed`、`orca`、`t3code`、すべて（`auto`、既定） |
 | worktree（`worktree_switch`） | worktree を開いたとき、親リポジトリを表示する（既定）、無視する、そのまま開く |
 | 改行（`line_breaks`） | 段落内の 1 回の改行を改行として表示するか（既定は表示する） |
 | ピンの自動削除（`pin_expiry`） | 開いたとき、1 時間、24 時間（既定）、1 週間、削除しない |
@@ -117,7 +117,7 @@ mzed serve ./docs  # フォルダをブラウザで表示（127.0.0.1 のみ。�
 ## できないこと
 
 - md の編集はしません。読むためのビューアです。
-- Zed と Orca 以外のエディタには追従しません。
+- Zed・Orca・T3 Code 以外のアプリには追従しません。
 - `mzed serve` で開いたページにはメモを残せません。
 - 安全のため、許可していない HTML タグ（`iframe`、`svg`、`style` など）は描画しません。
 - Apple の署名をしていないため、初回は quarantine 属性の解除が要ります。

@@ -5,7 +5,7 @@ use std::thread::JoinHandle;
 use tokio::sync::mpsc;
 
 use crate::sync::{SyncEvent, SyncOrigin};
-use crate::{orca, watcher, zed};
+use crate::{orca, t3code, watcher, zed};
 
 pub(crate) struct WatchSubscription<T> {
     pub(crate) rx: mpsc::UnboundedReceiver<T>,
@@ -31,18 +31,19 @@ impl<T> Drop for WatchSubscription<T> {
     }
 }
 
-/// Both project sources on one channel.
+/// All project sources on one channel.
 ///
 /// The watchers always report; which reports actually drive a switch is decided
 /// on the UI side (`sync::accepts`, `SyncMode::decide`), the same way the Zed
 /// watcher has always worked — policy can then change without restarting a
-/// thread. A missing Zed DB ends that thread; the Orca watcher instead waits
-/// for its state file to appear, since Orca may be installed or first launched
-/// after mzed started.
+/// thread. A missing Zed DB ends that thread; the Orca and T3 Code watchers
+/// instead wait for their state to appear, since those apps may be installed or
+/// first launched after mzed started.
 pub(crate) fn project_sources() -> WatchSubscription<SyncEvent> {
     let (tx, rx) = mpsc::unbounded_channel::<SyncEvent>();
     let (zed_stop_tx, zed_stop_rx) = std_mpsc::channel::<()>();
     let (orca_stop_tx, orca_stop_rx) = std_mpsc::channel::<()>();
+    let (t3code_stop_tx, t3code_stop_rx) = std_mpsc::channel::<()>();
 
     let zed_tx = tx.clone();
     let zed_handle = std::thread::spawn(move || {
@@ -59,11 +60,22 @@ pub(crate) fn project_sources() -> WatchSubscription<SyncEvent> {
             });
         }
     });
+    let orca_tx = tx.clone();
     let orca_handle = std::thread::spawn(move || {
         let mut first = true;
         let _ = orca::watch_active_project(&orca_stop_rx, move |project| {
-            let _ = tx.send(SyncEvent {
+            let _ = orca_tx.send(SyncEvent {
                 origin: SyncOrigin::Orca,
+                project,
+                initial: std::mem::take(&mut first),
+            });
+        });
+    });
+    let t3code_handle = std::thread::spawn(move || {
+        let mut first = true;
+        let _ = t3code::watch_active_project(&t3code_stop_rx, move |project| {
+            let _ = tx.send(SyncEvent {
+                origin: SyncOrigin::T3Code,
                 project,
                 initial: std::mem::take(&mut first),
             });
@@ -72,8 +84,8 @@ pub(crate) fn project_sources() -> WatchSubscription<SyncEvent> {
 
     WatchSubscription {
         rx,
-        stop_txs: vec![zed_stop_tx, orca_stop_tx],
-        join_handles: vec![zed_handle, orca_handle],
+        stop_txs: vec![zed_stop_tx, orca_stop_tx, t3code_stop_tx],
+        join_handles: vec![zed_handle, orca_handle, t3code_handle],
     }
 }
 
