@@ -256,6 +256,8 @@ Orca はファイルを置き換えて書くので、監視対象はファイル
 
 これで初回報告が同じバーストに揃うかどうかに関係なく着地が決まる（実測では別々の wake-up に分かれる）。遅れて届いた初回報告が、その間にユーザーがした切替を巻き戻すこともない。
 
+mzed の中でファイルやフォルダを明示的に開いた操作（CLI の `mzed file.md` / `mzed <dir>`、Finder の「このアプリケーションで開く」やダブルクリック、2 回目以降の `mzed` 起動からの IPC）も `Switch` として数える。`Landing` は追従ループと IPC の適用処理（`apply_msg`）が共有する signal で、`Open` / `OpenMany` / `OpenDir` が有効なパスを開いた時点で `Switch` にする。Finder は argv ではなく Apple Event でファイルを渡すため、mzed は引数なしの起動として前回のセッションを復元してからそのファイルを開く。これを数えないと、1〜2 秒後に届いた Zed の初回報告がプロジェクトを入れ替え、開いたばかりのファイルを前のプロジェクトのタブとして待避してしまう（→ FILE-20）。
+
 `sync_mode`（auto / self / off）は上位ポリシーとしてすべてのソースに等しくかかる。`off` なら Orca・T3 Code の切替も無視し、`self` なら root だけ更新する。
 
 `worktree_switch: skip` は **Zed 由来のイベントにだけ**適用する。Orca と T3 Code は worktree を管理するアプリで、その切替の大半は worktree 切替なので、スキップすると連動そのものが機能しなくなる。`main` は Orca・T3 Code 由来にも適用する（worktree に移ると mzed は親リポジトリを表示する）。

@@ -1246,12 +1246,19 @@ pub(crate) fn App() -> Element {
         open_active(path);
     };
 
+    // What the follow loop has landed on. Shared with `apply_msg` because an
+    // explicit open is a landing too: Finder launches mzed with a pathless
+    // start, so without it a watcher's startup report arriving a second later
+    // would swap the project and park the file the user just opened.
+    let mut landing = use_signal(sync::Landing::default);
+
     // Apply one IPC/initial message to the live state: open a file in a tab, or
     // switch the project root (opening a representative md and expanding to it).
     let mut apply_msg = move |msg: Msg| match msg {
         Msg::NewWindow => open_main_window(),
         Msg::Open { path } => {
             if path.is_file() && files::is_markdown(&path) {
+                landing.set(sync::Landing::Switch);
                 show_window_if_dismissed();
                 // A file opened with no project yet establishes one (CLI
                 // `mzed file.md`); with a project open it stays standalone.
@@ -1271,6 +1278,7 @@ pub(crate) fn App() -> Element {
         Msg::OpenMany { paths } => {
             for path in paths {
                 if path.is_file() && files::is_markdown(&path) {
+                    landing.set(sync::Landing::Switch);
                     show_window_if_dismissed();
                     if root().is_none() {
                         if let Some(parent) = path.parent() {
@@ -1288,6 +1296,7 @@ pub(crate) fn App() -> Element {
         }
         Msg::OpenDir { path } => {
             if path.is_dir() {
+                landing.set(sync::Landing::Switch);
                 open_project(path.clone(), vec![path], TabPolicy::Swap);
             }
         }
@@ -1379,9 +1388,6 @@ pub(crate) fn App() -> Element {
             return; // secondary windows don't follow an editor
         }
         let mut subscription = services::watch_service::project_sources();
-        // What we have landed on, so a watcher's startup report cannot arrive
-        // late and undo a switch the user made in the meantime.
-        let mut landing = sync::Landing::default();
         while let Some(first) = subscription.rx.recv().await {
             // Read the *current* policy here (not a thread snapshot): the watch
             // threads always notify; policy is applied on the async side.
@@ -1393,9 +1399,11 @@ pub(crate) fn App() -> Element {
             while let Ok(next) = subscription.rx.try_recv() {
                 burst.push(next);
             }
-            let Some(event) =
-                sync::admit_burst(&mut landing, policy, &files::is_git_worktree, burst)
-            else {
+            // `landing` keeps a watcher's startup report from arriving late and
+            // undoing a switch the user made in the meantime.
+            let admitted =
+                sync::admit_burst(&mut landing.write(), policy, &files::is_git_worktree, burst);
+            let Some(event) = admitted else {
                 continue;
             };
             let decision = sync_mode().decide();

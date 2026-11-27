@@ -63,7 +63,8 @@ pub enum Landing {
     Nothing,
     /// One watcher's startup report, from this source.
     Startup(SyncOrigin),
-    /// A switch the user actually made.
+    /// A switch the user actually made, in a followed app or by opening a file
+    /// or folder in mzed (CLI, Finder, IPC).
     Switch,
 }
 
